@@ -13,9 +13,18 @@ extern crate alloc;
 #[cfg(feature = "bevy_ci_testing")]
 pub mod ci_testing;
 
+#[cfg(feature = "render")]
 pub mod diagnostics_overlay;
+
+mod easy_camera;
+
+#[cfg(feature = "render")]
 mod easy_screenshot;
+
+#[cfg(feature = "render")]
 pub mod fps_overlay;
+
+#[cfg(feature = "render")]
 pub mod frame_time_graph;
 
 pub mod picking_debug;
@@ -25,8 +34,13 @@ pub mod schedule_data;
 
 pub mod states;
 
+pub use easy_camera::*;
+
+#[cfg(feature = "render")]
 pub use easy_screenshot::*;
 
+#[cfg(feature = "render")]
 pub mod render_debug;
 
+#[cfg(feature = "render")]
 pub mod infinite_grid;
