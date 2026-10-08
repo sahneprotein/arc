@@ -1,0 +1,90 @@
+name: Editor CI
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - "editor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - "crates/**"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - "clippy.toml"
+      - ".github/workflows/**"
+      - ".github/actions/install-linux-deps/**"
+  push:
+    paths:
+      - "editor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - "crates/**"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - "clippy.toml"
+      - ".github/workflows/**"
+      - ".github/actions/install-linux-deps/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  desktop:
+    name: Editor (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: editor
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Read editor toolchain
+        id: editor-toolchain
+        run: |
+          editor_toolchain_channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' rust-toolchain.toml)
+          [[ "$editor_toolchain_channel" =~ ^[a-zA-Z0-9._-]+$ ]]
+          printf 'channel=%s\n' "$editor_toolchain_channel" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: ${{ steps.editor-toolchain.outputs.channel }}
+          components: rustfmt, clippy
+      - name: Install Linux dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          wayland: true
+          xkb: true
+          fontconfig: true
+      - name: Check editor formatting
+        # Explicit members only: --all would format pinned local engine dependencies.
+        # Keep this list in sync when adding or removing editor workspace members.
+        run: >-
+          cargo fmt --check
+          -p scene-data -p editor-core -p editor-cook -p editor-services
+          -p landscape-render -p editor-ui -p arc-editor -p ui-spike
+      - name: Check all editor targets
+        run: cargo check --locked --workspace --all-targets
+      - name: Test all editor targets
+        # Cargo test harnesses only; the desktop event suite requires a display.
+        run: cargo test --locked --workspace --all-targets
+      - name: Lint all editor targets
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings

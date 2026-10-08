@@ -1,0 +1,14 @@
+# Throwaway spike: the same fixed-panel editor shell in Feathers and in egui, measured under the
+# same load, to choose the editor's UI toolkit at the pinned engine version. Deleted once the
+# toolkit is chosen.
+[package]
+name = "ui-spike"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["3d", "ui", "bevy_feathers"] }
+bevy_egui = { workspace = true }

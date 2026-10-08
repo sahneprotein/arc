@@ -1,0 +1,26 @@
+[package]
+name = "landscape-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+scene-data.workspace = true
+glam.workspace = true
+bevy = { workspace = true, optional = true, features = ["std", "bevy_mesh", "bevy_asset", "bevy_color", "bevy_pbr"] }
+
+[features]
+default = []
+bevy-render = ["dep:bevy"]
+
+[dev-dependencies]
+editor-core.workspace = true
+editor-services.workspace = true
+editor-cook.workspace = true
+serde_json.workspace = true
+
+[[example]]
+name = "viewport_contract"
+required-features = ["bevy-render"]

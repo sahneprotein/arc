@@ -1,0 +1,21 @@
+[package]
+name = "editor-ui"
+description = "The arc editor's native UI: theme from the design tokens, widgets and panels"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["3d", "ui", "bevy_feathers"] }
+editor-core = { workspace = true }
+editor-services = { workspace = true }
+scene-data = { workspace = true }
+
+[build-dependencies]
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }

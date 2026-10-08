@@ -1,0 +1,14 @@
+//! The editor's panels. One module per region of the window; the names follow the layouts in
+//! the Claude Design canvas "Arc Editor Layouts".
+
+pub mod brush;
+pub mod empty;
+pub mod hierarchy;
+pub mod inspector;
+pub mod levels;
+pub mod notice;
+pub mod paint;
+pub mod rules;
+pub mod status;
+pub mod toolbar;
+pub mod unsaved;
