@@ -315,7 +315,7 @@ impl Editor {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_nanos());
         self.next_id += 1;
-        ObjectId::from_u128((nanos << 20) ^ u128::from(self.next_id) | 1)
+        ObjectId::from_u128(id_bits(nanos, self.next_id))
     }
 
     /// The half size of a new box, in metres: a cube of one metre.
@@ -1223,9 +1223,33 @@ fn outcome_name(outcome: &CommandOutcome) -> &'static str {
     }
 }
 
+/// The bits of a new ID: the time above, the counter below it, and the lowest bit set so that
+/// the ID is never zero. The counter keeps clear of that bit. The time alone does not tell two
+/// IDs apart: the clock of some systems (macOS) counts in microseconds, and the four tiles of a
+/// new landscape are named within one.
+fn id_bits(nanos: u128, counter: u64) -> u128 {
+    (nanos << 20) ^ (u128::from(counter) << 1) | 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ids_made_in_the_same_instant_differ() {
+        // Counters as `fresh_id` hands them out, at one reading of the clock.
+        let ids: Vec<u128> = (1..=64)
+            .map(|counter| id_bits(1_791_000_000_000, counter))
+            .collect();
+        for (index, id) in ids.iter().enumerate() {
+            assert!(
+                !ids[..index].contains(id),
+                "counter {} repeats an ID",
+                index + 1
+            );
+            assert_ne!(*id, 0);
+        }
+    }
 
     /// Pumps until the core owes nothing.
     fn settle(editor: &mut Editor) {
