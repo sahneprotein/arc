@@ -6,6 +6,7 @@ pub mod empty;
 pub mod hierarchy;
 pub mod inspector;
 pub mod levels;
+pub mod menu;
 pub mod notice;
 pub mod paint;
 pub mod rules;

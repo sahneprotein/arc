@@ -22,7 +22,7 @@ use bevy::{
     },
     prelude::*,
     ui::{ComputedNode, UiGlobalTransform},
-    ui_widgets::Button,
+    ui_widgets::{Button, MenuButton, MenuItem},
     window::{
         CursorLeft, CursorMoved, PrimaryWindow, RequestRedraw, WindowCloseRequested, WindowEvent,
         WindowFocused,
@@ -33,6 +33,7 @@ use editor_ui::panels::{
     inspector::{FieldInput, NameInput},
     paint::{LayerNameInput, LayerRow},
     rules::{RuleField, RuleLayerButton, RuleRow},
+    toolbar::Toolbar,
 };
 
 use crate::viewport::{Projected, ViewCamera};
@@ -183,6 +184,34 @@ impl InputScript {
             self.push([Action::Key(*modifier, Key::Control, ButtonState::Released)]);
         }
         self.push([Action::Wait]);
+    }
+
+    /// Selects everything in the field that has the keyboard, with the keys the desktop uses
+    /// for it: Command+A on macOS, Control+A elsewhere. The engine's text field follows the
+    /// desktop, so Control+A selects nothing on macOS and typed text would be added to what
+    /// the field holds.
+    pub fn select_all(&mut self) {
+        let (code, logical) = if cfg!(target_os = "macos") {
+            (KeyCode::SuperLeft, Key::Super)
+        } else {
+            (KeyCode::ControlLeft, Key::Control)
+        };
+        self.push([
+            Action::Key(code, logical.clone(), ButtonState::Pressed),
+            Action::Key(
+                KeyCode::KeyA,
+                Key::Character("a".into()),
+                ButtonState::Pressed,
+            ),
+            Action::Wait,
+            Action::Key(
+                KeyCode::KeyA,
+                Key::Character("a".into()),
+                ButtonState::Released,
+            ),
+            Action::Key(code, logical, ButtonState::Released),
+            Action::Wait,
+        ]);
     }
 
     /// Presses a key and keeps it down, or lets it go.
@@ -419,6 +448,19 @@ pub struct Screen<'w, 's> {
         ),
     >,
     buttons: Query<'w, 's, (), With<Button>>,
+    menu_buttons: Query<'w, 's, (), With<MenuButton>>,
+    menu_items: Query<'w, 's, &'static InheritedVisibility, With<MenuItem>>,
+    toolbar: Query<
+        'w,
+        's,
+        (
+            &'static ComputedNode,
+            &'static UiGlobalTransform,
+            &'static Children,
+        ),
+        With<Toolbar>,
+    >,
+    nodes: Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform)>,
     names: Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<NameInput>>,
     toggles: Query<
         'w,
@@ -502,6 +544,61 @@ impl Screen<'_, '_> {
                 text.0 == caption && !node.is_empty() && self.buttons.contains(parent.parent())
             })
             .map(|(_, node, transform, _)| centre(node, transform))
+    }
+
+    /// The button of the toolbar menu with this name. The tool menu's button says more than
+    /// its name: "Tool: Move".
+    pub fn menu_button(&self, name: &str) -> Option<Vec2> {
+        self.texts
+            .iter()
+            .find(|(text, node, _, parent)| {
+                let named = text.0 == name
+                    || text
+                        .0
+                        .strip_prefix(name)
+                        .is_some_and(|rest| rest.starts_with(':'));
+                named && !node.is_empty() && self.menu_buttons.contains(parent.parent())
+            })
+            .map(|(_, node, transform, _)| centre(node, transform))
+    }
+
+    /// The row with this caption of the menu that is open. A row of a closed menu is laid out
+    /// too, but not shown, and is not found.
+    pub fn menu_item(&self, caption: &str) -> Option<Vec2> {
+        self.texts
+            .iter()
+            .find(|(text, node, _, parent)| {
+                text.0 == caption
+                    && !node.is_empty()
+                    && self
+                        .menu_items
+                        .get(parent.parent())
+                        .is_ok_and(|visibility| visibility.get())
+            })
+            .map(|(_, node, transform, _)| centre(node, transform))
+    }
+
+    /// The toolbar's height in logical pixels, and whether everything in it lies inside it:
+    /// one row, and nothing pushed out at the right.
+    pub fn toolbar(&self) -> Option<(f32, bool)> {
+        let (bar, at, children) = self.toolbar.single().ok()?;
+        let (min, max) = (
+            at.translation - bar.size / 2.0,
+            at.translation + bar.size / 2.0,
+        );
+        let fits = children
+            .iter()
+            .filter_map(|child| self.nodes.get(child).ok())
+            .filter(|(node, _)| !node.is_empty())
+            .all(|(node, at)| {
+                let (child_min, child_max) = (
+                    at.translation - node.size / 2.0,
+                    at.translation + node.size / 2.0,
+                );
+                // Half a physical pixel of slack for rounding.
+                child_min.cmpge(min - 0.5).all() && child_max.cmple(max + 0.5).all()
+            });
+        Some((bar.size.y * bar.inverse_scale_factor, fits))
     }
 
     /// The name field of the inspector.

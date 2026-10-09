@@ -93,13 +93,15 @@ fn main() -> AppExit {
         }
     };
 
+    // A scripted check may ask for another window size, to see the layout at that width.
+    let (width, height) = check::wanted_window().unwrap_or((1440, 900));
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "Arc Editor".into(),
-                    resolution: WindowResolution::new(1440, 900),
+                    resolution: WindowResolution::new(width, height),
                     // A scripted check must not wait for the desktop to show the window.
                     present_mode: if check::is_scripted() {
                         PresentMode::AutoNoVsync

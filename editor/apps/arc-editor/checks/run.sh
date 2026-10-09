@@ -12,13 +12,24 @@
 #
 # The cases assume the game's current map as the editor core converts it, in a window at
 # least 600 logical pixels wide. Row 11 is "Tall box", a box of half size 0.5 at (0, 0.5, -8).
+#
+# What the toolbar offers is reached with `choose=Menu>Caption`: Level and Add are menus at
+# every width, and the tools and the panel switches are buttons in a wide window and menus in a
+# narrow one. The step takes whichever is on the window, so a case holds at either width.
 set -u
 # The editor to check: the dev build, or the one named by ARC_EDITOR_BIN.
 editor="${ARC_EDITOR_BIN:-$(cd "$(dirname "$0")/../../.." && pwd)/target/debug/arc-editor}"
 # Each case's level folder, pictures and cooked packages go under a temporary folder that is
 # removed at the end: in ARC_EDITOR_TMP if that is set, else in the system's.
-work="$(mktemp -d -p "${ARC_EDITOR_TMP:-${TMPDIR:-/tmp}}")"
+work="$(mktemp -d "${ARC_EDITOR_TMP:-${TMPDIR:-/tmp}}/arc-editor-check.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
+# limit <seconds> <command>...: runs the command and ends it after so many seconds. With GNU
+# timeout where there is one; macOS has none, and perl's alarm does the same there.
+if command -v timeout >/dev/null 2>&1; then
+    limit() { timeout "$@"; }
+else
+    limit() { perl -e 'alarm shift; exec @ARGV or die "cannot run $ARGV[0]: $!\n"' "$@"; }
+fi
 failed=0
 only="${1:-}"
 
@@ -42,10 +53,21 @@ check() {
         *) mkdir -p "$folder/levels" ;;
     esac
     result="$(cd "$folder" && ARC_EDITOR_CHECK="$folder/$name.png" ARC_EDITOR_CHECK_STEPS="$steps" \
-        timeout 180 "$editor" 2>&1 | grep '^ARC_EDITOR_CHECK_RESULT')"
+        limit 180 "$editor" 2>&1 | grep '^ARC_EDITOR_CHECK_RESULT')"
     # Kept for the comparisons between cases further down, and in ARC_EDITOR_RESULTS if set.
     printf '%s\n' "$result" > "$work/$name.result"
     [ -z "${ARC_EDITOR_RESULTS:-}" ] || printf '%s\n' "$result" > "$ARC_EDITOR_RESULTS/$name.result"
+    # A case that asks for a window width says nothing about that width where the desktop
+    # gave another. It is not run as a pass or a failure of the editor, and it says so.
+    if [ -n "${ARC_EDITOR_CHECK_WINDOW:-}" ] && [ -n "$result" ]; then
+        asked="${ARC_EDITOR_CHECK_WINDOW%%x*}"
+        got="$(printf '%s\n' "$result" | sed -n 's/.* window=\([0-9]*\).*/\1/p')"
+        if [ "$got" != "$asked" ]; then
+            echo "$name: NOT CHECKED AT $asked, the desktop gave a window $got logical pixels wide"
+            overridden=1
+            return 0
+        fi
+    fi
     verdict=ok
     for expected in "$@" 'failed_steps=\[\]'; do
         if ! printf '%s\n' "$result" | grep -Eq -- "$expected"; then
@@ -64,8 +86,28 @@ check() {
 # with the input events it plays and reads the result once the editor is at rest. What is
 # laid out then is what the editor showed by its own doing. A step takes about a second.
 check_reactive() {
-    ARC_EDITOR_CHECK_REACTIVE=1 check "$@"
+    # Set for this one case only. Written before the call it would stay set afterwards in some
+    # shells (bash as sh), and every later case would be a reactive one.
+    ARC_EDITOR_CHECK_REACTIVE=1; export ARC_EDITOR_CHECK_REACTIVE
+    check "$@"
+    unset ARC_EDITOR_CHECK_REACTIVE
 }
+
+# check_sized <width>x<height> <name> <steps> <expected>...: the same in a window of that size
+# in logical pixels. A desktop that sizes windows itself (a tiling one) may give another width;
+# the case then says so instead of a verdict, and the run ends by naming how many did.
+overridden=0
+check_sized() {
+    ARC_EDITOR_CHECK_WINDOW="$1"; export ARC_EDITOR_CHECK_WINDOW
+    shift
+    check "$@"
+    unset ARC_EDITOR_CHECK_WINDOW
+}
+# The two widths the one-row toolbar is accepted at: the wide and the narrow window the tiling
+# desktop of the first checks gave. At 1261 the tools and panel switches are buttons, at 621
+# they are menus.
+wide=1261x900
+narrow=621x746
 
 # field <case> <name>: the value of a field of a case's result line. For values without spaces.
 field() {
@@ -117,11 +159,11 @@ check gizmo-scale     'click-row=11,key=r,drag-gizmo=-30' 'tool=Scale' "$home" '
 # E, then a drag a sixth of the way round the gizmo's ring about Y: the box turns about Y only.
 check gizmo-rotate    'click-row=11,key=e,rotate-gizmo=60' 'tool=Rotate' "$home" 'rotation=Some\(\[0\.0, -?[1-9][0-9]*\.[0-9], 0\.0\]\)' 'undo=Some\("drag"\)'
 check tool-keys       'click-row=11,key=e'                'tool=Rotate'
-check tool-button     'click-button=Scale'                'tool=Scale'
-# The two panel buttons each flip their panel, whatever the window's width shows by default.
-check panel-buttons   'inspector,click-button=Hierarchy,click-button=Inspector' 'panels=\(true, false\)'
+check tool-button     'choose=Tool>Scale'                'tool=Scale'
+# The two panel switches each flip their panel, whatever the window's width shows by default.
+check panel-buttons   'inspector,choose=Panels>Hierarchy,choose=Panels>Inspector' 'panels=\(true, false\)'
 check camera          'drag-camera=-80:30,wheel=3'        'camera=\(1\.080,0\.730,26\.60\)'
-check toolbar         'click-row=11,drag-gizmo=-60,click-button=Undo,click-button=Redo,click-button=Save level,click-button=Cook' \
+check toolbar         'click-row=11,drag-gizmo=-60,click-button=Undo,click-button=Redo,choose=Level>Save,choose=Level>Cook' \
                       "$moved" 'dirty=false' 'cook_needed=false' 'problem=none'
 check type-position   'click-row=11,inspector,type-field=translation.1:5.5' \
                       'position=Some\(\[0\.0, 5\.5, -8\.0\]\)' 'undo=Some\("edit"\)'
@@ -137,38 +179,72 @@ check type-rotation   'click-row=11,inspector,type-field=rotation.1:45' \
 check select-redraws-one 'click-row=11'                   'redrawn=23'
 check move-redraws-one 'click-row=11,click-row=12'        'redrawn=25'
 # A landscape is drawn from the geometry the core cooks, and adding it is one undo step.
-check add-landscape   'click-button=Add landscape'        'objects=23' 'ground_tiles=4' 'undo=Some\("create"\)' 'problem=none'
-check undo-landscape  'click-button=Add landscape,key=ctrl+z' 'objects=22' 'ground_tiles=0' 'redo=Some\("create"\)'
+check add-landscape   'choose=Add>Landscape'        'objects=23' 'ground_tiles=4' 'undo=Some\("create"\)' 'problem=none'
+check undo-landscape  'choose=Add>Landscape,key=ctrl+z' 'objects=22' 'ground_tiles=0' 'redo=Some\("create"\)'
+
+# The toolbar is one row at every width: as high as the design's toolbar, with everything in it
+# inside it. Level and Add are menus.
+row='toolbar_height=Some\(36\.0\)'
+check toolbar-one-row 'click-row=11'                      "$row" 'toolbar_fits=Some\(true\)' 'menu_open=false'
+# A menu opens from its button and does not change the row. Escape closes it; so does a second
+# press on its button.
+check menu-opens      'click-button=Level'                'menu_open=true' "$row" 'level_dialog=Closed'
+check menu-escape     'click-button=Level,key=escape'     'menu_open=false' 'level_dialog=Closed'
+check menu-toggle     'click-button=Add,click-button=Add' 'menu_open=false' 'objects=22'
+# A row does what the button it replaces did, and the menu is closed afterwards.
+check menu-row        'click-button=Add,click-item=Box'   'objects=23' 'selected=Some\("Box 15"\)' 'menu_open=false' 'undo=Some\("create"\)'
+# With the keyboard: the menu opens on its first row, the arrow moves down past the divider,
+# Enter chooses. The third row of Level is Save.
+check menu-keys       'click-button=Level,key=down,key=down,key=enter' 'has_file=true' 'dirty=false' 'menu_open=false' 'problem=none'
+# While a menu is open it has the keyboard: a tool key chooses no tool.
+check menu-modal      'click-button=Level,key=t'          'menu_open=true' 'sculpt=false'
+# A click beside an open menu closes it and is nothing else: the object under the cursor is not
+# chosen. The next click there chooses it.
+check menu-click-outside 'click-button=Add,click-object=11' 'menu_open=false' 'selected=None' 'objects=22'
+check menu-click-after 'click-button=Add,click-object=11,click-object=11' 'selected=Some\("Tall box"\)'
+# A press on another menu's button closes the open menu and opens that one.
+check menu-switch     'click-button=Level,click-button=Add,click-item=Spawn point' 'objects=23' 'selected=Some\("Spawn 9"\)' 'menu_open=false' 'level_dialog=Closed'
+# At 1261 pixels: one row, every tool and panel switch a button, the chosen tool by its button.
+check_sized "$wide" wide-one-row 'click-row=11'           'window=1261x' 'toolbar_folded=false' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$wide" wide-tool    'click-button=Rotate'    'window=1261x' 'toolbar_folded=false' 'tool=Rotate' "$row"
+check_sized "$wide" wide-menu    'click-button=Level'     'window=1261x' 'menu_open=true' "$row" 'toolbar_fits=Some\(true\)'
+# At 621 pixels: the tools are one menu, the panel switches another, still one row.
+check_sized "$narrow" narrow-one-row 'click-row=11'       'window=621x' 'toolbar_folded=true' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-tool   'choose=Tool>Rotate'  'window=621x' 'toolbar_folded=true' 'tool=Rotate' 'sculpt=false' 'menu_open=false'
+check_sized "$narrow" narrow-paint  'choose=Tool>Paint'   'window=621x' 'toolbar_folded=true' 'paint=true' 'menu_open=false'
+check_sized "$narrow" narrow-panels 'inspector,choose=Panels>Hierarchy,choose=Panels>Inspector' 'window=621x' 'toolbar_folded=true' 'panels=\(true, false\)'
+check_sized "$narrow" narrow-add    'choose=Add>Landscape,choose=Level>Save' 'window=621x' 'toolbar_folded=true' 'objects=23' 'ground_tiles=4' 'dirty=false' 'problem=none'
+check_sized "$narrow" narrow-menu   'click-button=Panels' 'window=621x' 'menu_open=true' "$row" 'toolbar_fits=Some\(true\)'
 
 # The landscape tool: T chooses it, its panel takes the inspector's place, a mode button
 # chooses the brush, and the brush points at the ground under the cursor.
 check sculpt-key      'key=t'                             'sculpt=true'
 check sculpt-leaves   'key=t,key=w'                       'sculpt=false' 'tool=Translate'
-check brush-mode      'inspector,click-button=Sculpt,click-button=Smooth' \
+check brush-mode      'inspector,choose=Tool>Sculpt,click-button=Smooth' \
                       'sculpt=true' 'brush=\(Smooth'
-check brush-aims      'click-button=Add landscape,key=t,aim-ground=2:4' \
+check brush-aims      'choose=Add>Landscape,key=t,aim-ground=2:4' \
                       'brush_aim=Some\(Vec3\((1\.9[0-9]?|2\.0[0-9]?), 0\.0, (3\.9[0-9]?|4\.0[0-9]?)\)\)'
 # Without a landscape under the cursor the brush points at nothing.
 check brush-off-ground 'key=t,aim-ground=2:4'              'brush_aim=None'
 # A stroke raises the ground and is one undo step; undoing it leaves the flat landscape.
-stroke='click-button=Add landscape,key=t,stroke=-4:0:4:4'
+stroke='choose=Add>Landscape,key=t,stroke=-4:0:4:4'
 flat='ground_height=\(0\.000,0\.000\)'
 check stroke-raises   "$stroke"                           'ground_height=\(0\.000,0\.[1-9]' 'undo=Some\("sculpt"\)' 'stroke_active=false' 'dragging=false'
 check stroke-undo     "$stroke,key=ctrl+z"                "$flat" 'objects=23' 'undo=Some\("create"\)' 'redo=Some\("sculpt"\)'
-check stroke-lower    'click-button=Add landscape,inspector,click-button=Sculpt,click-button=Lower,stroke=-4:0:-2:2' \
+check stroke-lower    'choose=Add>Landscape,inspector,choose=Tool>Sculpt,click-button=Lower,stroke=-4:0:-2:2' \
                       'ground_height=\(-0\.[1-9][0-9]*,0\.000\)' 'brush=\(Lower'
 # Escape, and the cursor leaving the window, cancel a stroke and put the ground back.
-check stroke-escape   'click-button=Add landscape,key=t,hold-stroke=-4:0:4:4,key=escape,release' "$flat" 'undo=Some\("create"\)' 'dragging=false' 'stroke_active=false'
-check stroke-leave    'click-button=Add landscape,key=t,hold-stroke=-4:0:4:4,leave,release' "$flat" 'undo=Some\("create"\)' 'dragging=false' 'stroke_active=false'
+check stroke-escape   'choose=Add>Landscape,key=t,hold-stroke=-4:0:4:4,key=escape,release' "$flat" 'undo=Some\("create"\)' 'dragging=false' 'stroke_active=false'
+check stroke-leave    'choose=Add>Landscape,key=t,hold-stroke=-4:0:4:4,leave,release' "$flat" 'undo=Some\("create"\)' 'dragging=false' 'stroke_active=false'
 
 # A click on the ground chooses the landscape.
-check pick-landscape  'click-button=Add landscape,click-ground=2:4' 'selected=Some\("Landscape"\)'
+check pick-landscape  'choose=Add>Landscape,click-ground=2:4' 'selected=Some\("Landscape"\)'
 # The tie between landscape and slab, away from the tie: beside the landscape the slab is
 # chosen; where the ground was raised the landscape is; where it was dug below the slab's top
 # the slab covers it and is chosen.
-check pick-slab-beside 'click-button=Add landscape,click-ground=-4:-20' 'selected=Some\("Ground"\)'
-check pick-raised     'click-button=Add landscape,key=t,stroke=-4:0:4:4,key=w,click-ground=0:2' 'selected=Some\("Landscape"\)' 'ground_height=\(0\.000,0\.[1-9]'
-check pick-dug        'click-button=Add landscape,inspector,click-button=Sculpt,click-button=Lower,stroke=-4:0:4:4,key=w,click-ground=0:2' 'selected=Some\("Ground"\)' 'ground_height=\(-0\.[1-9]'
+check pick-slab-beside 'choose=Add>Landscape,click-ground=-4:-20' 'selected=Some\("Ground"\)'
+check pick-raised     'choose=Add>Landscape,key=t,stroke=-4:0:4:4,key=w,click-ground=0:2' 'selected=Some\("Landscape"\)' 'ground_height=\(0\.000,0\.[1-9]'
+check pick-dug        'choose=Add>Landscape,inspector,choose=Tool>Sculpt,click-button=Lower,stroke=-4:0:4:4,key=w,click-ground=0:2' 'selected=Some\("Ground"\)' 'ground_height=\(-0\.[1-9]'
 # Typing a name and Enter renames; Ctrl+Z gives the old name back.
 check rename          'click-row=11,inspector,type-name=42' 'selected=Some\("42"\)' 'undo=Some\("rename"\)'
 check rename-undo     'click-row=11,inspector,type-name=42,key=ctrl+z' 'selected=Some\("Tall box"\)' 'redo=Some\("rename"\)'
@@ -183,7 +259,7 @@ check close-keeps     'click-row=11,drag-gizmo=-60,close,click-button=Keep editi
 # until it is saved.
 check new-asks        'key=ctrl+n' 'level_dialog=New' 'objects=22'
 check new-level       'key=ctrl+n,type=7,key=enter,click-button=Discard changes' 'level_dialog=Closed' 'level="7"' 'objects=0' 'has_file=false' 'empty_hint=true' 'undo=None'
-check new-saved       'key=ctrl+n,type=7,key=enter,click-button=Discard changes,click-button=Add landscape,key=ctrl+s' 'level="7"' 'objects=1' 'has_file=true' 'dirty=false' 'empty_hint=false' 'problem=none'
+check new-saved       'key=ctrl+n,type=7,key=enter,click-button=Discard changes,choose=Add>Landscape,key=ctrl+s' 'level="7"' 'objects=1' 'has_file=true' 'dirty=false' 'empty_hint=false' 'problem=none'
 # The same folder again: the saved level is in the list. The open level is unsaved, so
 # choosing it asks first; Keep editing stays, Discard changes opens it.
 check new-saved-again-asks  'key=ctrl+o,click-button=7' 'level_dialog=Closed' 'question=Asking' 'level="current-map"' 'objects=22'
@@ -200,14 +276,14 @@ check new-saves-again 'click-row=11' 'level="current-map"' 'has_file=true' 'obje
 check empty-adds      'key=ctrl+n,type=7,key=enter,click-button=Discard changes,click-button=Add a landscape' 'objects=1' 'empty_hint=false' 'ground_tiles=4'
 check empty-opens     'key=ctrl+n,type=7,key=enter,click-button=Discard changes,click-button=Open a level' 'level_dialog=Open' 'objects=0'
 # Adding and removing objects. A new object stands where the view looks and is selected.
-check add-box         'click-button=Add box' 'objects=23' 'selected=Some\("Box 15"\)' 'position=Some\(\[0\.0, 0\.5, 2\.0\]\)' 'half_size=Some\(\[0\.5, 0\.5, 0\.5\]\)' 'undo=Some\("create"\)'
-check add-box-undo    'click-button=Add box,key=ctrl+z' 'objects=22' 'redo=Some\("create"\)'
-check add-spawn       'click-button=Add spawn' 'objects=23' 'selected=Some\("Spawn 9"\)' 'position=Some\(\[0\.0, 2\.0, 2\.0\]\)'
+check add-box         'choose=Add>Box' 'objects=23' 'selected=Some\("Box 15"\)' 'position=Some\(\[0\.0, 0\.5, 2\.0\]\)' 'half_size=Some\(\[0\.5, 0\.5, 0\.5\]\)' 'undo=Some\("create"\)'
+check add-box-undo    'choose=Add>Box,key=ctrl+z' 'objects=22' 'redo=Some\("create"\)'
+check add-spawn       'choose=Add>Spawn point' 'objects=23' 'selected=Some\("Spawn 9"\)' 'position=Some\(\[0\.0, 2\.0, 2\.0\]\)'
 check remove-button   'click-row=11,click-button=Remove' 'objects=21' 'selected=None' 'undo=Some\("delete"\)'
 check delete-key      'click-row=11,key=delete' 'objects=21' 'undo=Some\("delete"\)'
 check delete-undo     'click-row=11,key=delete,key=ctrl+z' 'objects=22' 'redo=Some\("delete"\)'
 # The landscape's layers, in the Paint part of the landscape tool.
-L='click-button=Add landscape,inspector,click-button=Paint'
+L='choose=Add>Landscape,inspector,choose=Tool>Paint'
 check paint-tool      "$L" 'paint=true' 'layers=0' 'paint_layer=None'
 check layer-add       "$L,click-button=Add layer" 'layers=1' 'paint_layer=Some\("Grass"\)' 'undo=Some\("layers"\)' 'problem=none'
 check layer-add-two   "$L,click-button=Add layer,click-button=Add layer" 'layers=2' 'paint_layer=Some\("Dirt"\)' 'problem=none'
@@ -216,7 +292,7 @@ check layer-rename    "$L,click-button=Add layer,type-layer=42" 'layers=1' 'pain
 check layer-remove    "$L,click-button=Add layer,click-button=Add layer,click-button=Remove layer" 'layers=1' 'paint_layer=Some\("Grass"\)' 'problem=none'
 check layer-remove-first "$L,click-button=Add layer,click-button=Add layer,click-layer=1,click-button=Remove layer" 'layers=1' 'paint_layer=Some\("Dirt"\)' 'problem=none'
 check layer-undo      "$L,click-button=Add layer,key=ctrl+z" 'layers=0' 'paint_layer=None' 'redo=Some\("layers"\)'
-check layer-no-ground 'inspector,click-button=Paint,click-button=Add layer' 'layers=0' 'problem=none' 'objects=22'
+check layer-no-ground 'inspector,choose=Tool>Paint,click-button=Add layer' 'layers=0' 'problem=none' 'objects=22'
 # Painting. With one layer there is nothing to paint against: the core refuses, the notice
 # says so, and the editor is not left holding the stroke (the next command works).
 check paint-single    "$L,click-button=Add layer,stroke=-4:0:4:4" 'problem=layer\.single_weight' 'notice=true' 'undo=Some\("layers"\)' 'dragging=false' 'stroke_active=false'
@@ -251,19 +327,19 @@ check tree-undo       "$T,click-toggle=10,key=ctrl+z,key=ctrl+z" 'rows_shown=22'
 # Placing on the landscape. A new object stands where the view's line of sight meets the
 # landscape, by the core's account of the surface. The view looks at (0, 1, 2) from yaw 0.6,
 # pitch 0.55, so on flat ground at height 0 that is (-0.921, 0, 0.654).
-A='click-button=Add landscape'
-check place-flat      "$A,click-button=Add box" 'selected=Some\("Box 15"\)' 'position=Some\(\[-0\.92[0-9]*, 0\.5, 0\.65[0-9]*\]\)' 'problem=none'
-check place-spawn     "$A,click-button=Add spawn" 'selected=Some\("Spawn 9"\)' 'position=Some\(\[-0\.92[0-9]*, 2\.0, 0\.65[0-9]*\]\)'
+A='choose=Add>Landscape'
+check place-flat      "$A,choose=Add>Box" 'selected=Some\("Box 15"\)' 'position=Some\(\[-0\.92[0-9]*, 0\.5, 0\.65[0-9]*\]\)' 'problem=none'
+check place-spawn     "$A,choose=Add>Spawn point" 'selected=Some\("Spawn 9"\)' 'position=Some\(\[-0\.92[0-9]*, 2\.0, 0\.65[0-9]*\]\)'
 # The line of sight passes beside the landscape: the object goes to the point the view turns
 # about, on height 0, as without a landscape.
-check place-miss      "$A,look-at=40:1:2,click-button=Add box" 'position=Some\(\[40\.0, 0\.5, 2\.0\]\)' 'problem=none'
+check place-miss      "$A,look-at=40:1:2,choose=Add>Box" 'position=Some\(\[40\.0, 0\.5, 2\.0\]\)' 'problem=none'
 # A landscape turned 10 degrees about X: the surface there is at -tan(10 deg) * 0.528 = -0.093.
-check place-tilted    "$A,tilt=22:10,click-button=Add box" 'position=Some\(\[-1\.00[0-9]*, 0\.40[0-9]*, 0\.52[0-9]*\]\)' 'problem=none'
+check place-tilted    "$A,tilt=22:10,choose=Add>Box" 'position=Some\(\[-1\.00[0-9]*, 0\.40[0-9]*, 0\.52[0-9]*\]\)' 'problem=none'
 # Ground raised by a stroke under the view: the box stands on the raised ground.
-check place-raised    "$A,key=t,stroke=-2:2:2:6,key=w,click-button=Add box" 'position=Some\(\[-0\.[0-9]+, 0\.9[0-9]*, 1\.[0-9]+\]\)' 'ground_height=\(0\.000,0\.[1-9]' 'undo=Some\("create"\)'
+check place-raised    "$A,key=t,stroke=-2:2:2:6,key=w,choose=Add>Box" 'position=Some\(\[-0\.[0-9]+, 0\.9[0-9]*, 1\.[0-9]+\]\)' 'ground_height=\(0\.000,0\.[1-9]' 'undo=Some\("create"\)'
 # The landscape's rules. Grass: a rule scatters it, four tries in each of the landscape's 1024
 # cells; the blades drawn come from the core's geometry.
-R='click-button=Add landscape,inspector,click-button=Rules'
+R='choose=Add>Landscape,inspector,choose=Tool>Rules'
 check rules-tool      "$R" 'tool=Translate' 'rules=\[\]' 'grass=0' 'problem=none'
 check rule-grass      "$R,click-button=Add grass" 'rules=\["Grass everywhere"\]' 'grass=4096' 'undo=Some\("rule"\)' 'problem=none'
 check rule-grass-undo "$R,click-button=Add grass,key=ctrl+z" 'rules=\[\]' 'grass=0' 'redo=Some\("rule"\)'
@@ -272,11 +348,11 @@ check rule-remove     "$R,click-button=Add grass,click-button=Remove rule" 'rule
 check rule-density    "$R,click-button=Add grass,type-rule=0:0.5" 'rule=Some\(\[0\.5, 4\.0, 0\.4, 0\.08, 1\.0\]\)' 'grass=(19|20|21)[0-9][0-9] ' 'problem=none'
 # With layers, grass grows on the first one and less where another is painted over it; a
 # layer that keeps it out takes more away; on a layer that is nowhere nothing grows.
-G="click-button=Add landscape,inspector,click-button=Paint,click-button=Add layer,click-button=Add layer"
-check rule-on-layer   "$G,stroke=-6:-2:6:6,click-button=Rules,click-button=Add grass" 'rules=\["Grass on Grass"\]' 'grass=3[78][0-9][0-9] ' 'problem=none'
-check rule-kept-out   "$G,stroke=-6:-2:6:6,click-button=Rules,click-button=Add grass,step-rule-layer=kept-out-by" 'rules=\["Grass on Grass"\]' 'grass=3[56][0-9][0-9] ' 'problem=none'
-check rule-on-empty   "$G,click-button=Rules,click-button=Add grass,step-rule-layer=grows-on" 'rules=\["Grass on Dirt"\]' 'grass=0 ' 'problem=none'
-check rule-everywhere "$G,click-button=Rules,click-button=Add grass,step-rule-layer=grows-on,step-rule-layer=grows-on" 'rules=\["Grass everywhere"\]' 'grass=4096'
+G="choose=Add>Landscape,inspector,choose=Tool>Paint,click-button=Add layer,click-button=Add layer"
+check rule-on-layer   "$G,stroke=-6:-2:6:6,choose=Tool>Rules,click-button=Add grass" 'rules=\["Grass on Grass"\]' 'grass=3[78][0-9][0-9] ' 'problem=none'
+check rule-kept-out   "$G,stroke=-6:-2:6:6,choose=Tool>Rules,click-button=Add grass,step-rule-layer=kept-out-by" 'rules=\["Grass on Grass"\]' 'grass=3[56][0-9][0-9] ' 'problem=none'
+check rule-on-empty   "$G,choose=Tool>Rules,click-button=Add grass,step-rule-layer=grows-on" 'rules=\["Grass on Dirt"\]' 'grass=0 ' 'problem=none'
+check rule-everywhere "$G,choose=Tool>Rules,click-button=Add grass,step-rule-layer=grows-on,step-rule-layer=grows-on" 'rules=\["Grass everywhere"\]' 'grass=4096'
 # A layer that fills itself on steep ground comes with its rule, as one undo step. On flat
 # ground it stays empty, and the panel says why.
 check rule-steep      "$R,click-button=Add steep layer" 'rules=\["Rock by steepness"\]' 'layers=2' 'layer_weights=\[1\.0, -1\.0\]' 'filled=\[0\.0\]' 'flat_note=below-band' 'undo=Some\("rule"\)' 'problem=none'
@@ -286,19 +362,19 @@ check rule-steep-undo "$R,click-button=Add steep layer,key=ctrl+z" 'rules=\[\]' 
 check rule-flat-fades "$R,click-button=Add steep layer,type-rule=0:0" 'rule=Some\(\[0\.0, 1\.0, 0\.1,' 'filled=\[0\.0\]' 'flat_note=fades-in'
 check rule-flat-in    "$R,click-button=Add steep layer,type-rule=0:0,type-rule=2:0" 'rule=Some\(\[0\.0, 1\.0, 0\.0,' 'filled=\[1\.0\]' 'flat_note=none'
 # On a hill three metres high the layer fills on the flanks.
-check rule-hill       'click-button=Add landscape,key=t,stroke=0:2:1:2,stroke=0:2:1:2,stroke=0:2:1:2,stroke=0:2:1:2,stroke=0:2:1:2,stroke=0:2:1:2,inspector,click-button=Rules,click-button=Add steep layer' 'ground_height=\(0\.000,[23]\.' 'filled=\[0\.0[0-9]*[1-9][0-9]*\]' 'problem=none'
+check rule-hill       'choose=Add>Landscape,key=t,stroke=0:2:1:2,stroke=0:2:1:2,stroke=0:2:1:2,stroke=0:2:1:2,stroke=0:2:1:2,stroke=0:2:1:2,inspector,choose=Tool>Rules,click-button=Add steep layer' 'ground_height=\(0\.000,[23]\.' 'filled=\[0\.0[0-9]*[1-9][0-9]*\]' 'problem=none'
 # A setting the core refuses leaves the rule as it was and is said in the notice.
 check rule-refused    "$R,click-button=Add steep layer,type-rule=1:0.1" 'problem=rule\.parameter_range' 'notice=true' 'rule=Some\(\[0\.25, 1\.0,'
 # A layer a rule fills cannot be painted, and removing it takes the rule with it.
-check rule-no-paint   "$R,click-button=Add steep layer,click-button=Paint,click-layer=2,stroke=-4:0:4:4" 'problem=layer\.derived_output' 'notice=true' 'undo=Some\("rule"\)' 'dragging=false' 'stroke_active=false'
-check rule-layer-gone "$R,click-button=Add steep layer,click-button=Paint,click-layer=2,click-button=Remove layer" 'rules=\[\]' 'layers=1' 'problem=none' 'undo=Some\("layers"\)'
+check rule-no-paint   "$R,click-button=Add steep layer,choose=Tool>Paint,click-layer=2,stroke=-4:0:4:4" 'problem=layer\.derived_output' 'notice=true' 'undo=Some\("rule"\)' 'dragging=false' 'stroke_active=false'
+check rule-layer-gone "$R,click-button=Add steep layer,choose=Tool>Paint,click-layer=2,click-button=Remove layer" 'rules=\[\]' 'layers=1' 'problem=none' 'undo=Some\("layers"\)'
 # Two rules: the second is chosen when added, and a click chooses the first again.
 check rule-two        "$R,click-button=Add grass,click-button=Add steep layer,click-rule=1" 'rules=\["Grass everywhere", "Rock by steepness"\]' 'rule=Some\(\[1\.0, 4\.0,' 'grass=4096'
 # Round trip through the UI's own jobs. One editor sculpts a hill, makes two layers, paints
 # the second, adds a grass rule and a steep-ground rule (with its layer), saves and cooks. A
 # fresh editor in the same folder opens that level file at start and must hold the same
 # landscape: the digest covers every height, layer, painted weight and rule.
-RT='click-button=Add landscape,key=t,stroke=0:2:1:2,stroke=0:2:1:2,inspector,click-button=Paint,click-button=Add layer,click-button=Add layer,stroke=-6:-2:6:6,click-button=Rules,click-button=Add grass,click-button=Add steep layer,key=ctrl+s,cook'
+RT='choose=Add>Landscape,key=t,stroke=0:2:1:2,stroke=0:2:1:2,inspector,choose=Tool>Paint,click-button=Add layer,click-button=Add layer,stroke=-6:-2:6:6,choose=Tool>Rules,click-button=Add grass,click-button=Add steep layer,key=ctrl+s,cook'
 check roundtrip       "$RT" 'dirty=false' 'cook_needed=false' 'problem=none' 'has_file=true' 'layers=3' 'rules=\["Grass on Grass", "Rock by steepness"\]' 'ground_height=\(0\.000,[01]\.' 'layer_weights=\[0\.9[0-9]*, 0\.0[0-9]*[1-9][0-9]*, -1\.0\]' 'grass=[1-9][0-9]{3} ' 'cooked=[0-9a-f]{8}' 'cooked_source=[0-9a-f]{8}'
 check roundtrip-again 'cook' 'dirty=false' 'has_file=true' 'problem=none' 'objects=23' 'layers=3' 'rules=\["Grass on Grass", "Rock by steepness"\]' 'ground_tiles=4' 'undo=None'
 same roundtrip roundtrip-again authored ground_height grass objects layers
@@ -309,7 +385,7 @@ check roundtrip-again-cooks 'cook' 'problem=none' 'dirty=false'
 same roundtrip roundtrip-again-cooks cooked cooked_source authored
 # A change of paint only: the level's source and its picture change, what can be walked on
 # does not. The simulation hash stays, the source hash and the digest move.
-check roundtrip-again-paint 'inspector,click-button=Paint,click-layer=2,stroke=-6:6:6:-2,key=ctrl+s,cook' 'undo=Some\("paint"\)' 'dirty=false' 'cook_needed=false' 'problem=none'
+check roundtrip-again-paint 'inspector,choose=Tool>Paint,click-layer=2,stroke=-6:6:6:-2,key=ctrl+s,cook' 'undo=Some\("paint"\)' 'dirty=false' 'cook_needed=false' 'problem=none'
 same roundtrip roundtrip-again-paint cooked ground_height
 differ roundtrip roundtrip-again-paint cooked_source authored
 # And a change of height does move what can be walked on.
@@ -321,15 +397,15 @@ differ roundtrip roundtrip-again-sculpt cooked authored
 # laid out must match what the level holds: a panel that only caught up at the next mouse
 # move would be one short here.
 check_reactive reactive-select  'click-row=11' 'selected=Some\("Tall box"\)' 'rows_shown=22'
-check_reactive reactive-add-box 'click-button=Add box' 'objects=23' 'rows_shown=23' 'selected=Some\("Box 15"\)'
-check_reactive reactive-undo    'click-button=Add box,key=ctrl+z' 'objects=22' 'rows_shown=22'
-check_reactive reactive-layers  'click-button=Add landscape,inspector,click-button=Paint,click-button=Add layer,click-button=Add layer' 'layers=2' 'layer_rows=2' 'ground_tiles=4'
-check_reactive reactive-rules   'click-button=Add landscape,inspector,click-button=Rules,click-button=Add grass' 'rules=\["Grass everywhere"\]' 'rule_rows=1' 'grass=4096'
+check_reactive reactive-add-box 'choose=Add>Box' 'objects=23' 'rows_shown=23' 'selected=Some\("Box 15"\)'
+check_reactive reactive-undo    'choose=Add>Box,key=ctrl+z' 'objects=22' 'rows_shown=22'
+check_reactive reactive-layers  'choose=Add>Landscape,inspector,choose=Tool>Paint,click-button=Add layer,click-button=Add layer' 'layers=2' 'layer_rows=2' 'ground_tiles=4'
+check_reactive reactive-rules   'choose=Add>Landscape,inspector,choose=Tool>Rules,click-button=Add grass' 'rules=\["Grass everywhere"\]' 'rule_rows=1' 'grass=4096'
 check_reactive reactive-rename  'click-row=11,inspector,type-name=42' 'selected=Some\("42"\)'
 # The brush finds the ground on the corners of its cells too. A ray exactly through a corner
 # can slip between the triangles; the brush then looks a fraction of a pixel aside.
-check aim-on-corners  'click-button=Add landscape,key=t,aim-ground=3:-3' 'brush_aim=Some\(Vec3\((2\.9[0-9]*|3\.0[0-9]*), 0\.0, -(2\.9[0-9]*|3\.0[0-9]*)\)\)'
-check aim-on-corner-2 'click-button=Add landscape,key=t,aim-ground=4:-4' 'brush_aim=Some\(Vec3\((3\.9[0-9]*|4\.0[0-9]*), 0\.0, -(3\.9[0-9]*|4\.0[0-9]*)\)\)'
+check aim-on-corners  'choose=Add>Landscape,key=t,aim-ground=3:-3' 'brush_aim=Some\(Vec3\((2\.9[0-9]*|3\.0[0-9]*), 0\.0, -(2\.9[0-9]*|3\.0[0-9]*)\)\)'
+check aim-on-corner-2 'choose=Add>Landscape,key=t,aim-ground=4:-4' 'brush_aim=Some\(Vec3\((3\.9[0-9]*|4\.0[0-9]*), 0\.0, -(3\.9[0-9]*|4\.0[0-9]*)\)\)'
 # The window's first frames. The editor reports from where frames are drawn what could write
 # the window in each of its first twelve: the engine's own clear (no camera aimed at the
 # window), the cameras (their copy step ready), or nothing. "Nothing" is a frame that goes to
@@ -342,7 +418,7 @@ check_first_frames() {
     folder="$work/$name"
     mkdir -p "$folder/levels"
     lines="$(cd "$folder" && ARC_EDITOR_CHECK="$folder/$name.png" ARC_EDITOR_CHECK_STEPS='' \
-        timeout 180 "$editor" 2>&1 | grep '^ARC_EDITOR_FIRST_FRAME')"
+        limit 180 "$editor" 2>&1 | grep '^ARC_EDITOR_FIRST_FRAME')"
     printf '%s\n' "$lines" > "$work/$name.result"
     [ -z "${ARC_EDITOR_RESULTS:-}" ] || printf '%s\n' "$lines" > "$ARC_EDITOR_RESULTS/$name.result"
     verdict=ok
@@ -374,8 +450,8 @@ check saveas          'key=ctrl+shift+s,type=8,key=enter' 'level_dialog=Closed' 
 # A name another level has is refused, and the dialog stays.
 check saveas-again    'key=ctrl+shift+s,type=8,key=enter' 'level_dialog=SaveAs' 'level="current-map"' 'has_file=false'
 # Escape and Cancel close the dialog; behind it neither keys nor the view act.
-check dialog-escape   'click-button=Open level,key=escape' 'level_dialog=Closed'
-check dialog-cancel   'click-button=New level,click-button=Cancel' 'level_dialog=Closed' 'objects=22'
+check dialog-escape   'choose=Level>Open level,key=escape' 'level_dialog=Closed'
+check dialog-cancel   'choose=Level>New level,click-button=Cancel' 'level_dialog=Closed' 'objects=22'
 check dialog-modal    'click-row=11,drag-gizmo=-60,key=ctrl+o,key=t,key=ctrl+z' 'level_dialog=Open' 'sculpt=false' 'undo=Some\("drag"\)'
 # check_exit <name> <steps> <saved: yes|no>: the editor must end by itself before the check's
 # own end, with status 0, and the level file must or must not have been written.
@@ -385,7 +461,7 @@ check_exit() {
     folder="$work/$name"
     mkdir -p "$folder/levels"
     output="$(cd "$folder" && ARC_EDITOR_CHECK="$folder/$name.png" ARC_EDITOR_CHECK_STEPS="$steps" \
-        timeout 120 "$editor" 2>&1)"
+        limit 120 "$editor" 2>&1)"
     status=$?
     verdict=ok
     [ "$status" -eq 0 ] || verdict="FAILED, exit status $status"
@@ -407,4 +483,5 @@ check_exit() {
 check_exit close-discard 'close,click-button=Discard changes' no
 check_exit close-saves   'close,click-button=Save and close' yes
 
+[ "$overridden" -eq 0 ] || echo "The desktop gave another window size than a case asked for: see NOT CHECKED AT above."
 exit "$failed"

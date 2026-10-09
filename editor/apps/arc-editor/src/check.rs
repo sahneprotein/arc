@@ -16,6 +16,8 @@
 //! | `click-row=N` | a click on hierarchy row N |
 //! | `click-object=N` | a click in the 3D view on the object of hierarchy row N |
 //! | `click-button=Caption` | a click on the button with that caption |
+//! | `choose=Menu>Caption` | a click on the button with that caption if one is on the window, as the tools and panel switches are in a wide window; otherwise a click on the button of that toolbar menu and then on its row with that caption |
+//! | `click-item=Caption` | a click on the row with that caption of the menu that is open |
 //! | `drag-gizmo=P` | a drag of P pixels along the gizmo's X handle |
 //! | `rotate-gizmo=D` | a drag along the gizmo's ring about Y, D degrees round it |
 //! | `hold-gizmo=P` | the same as `drag-gizmo` without the release; `release` ends it |
@@ -26,7 +28,7 @@
 //! | `hold-stroke=…` | the same without the release; `release` ends it |
 //! | `erase-stroke=…` | the same as `stroke` with Shift held throughout |
 //! | `aim-ground=X:Z` | the cursor moves to the point of the ground plane at world X, Z and rests |
-//! | `key=K` | `ctrl+z`, `ctrl+shift+z`, `ctrl+y`, `ctrl+s`, `ctrl+shift+s`, `ctrl+o`, `ctrl+n`, `escape`, `enter`, `delete`, `w`, `e`, `r`, `t` |
+//! | `key=K` | `ctrl+z`, `ctrl+shift+z`, `ctrl+y`, `ctrl+s`, `ctrl+shift+s`, `ctrl+o`, `ctrl+n`, `escape`, `enter`, `delete`, `down`, `w`, `e`, `r`, `t` |
 //! | `type=TEXT` | TEXT typed into whatever has the keyboard |
 //! | `type-field=F.A:TEXT` | a click into component A of field F, select all, TEXT, Enter |
 //! | `unfocus` | the window loses the keyboard focus |
@@ -44,6 +46,10 @@
 //! numbers), `look-at=X:Y:Z` (the point the view turns about), `tilt=ROW:DEGREES` (turn an
 //! object about X), `inspector` (show the
 //! inspector, hide the hierarchy), `save`, `cook`.
+//!
+//! `ARC_EDITOR_CHECK_WINDOW=WIDTHxHEIGHT` asks the desktop for a window of that size in
+//! logical pixels, for the cases that check the layout at a given width. The desktop may give
+//! another.
 
 use std::{
     path::PathBuf,
@@ -74,6 +80,16 @@ const SETTLE: u32 = 40;
 /// Whether this run is a scripted check.
 pub fn is_scripted() -> bool {
     std::env::var_os("ARC_EDITOR_CHECK").is_some()
+}
+
+/// The window size a scripted check asks for, if it names one.
+pub fn wanted_window() -> Option<(u32, u32)> {
+    if !is_scripted() {
+        return None;
+    }
+    let size = std::env::var("ARC_EDITOR_CHECK_WINDOW").ok()?;
+    let (width, height) = size.split_once('x')?;
+    Some((width.parse().ok()?, height.parse().ok()?))
 }
 
 /// Whether the check leaves the editor to ask for its own frames, as in real use: with
@@ -202,6 +218,7 @@ type Dialogs<'w, 's> = (
     Res<'w, editor_ui::PaintLayer>,
     Res<'w, editor_ui::panels::hierarchy::Collapsed>,
     Res<'w, editor_ui::ChosenRule>,
+    Res<'w, editor_ui::MenuOpen>,
 );
 
 /// Saves the first frames as pictures into the folder named by `ARC_EDITOR_CHECK_EARLY`, to
@@ -324,8 +341,11 @@ fn scripted(
             "check step {step}: {played:?}, cursor {:?}",
             window.cursor_position()
         );
-        if let Err(reason) = played {
-            script.failed.push(format!("{step}: {reason}"));
+        match played {
+            // The step goes on with another, played when the editor has shown this one's effect.
+            Ok(Some(next)) => script.steps.push(next),
+            Ok(None) => {}
+            Err(reason) => script.failed.push(format!("{step}: {reason}")),
         }
         return;
     }
@@ -361,7 +381,7 @@ fn scripted(
             .first()
             .and_then(|id| snapshot.document.object(id));
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -462,13 +482,19 @@ fn scripted(
                 .map_or("none", |(source, _)| &source[..8]),
             screen.layer_and_rule_rows().0,
             screen.layer_and_rule_rows().1,
+            screen.toolbar().map(|(height, _)| height),
+            screen.toolbar().map(|(_, fits)| fits),
+            // Folded is what is laid out: the tool menu's button is there instead of the tools.
+            screen.menu_button("Tool").is_some(),
+            closing.6.0,
         );
         exit.write(AppExit::Success);
     }
 }
 
 /// Plays one step. An error says why the step could not be played at all; whether it had the
-/// intended effect is read from the result line.
+/// intended effect is read from the result line. A step that needs the editor to show
+/// something before it can go on returns the step to play next.
 fn play(
     step: &str,
     input: &mut InputScript,
@@ -476,7 +502,7 @@ fn play(
     panels: &mut PanelChoice,
     screen: &Screen,
     orbit: &mut Orbit,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let (name, argument) = step.split_once('=').unwrap_or((step, ""));
     let snapshot = editor.snapshot();
     let row_id = |argument: &str| -> Result<String, String> {
@@ -522,6 +548,22 @@ fn play(
         }
         "click-button" => {
             let at = screen.button(argument).ok_or("no such button on screen")?;
+            input.click(at, MouseButton::Left);
+        }
+        "choose" => {
+            let (menu, caption) = argument.split_once('>').ok_or("expected MENU>CAPTION")?;
+            if let Some(at) = screen.button(caption) {
+                input.click(at, MouseButton::Left);
+            } else {
+                let at = screen.menu_button(menu).ok_or("no such menu on screen")?;
+                input.click(at, MouseButton::Left);
+                return Ok(Some(format!("click-item={caption}")));
+            }
+        }
+        "click-item" => {
+            let at = screen
+                .menu_item(argument)
+                .ok_or("no such row in an open menu")?;
             input.click(at, MouseButton::Left);
         }
         "drag-gizmo" | "hold-gizmo" => {
@@ -586,11 +628,7 @@ fn play(
         "type-name" => {
             let at = screen.name_field().ok_or("no name field on screen")?;
             input.click(at, MouseButton::Left);
-            input.key(
-                &[KeyCode::ControlLeft],
-                KeyCode::KeyA,
-                Key::Character("a".into()),
-            );
+            input.select_all();
             input.type_text(argument);
             input.key(&[], KeyCode::Enter, Key::Enter);
         }
@@ -623,11 +661,7 @@ fn play(
                 .rule_field(setting)
                 .ok_or("no such setting on screen")?;
             input.click(at, MouseButton::Left);
-            input.key(
-                &[KeyCode::ControlLeft],
-                KeyCode::KeyA,
-                Key::Character("a".into()),
-            );
+            input.select_all();
             input.type_text(text);
             input.key(&[], KeyCode::Enter, Key::Enter);
         }
@@ -643,11 +677,7 @@ fn play(
                 .layer_name_field()
                 .ok_or("no layer name field on screen")?;
             input.click(at, MouseButton::Left);
-            input.key(
-                &[KeyCode::ControlLeft],
-                KeyCode::KeyA,
-                Key::Character("a".into()),
-            );
+            input.select_all();
             input.type_text(argument);
             input.key(&[], KeyCode::Enter, Key::Enter);
         }
@@ -679,6 +709,7 @@ fn play(
                 "enter" => input.key(&[], KeyCode::Enter, Key::Enter),
                 "delete" => input.key(&[], KeyCode::Delete, Key::Delete),
                 "escape" => input.key(&[], KeyCode::Escape, Key::Escape),
+                "down" => input.key(&[], KeyCode::ArrowDown, Key::ArrowDown),
                 "w" => input.key(&[], KeyCode::KeyW, letter("w")),
                 "e" => input.key(&[], KeyCode::KeyE, letter("e")),
                 "r" => input.key(&[], KeyCode::KeyR, letter("r")),
@@ -692,11 +723,7 @@ fn play(
             let axis = axis.parse().map_err(|_| "not an axis number".to_owned())?;
             let at = screen.field(field, axis).ok_or("no such field on screen")?;
             input.click(at, MouseButton::Left);
-            input.key(
-                &[KeyCode::ControlLeft],
-                KeyCode::KeyA,
-                Key::Character("a".into()),
-            );
+            input.select_all();
             input.type_text(text);
             input.key(&[], KeyCode::Enter, Key::Enter);
         }
@@ -740,7 +767,7 @@ fn play(
         "cook" => editor.cook(),
         _ => return Err("unknown step".into()),
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Says in the log what each click landed on, so that a check that fails can be read.

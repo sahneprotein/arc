@@ -3,7 +3,8 @@
 //! Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes, Ctrl+S saves, Ctrl+Shift+S saves under
 //! another name, Ctrl+O opens a level and Ctrl+N begins a new one. On macOS the Command key
 //! works as well as Control. W, E and R choose the move, rotate and scale tool and T the
-//! landscape tool, and Delete removes the selection, unless a field has the keyboard. While a dialog is open none of them act.
+//! landscape tool, and Delete removes the selection, unless a field has the keyboard. While a
+//! dialog or a menu is open none of them act.
 
 use bevy::{
     gizmos::transform_gizmo::{TransformGizmoMode, TransformGizmoSettings},

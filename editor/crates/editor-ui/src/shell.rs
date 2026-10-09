@@ -27,11 +27,12 @@ use crate::{
             confirm_level_name, forget_name_problem, level_dialog, level_dialog_keys,
             show_level_dialog, LevelDialog, LevelNameProblem,
         },
+        menu::{mark_menu_open, menu_scrim, MenuOpen},
         notice::{notice, show_notice},
         paint::{commit_layer_name, fill_layer_names, show_layers},
         rules::{fill_rule_fields, show_rules},
         status::{show_status, status_bar},
-        toolbar::toolbar,
+        toolbar::{fold_toolbar, show_tool, toolbar},
         unsaved::{
             answer_unsaved, close_requested, leave_or_ask, unsaved_dialog, Question, Unsaved,
         },
@@ -45,13 +46,18 @@ use crate::{
 #[derive(Component, Default, Clone)]
 pub struct ViewportSlot;
 
-/// Whether a dialog is open in front of the window. While one is, the 3D view and the
-/// shortcuts do nothing: the dialog has the pointer and the keyboard.
+/// Whether a dialog or a menu is open in front of the window. While one is, the 3D view and
+/// the shortcuts do nothing: the dialog or the menu has the pointer and the keyboard.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Modal(pub bool);
 
-fn mark_modal(unsaved: Res<Unsaved>, levels: Res<LevelDialog>, mut modal: ResMut<Modal>) {
-    let open = unsaved.question == Question::Asking || *levels != LevelDialog::Closed;
+fn mark_modal(
+    unsaved: Res<Unsaved>,
+    levels: Res<LevelDialog>,
+    menu: Res<MenuOpen>,
+    mut modal: ResMut<Modal>,
+) {
+    let open = unsaved.question == Question::Asking || *levels != LevelDialog::Closed || menu.0;
     if modal.0 != open {
         modal.0 = open;
     }
@@ -133,6 +139,7 @@ fn shell() -> impl Scene {
                 ]
             ),
             status_bar(),
+            menu_scrim(),
             level_dialog(),
             unsaved_dialog(),
         ]
@@ -288,6 +295,7 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<LevelDialog>()
             .init_resource::<LevelNameProblem>()
             .init_resource::<Modal>()
+            .init_resource::<MenuOpen>()
             .add_observer(confirm_level_name)
             .add_systems(Startup, shell.spawn())
             .add_systems(PreUpdate, pump_editor.in_set(PumpEditor))
@@ -309,7 +317,8 @@ impl Plugin for EditorUiPlugin {
                     commit_name,
                     show_empty_hint,
                     (level_dialog_keys, forget_name_problem, show_level_dialog).chain(),
-                    mark_modal,
+                    (mark_menu_open, mark_modal).chain(),
+                    (fold_toolbar, show_tool),
                     hide_idle_scrollbars,
                     (
                         show_landscape_parts,
