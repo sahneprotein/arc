@@ -23,15 +23,17 @@ use bevy::{
     feathers::{
         constants::fonts,
         controls::{FeathersMenuItem, FeathersMenuPopup},
+        font_styles::InheritableFont,
         theme::{ThemeTextColor, ThemedText},
         tokens,
     },
+    input_focus::{InputFocus, InputFocusVisible},
     prelude::*,
     text::FontSourceTemplate,
     ui_widgets::popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide},
 };
 
-use crate::theme::{radius, size, spacing, text};
+use crate::theme::{color, feathers::to_color, radius, size, spacing, text};
 
 /// Whether a menu has the pointer and the keyboard: one is open, or the press that closed it
 /// is still held. While it has them the 3D view and the shortcuts do nothing.
@@ -103,6 +105,8 @@ pub fn menu_item(caption: &'static str, keys: &'static str) -> impl Scene {
     bsn! {
         @FeathersMenuItem { @caption: bsn! { Text(caption) ThemedText } }
         Node { border_radius: BorderRadius::all(px(radius::RADIUS_CONTROL)) }
+        // The design's text style for a row is `compact`; the toolkit's is its body size.
+        InheritableFont { font_size: {FontSize::Px(text::COMPACT.size)} }
         Children [
             Node { flex_grow: 1.0, min_width: px(spacing::SPACE_6) },
             (
@@ -115,6 +119,56 @@ pub fn menu_item(caption: &'static str, keys: &'static str) -> impl Scene {
                 ThemeTextColor(tokens::TEXT_DIM)
             ),
         ]
+    }
+}
+
+/// The width of the ring round the row that has the keyboard, in logical pixels. The design
+/// draws it inside the row, so that it does not touch the rows beside it.
+const FOCUS_RING_WIDTH: f32 = 2.0;
+
+/// Shows where the keyboard is in a menu as soon as a key moves through it. A menu opened with
+/// the mouse has the keyboard on its first row, but a click hides the focus, and the toolkit's
+/// arrow keys move it without showing it again: the row the next Enter would choose could not
+/// be seen.
+pub(crate) fn keys_show_row_focus(
+    open: Res<MenuOpen>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut visible: ResMut<InputFocusVisible>,
+) {
+    let moved = keys.any_just_pressed([
+        KeyCode::ArrowUp,
+        KeyCode::ArrowDown,
+        KeyCode::Home,
+        KeyCode::End,
+    ]);
+    if open.0 && moved && !visible.0 {
+        visible.0 = true;
+    }
+}
+
+/// Draws the design's focus ring on the row that has the keyboard, and only while the
+/// keyboard is in use: a click hides it, as it does on every other control. The toolkit gives
+/// that row its background; it has no ring for a menu row.
+pub(crate) fn show_row_focus(
+    mut commands: Commands,
+    focus: Res<InputFocus>,
+    visible: Res<InputFocusVisible>,
+    rows: Query<(Entity, Has<Outline>), With<FeathersMenuItem>>,
+) {
+    if !focus.is_changed() && !visible.is_changed() {
+        return;
+    }
+    for (row, ringed) in &rows {
+        let wanted = visible.0 && focus.get() == Some(row);
+        if wanted && !ringed {
+            commands.entity(row).insert(Outline {
+                color: to_color(color::FOCUS_RING),
+                width: px(FOCUS_RING_WIDTH),
+                offset: px(-FOCUS_RING_WIDTH),
+            });
+        } else if !wanted && ringed {
+            commands.entity(row).remove::<Outline>();
+        }
     }
 }
 

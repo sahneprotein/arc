@@ -27,7 +27,7 @@ use crate::{
             confirm_level_name, forget_name_problem, level_dialog, level_dialog_keys,
             show_level_dialog, LevelDialog, LevelNameProblem,
         },
-        menu::{mark_menu_open, menu_scrim, MenuOpen},
+        menu::{keys_show_row_focus, mark_menu_open, menu_scrim, show_row_focus, MenuOpen},
         notice::{notice, show_notice},
         paint::{commit_layer_name, fill_layer_names, show_layers},
         rules::{fill_rule_fields, show_rules},
@@ -319,6 +319,7 @@ impl Plugin for EditorUiPlugin {
                     (level_dialog_keys, forget_name_problem, show_level_dialog).chain(),
                     (mark_menu_open, mark_modal).chain(),
                     (fold_toolbar, show_tool),
+                    (keys_show_row_focus, show_row_focus).chain(),
                     hide_idle_scrollbars,
                     (
                         show_landscape_parts,
