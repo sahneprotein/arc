@@ -248,6 +248,13 @@ fn oversized_manifest_and_payload_and_cancelled_io_are_bounded() {
     assert_eq!(verify(&path).unwrap_err().code, "payload.limit");
 }
 
+/// What the system answers when a file system cannot hold a name: EILSEQ, "illegal byte
+/// sequence". Its number differs between systems.
+#[cfg(all(unix, any(target_os = "macos", target_os = "ios")))]
+const NAME_NOT_REPRESENTABLE: i32 = 92;
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+const NAME_NOT_REPRESENTABLE: i32 = 84;
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_parent_remains_a_native_path_across_publish_and_verify() {
@@ -256,6 +263,18 @@ fn non_utf8_parent_remains_a_native_path_across_publish_and_verify() {
     let parent = root
         .path()
         .join(OsString::from_vec(b"packages-\xff space".to_vec()));
+    // Some file systems hold only names that are valid UTF-8 (APFS and HFS+ on macOS) and
+    // refuse this folder. Nothing can be published under such a name there, so there is no
+    // native path to keep and nothing to assert. Any other failure to make the folder, and
+    // everything after it where the folder can exist, is still checked.
+    match fs::create_dir(&parent) {
+        Ok(()) => {}
+        Err(error) if error.raw_os_error() == Some(NAME_NOT_REPRESENTABLE) => {
+            eprintln!("not checked: this file system cannot hold a name that is not UTF-8");
+            return;
+        }
+        Err(error) => panic!("the folder could not be made: {error}"),
+    }
     let (path, _) = published(&parent);
     assert!(path.to_str().is_none());
     let receipt = verify(&path).unwrap();

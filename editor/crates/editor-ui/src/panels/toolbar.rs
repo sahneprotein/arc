@@ -24,6 +24,7 @@ use crate::{
     panels::{
         levels::LevelDialog,
         menu::{menu_item, menu_popup, menu_popup_end},
+        play::play_control,
     },
     session::Editor,
     shell::PanelChoice,
@@ -342,15 +343,19 @@ pub fn toolbar() -> impl Scene {
             tool_menu(),
             add_menu(),
             (
+                // In a narrow window the Delete key removes; the row has no room for the
+                // button beside the Play control, and the design's narrow toolbar has none.
                 @FeathersButton {
                     @caption: bsn! { Text("Remove") ThemedText },
                     @variant: ButtonVariant::Plain,
                 }
+                Fold::Wide
                 on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.delete_selected())
             ),
             Node { flex_grow: 1.0, min_width: px(spacing::SPACE_4) },
-            // The Play control of the design goes here, at the right end before the panel
-            // switches, when the core can start and stop a game.
+            // The Play control is at the right end at every width and never folds away.
+            play_control(),
+            pane_header_divider(),
             (
                 group()
                 Fold::Wide

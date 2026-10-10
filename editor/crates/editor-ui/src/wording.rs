@@ -118,7 +118,15 @@ pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
         | "package.decode"
         | "package.provenance" => (
             "The cooked level is damaged or was made by another version",
-            "Cook the level again.",
+            "Cook the level again. If that finds the same, delete the cooked level's folder first.",
+        ),
+        "package.identity_mismatch" | "package.directory_identity" => (
+            "The cooked level on disk is not the one this editor cooked",
+            "Cook the level again. If that finds the same, delete the cooked level's folder first.",
+        ),
+        "package.manifest_limit" => (
+            "The cooked level's description is larger than a cooked level's can be",
+            "Cook the level again. If that finds the same, delete the cooked level's folder first.",
         ),
         "terrain.invalid"
         | "terrain.sample_missing"
@@ -281,6 +289,10 @@ mod tests {
             "name.invalid",
             "box.extents",
             "revision.stale",
+            "payload.hash_mismatch",
+            "package.identity_mismatch",
+            "package.directory_identity",
+            "package.manifest_limit",
         ] {
             let problem = problem(code, none);
             assert!(!problem.title.is_empty(), "{code}");

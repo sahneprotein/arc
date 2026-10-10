@@ -12,6 +12,7 @@ use bevy::{
 use editor_core::JobState;
 
 use crate::{
+    panels::play::PlayView,
     session::Editor,
     theme::{
         feathers::{SIGNAL_ERROR, SIGNAL_WARN},
@@ -118,10 +119,8 @@ fn words(
             });
             format!("{}. {}", shown.title, shown.remedy)
         });
-    let cooked = status.simulation_hash.as_ref().map_or_else(
-        || "not cooked".to_owned(),
-        |hash| format!("cooked {}", wording::short_hash(&hash.hex())),
-    );
+    // The cooked level, how it stands to the level, and what a check of it found.
+    let cooked = PlayView::of(editor).status_words();
     StatusWords {
         level: format!("{level}{selected}   Tool: {tool}"),
         saved: saved.into(),

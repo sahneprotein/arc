@@ -12,7 +12,10 @@ use editor_core::{
     Command, CommandOutcome, CommandRequest, Diagnostic, Mutation, ObjectId, SceneDocument,
     TerrainPaintRequest, TerrainSculptRequest, TerrainSurfaceRay, TransactionId, ViewSnapshot,
 };
-use editor_services::{DiskVersion, EditorHandle, JobKind, JobOperation, JobOutput, ServiceEvent};
+use editor_services::{
+    DiskVersion, EditorHandle, JobKind, JobOperation, JobOutput, JobTicket, ServiceEvent,
+    VerifiedPackageReceipt,
+};
 use scene_data::{
     terrain::{LayerDefinition, LayerKind, RuleDefinition, TerrainDocument, TileKey},
     ObjectData, ObjectRecord, RigidTransform, SimulationPayload, StableId, VisualPayload,
@@ -63,6 +66,29 @@ pub struct Editor {
     /// A request the editor sent to tidy up after a refusal. Its answer is not news: it must
     /// not make the refusal's notice disappear.
     silent: Option<u64>,
+    /// The cooked level the last finished cook published, as the core verified it then.
+    cooked: Option<VerifiedPackageReceipt>,
+    /// What is known of that package as it is on disk now.
+    package_check: PackageCheck,
+    /// The check that is under way, to cancel it.
+    check_ticket: Option<JobTicket>,
+}
+
+/// Whether the cooked level on disk is still the one this editor cooked. Asked for by the
+/// person, answered by the core's `VerifyPackage` job; a new cook starts from "not asked".
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum PackageCheck {
+    /// Nobody asked since the last cook, or the check was cancelled.
+    #[default]
+    NotAsked,
+    /// The core is reading the package.
+    Checking,
+    /// The package on disk is the one this editor cooked. How long reading it took, in
+    /// microseconds.
+    Passed { micros: u64 },
+    /// The core refused the package, with this code. The problem itself is the editor's
+    /// [`Editor::problem`] until it is dismissed; this stays.
+    Refused { code: String },
 }
 
 /// The level as the cook step sees it, for the 3D view: the same geometry the game gets.
@@ -121,6 +147,9 @@ impl Editor {
             select_when_there: None,
             committing: None,
             silent: None,
+            cooked: None,
+            package_check: PackageCheck::NotAsked,
+            check_ticket: None,
         })
     }
 
@@ -948,6 +977,94 @@ impl Editor {
         self.start_job(JobKind::Cook, operation);
     }
 
+    /// The cooked level of the last finished cook, if there was one in this session.
+    pub fn cooked(&self) -> Option<&VerifiedPackageReceipt> {
+        self.cooked.as_ref()
+    }
+
+    /// What is known of the cooked level as it is on disk now.
+    pub fn package_check(&self) -> &PackageCheck {
+        &self.package_check
+    }
+
+    /// Asks the core whether the cooked level on disk is still the one this editor cooked:
+    /// every hash, the schema, the profile and the engine revision of the package it
+    /// published. Does nothing without a cooked level or while a check is under way.
+    pub fn check_cooked(&mut self) {
+        let Some(receipt) = &self.cooked else {
+            return;
+        };
+        if self.package_check == PackageCheck::Checking {
+            return;
+        }
+        let operation = JobOperation::VerifyPackage {
+            path: receipt.path().to_path_buf(),
+            expected: Some(receipt.identity().clone()),
+        };
+        match self.handle.job(operation) {
+            Ok(ticket) => {
+                self.running_jobs += 1;
+                self.check_ticket = Some(ticket);
+                self.package_check = PackageCheck::Checking;
+            }
+            Err(problem) => {
+                self.package_check = PackageCheck::Refused {
+                    code: problem.code.clone(),
+                };
+                self.report(Source::Job(JobKind::VerifyPackage), Err(problem));
+            }
+        }
+    }
+
+    /// Takes the end of a package check, and says what to report of it: nothing, a success
+    /// or a problem.
+    ///
+    /// Only the end of the check under way is news. A check that was given up, by Stop or
+    /// because a new cook replaced its package, still ends some time later; by then another
+    /// check may be under way. The older one's end must not end that check, take away the
+    /// means to cancel it, or be shown as its result. The core runs jobs one after another
+    /// today, so an older check always ends first; this does not rely on that.
+    fn check_finished(
+        &mut self,
+        job: u64,
+        found: Result<(VerifiedPackageReceipt, u64), Diagnostic>,
+    ) -> Option<Result<(), Diagnostic>> {
+        if self.check_ticket.as_ref().map(|ticket| ticket.id) != Some(job) {
+            return None;
+        }
+        self.check_ticket = None;
+        match found {
+            Ok((receipt, micros)) => {
+                // The check is of the package the editor holds now, or it says nothing.
+                self.package_check = if self.cooked.as_ref() == Some(&receipt) {
+                    PackageCheck::Passed { micros }
+                } else {
+                    PackageCheck::NotAsked
+                };
+                Some(Ok(()))
+            }
+            // The person stopped the check: nothing is known, and nothing went wrong.
+            Err(problem) if problem.code == "job.cancelled" => {
+                self.package_check = PackageCheck::NotAsked;
+                None
+            }
+            Err(problem) => {
+                self.package_check = PackageCheck::Refused {
+                    code: problem.code.clone(),
+                };
+                Some(Err(problem))
+            }
+        }
+    }
+
+    /// Asks the core to give up the check that is under way. The core stops between two
+    /// reads; a check that had finished already keeps its result.
+    pub fn cancel_check(&mut self) {
+        if let Some(ticket) = &self.check_ticket {
+            ticket.cancel();
+        }
+    }
+
     fn start_job(&mut self, kind: JobKind, operation: JobOperation) {
         match self.handle.job(operation) {
             Ok(_ticket) => self.running_jobs += 1,
@@ -998,6 +1115,21 @@ impl Editor {
                 }
                 ServiceEvent::JobFinished { fact, result } => {
                     self.running_jobs = self.running_jobs.saturating_sub(1);
+                    if fact.kind == JobKind::VerifyPackage {
+                        // Not a file job: the pending path is left to the job it belongs to.
+                        let found = match result {
+                            Ok(JobOutput::PackageVerified {
+                                receipt,
+                                verification_us,
+                            }) => Ok((receipt, verification_us)),
+                            Ok(_) => continue,
+                            Err(problem) => Err(problem),
+                        };
+                        if let Some(outcome) = self.check_finished(fact.id, found) {
+                            self.report(Source::Job(fact.kind), outcome);
+                        }
+                        continue;
+                    }
                     let pending_path = self.pending_path.take();
                     let outcome = match result {
                         Ok(JobOutput::Geometry {
@@ -1032,11 +1164,19 @@ impl Editor {
                             receipt.durability_warning.map_or(Ok(()), Err)
                         }
                         Ok(JobOutput::Cooked {
+                            receipt,
                             source_hash,
                             simulation_hash,
                             ..
                         }) => {
                             self.last_cook = Some((source_hash.hex(), simulation_hash.hex()));
+                            // A new package: whatever was known of the old one is not about
+                            // this one. A check of the old one is given up and forgotten, so
+                            // that its end, whenever it comes, is not taken for news.
+                            self.cancel_check();
+                            self.check_ticket = None;
+                            self.cooked = Some(receipt);
+                            self.package_check = PackageCheck::NotAsked;
                             Ok(())
                         }
                         // A kind of result the core added that needs nothing done here.
@@ -1234,6 +1374,185 @@ fn id_bits(nanos: u128, counter: u64) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An editor on the game's current map, with its level and cooked folders in `folder`,
+    /// after one cook.
+    fn cooked_in(folder: &std::path::Path) -> Editor {
+        let mut editor = Editor::new(
+            scene_data::current_map(),
+            folder.join("levels/map.level.json"),
+            folder.join("cooked"),
+        )
+        .unwrap();
+        editor.cook();
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        editor
+    }
+
+    /// Adds a box and waits until the core has it, so that the next cook is of another level.
+    fn change_the_level(editor: &mut Editor) {
+        let before = editor.snapshot().document.objects.len();
+        editor.add_box(&down_at(3.0, 3.0));
+        settle(editor);
+        assert_eq!(editor.snapshot().document.objects.len(), before + 1);
+    }
+
+    #[test]
+    fn without_a_cooked_level_there_is_nothing_to_check() {
+        let mut editor = empty_level();
+        editor.check_cooked();
+        assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
+        assert!(!editor.busy(), "no job was started");
+        assert_eq!(editor.problem, None);
+    }
+
+    #[test]
+    fn the_cooked_level_on_disk_is_checked_by_the_core_and_a_damaged_one_is_refused() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = cooked_in(folder.path());
+        let package = editor.cooked().expect("a cook leaves its receipt").clone();
+        assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
+
+        editor.check_cooked();
+        assert_eq!(editor.package_check(), &PackageCheck::Checking);
+        settle(&mut editor);
+        assert!(matches!(
+            editor.package_check(),
+            PackageCheck::Passed { .. }
+        ));
+        assert_eq!(editor.problem, None);
+
+        // Something else writes into the package.
+        std::fs::write(package.path().join("level.sim.json"), b"tampered").unwrap();
+        editor.check_cooked();
+        settle(&mut editor);
+        assert_eq!(
+            editor.package_check(),
+            &PackageCheck::Refused {
+                code: "payload.hash_mismatch".into()
+            }
+        );
+        assert_eq!(
+            editor.problem.as_ref().map(|problem| problem.code.as_str()),
+            Some("payload.hash_mismatch")
+        );
+        // Putting the notice away does not make the package good.
+        editor.dismiss_problem();
+        assert!(matches!(
+            editor.package_check(),
+            PackageCheck::Refused { .. }
+        ));
+
+        // A cooked level's folder is named by its content and is never written over, so
+        // cooking the same level again cannot put the damage right. The level changes and is
+        // cooked: that is another package. Nothing is known of it until asked, and then it
+        // passes and the problem is gone.
+        editor.check_cooked();
+        settle(&mut editor);
+        assert!(editor.problem.is_some());
+        change_the_level(&mut editor);
+        editor.cook();
+        settle(&mut editor);
+        assert_ne!(editor.cooked(), Some(&package), "a new package");
+        assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
+        editor.check_cooked();
+        settle(&mut editor);
+        assert!(matches!(
+            editor.package_check(),
+            PackageCheck::Passed { .. }
+        ));
+        assert_eq!(editor.problem, None);
+    }
+
+    #[test]
+    fn the_end_of_an_older_check_neither_ends_nor_fails_the_check_under_way() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = cooked_in(folder.path());
+        let old_package = editor.cooked().unwrap().clone();
+
+        // A check is started and stopped; the level changes and is cooked again; a new check
+        // of the new package is started.
+        editor.check_cooked();
+        let older = editor.check_ticket.as_ref().unwrap().id;
+        editor.cancel_check();
+        change_the_level(&mut editor);
+        editor.cook();
+        settle(&mut editor);
+        let package = editor.cooked().unwrap().clone();
+        assert_ne!(old_package, package);
+        editor.check_cooked();
+        let under_way = editor.check_ticket.as_ref().unwrap().id;
+        assert_ne!(older, under_way);
+        assert_eq!(editor.package_check(), &PackageCheck::Checking);
+
+        // Now the old check's end arrives first, as it would from a core that does not end
+        // jobs in the order they were asked for: cancelled, refused, or even passed, for the
+        // old package or the new. None of it is about the check under way.
+        for found in [
+            Err(Diagnostic::new("job.cancelled")),
+            Err(Diagnostic::new("payload.hash_mismatch")),
+            Ok((old_package.clone(), 7)),
+            Ok((package.clone(), 7)),
+        ] {
+            assert_eq!(editor.check_finished(older, found), None);
+            assert_eq!(editor.package_check(), &PackageCheck::Checking);
+            assert_eq!(
+                editor.check_ticket.as_ref().map(|ticket| ticket.id),
+                Some(under_way),
+                "the check under way can still be cancelled"
+            );
+        }
+        assert_eq!(editor.problem, None);
+
+        // The check under way ends by itself, with its own result.
+        settle(&mut editor);
+        assert!(matches!(
+            editor.package_check(),
+            PackageCheck::Passed { .. }
+        ));
+        assert!(editor.check_ticket.is_none());
+    }
+
+    #[test]
+    fn a_check_given_up_for_a_new_cook_says_nothing_about_the_new_package() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = cooked_in(folder.path());
+        let old = editor.cooked().unwrap().clone();
+        // A check of the old package, then a changed level and a new cook.
+        editor.check_cooked();
+        let given_up = editor.check_ticket.as_ref().unwrap().id;
+        change_the_level(&mut editor);
+        editor.cook();
+        settle(&mut editor);
+        let new = editor.cooked().unwrap().clone();
+        assert_ne!(old, new, "the changed level cooks to another package");
+        assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
+        assert!(editor.check_ticket.is_none());
+        // The old check's end, were it to come only now, changes nothing.
+        assert_eq!(editor.check_finished(given_up, Ok((old, 7))), None);
+        assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
+    }
+
+    #[test]
+    fn stopping_a_check_leaves_nothing_known_and_nothing_wrong() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = cooked_in(folder.path());
+        editor.check_cooked();
+        let under_way = editor.check_ticket.as_ref().unwrap().id;
+        editor.cancel_check();
+        // As the core reports a job it gave up.
+        assert_eq!(
+            editor.check_finished(under_way, Err(Diagnostic::new("job.cancelled"))),
+            None
+        );
+        assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
+        assert_eq!(editor.problem, None);
+        // The job itself still ends in the core; its end is no longer news.
+        settle(&mut editor);
+        assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
+        assert_eq!(editor.problem, None);
+    }
 
     #[test]
     fn ids_made_in_the_same_instant_differ() {

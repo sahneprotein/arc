@@ -9,6 +9,7 @@ pub mod levels;
 pub mod menu;
 pub mod notice;
 pub mod paint;
+pub mod play;
 pub mod rules;
 pub mod status;
 pub mod toolbar;

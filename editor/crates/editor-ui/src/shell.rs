@@ -30,6 +30,7 @@ use crate::{
         menu::{keys_show_row_focus, mark_menu_open, menu_scrim, show_row_focus, MenuOpen},
         notice::{notice, show_notice},
         paint::{commit_layer_name, fill_layer_names, show_layers},
+        play::show_play,
         rules::{fill_rule_fields, show_rules},
         status::{show_status, status_bar},
         toolbar::{fold_toolbar, show_tool, toolbar},
@@ -318,7 +319,7 @@ impl Plugin for EditorUiPlugin {
                     show_empty_hint,
                     (level_dialog_keys, forget_name_problem, show_level_dialog).chain(),
                     (mark_menu_open, mark_modal).chain(),
-                    (fold_toolbar, show_tool),
+                    (fold_toolbar, show_tool, show_play),
                     (keys_show_row_focus, show_row_focus).chain(),
                     hide_idle_scrollbars,
                     (

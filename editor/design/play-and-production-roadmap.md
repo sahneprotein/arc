@@ -18,10 +18,13 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/toolbar-one-row`.
+- The editor as it is on the branch `codex/play-workflow`.
 
-Words used here. A **cooked level** is the package the cook step makes from the saved level;
-it is what the game loads, and it is named by a hash. A **receipt** is the core's record that
+Words used here. The **open level** is the level as it is in the editor now, with every
+change made to it; the **saved file** is what the last Save wrote, and the two differ while
+there are unsaved changes. A **cooked level** is the package the cook step makes from the
+open level as it is at that moment, saved or not; it is what the game loads, and it is named
+by a hash. A **receipt** is the core's record that
 a cooked package on disk was read and verified. A **run** is one start of the game from the
 editor, from the request to the end of its cleanup.
 
@@ -32,15 +35,15 @@ editor, from the request to the end of its cleanup.
 | Piece | State |
 |---|---|
 | Cook from the editor | Implemented. Level menu, Cook; the status bar says cooked or not |
-| Checking a cooked package (`VerifyPackage` job, `VerifiedPackageReceipt`) | Implemented in the core, with its refusals. The UI does not call it yet |
+| Checking a cooked package (`VerifyPackage` job, `VerifiedPackageReceipt`) | Implemented in the core, with its refusals, and asked for from the Play menu's row "Check cooked level" |
 | Play coordinator (`StartPlay`, `StopPlay`, `play_snapshot`, the waker) | Not implemented. Names and rules are agreed in the contract |
 | Starting the game as its own process; running it inside the editor | Not implemented |
 | The game loading a cooked level | Not implemented. The game still builds its level in code; this waits for the game integration |
-| The Play control in the toolbar | Not built. The one-row toolbar leaves its place at the right end, before the panel switches |
-| Design | Drawn: five boards and the PlayControl page. None was built from |
+| The Play control in the toolbar | Its first step (P0 of 1.11) is built: the control at the right end of the toolbar at every width, its menu with the two ways to play switched off and the reason in its foot, the cooked level named in the foot with "Cook" or "Cook first", the check of the cooked level with its refusals, and Stop while a check runs. It never shows a game as starting or running |
+| Design | Drawn: five boards and the PlayControl page. P0 follows them where it can; the Play menu is as wide as any menu, because the design has no token for the wider menu it draws |
 
-So nothing a person can press exists yet, and the earliest thing that can be built without
-the game is the control with its menu and the check of the cooked package.
+So nothing starts the game yet. What a person can do today is cook from the Play menu and
+have the cooked level on disk checked.
 
 ### 1.2 What the contract fixes, in the UI's terms
 
@@ -81,7 +84,7 @@ The left column is what the core reports; the rest is what the editor shows.
 
 | Core reports | The control | Stop | Status bar |
 |---|---|---|---|
-| No run; a cooked level that matches the saved level | "Play", opens the menu | none | "cooked 9f3a61c2" |
+| No run; a cooked level that matches the open level | "Play", opens the menu | none | "cooked 9f3a61c2" |
 | No run; the level changed since the cook | "Play" with a warning dot | none | "cooked 9f3a61c2, older than the level" |
 | No run; nothing cooked | "Play", triangle dim; both ways to play are off | none | "not cooked" |
 | `VerifyPackage` running | "Checking" and the hash | cancels the check | "checking cooked 9f3a61c2" |
@@ -113,11 +116,12 @@ The menu's foot always says what would run, before anything is pressed:
 | Cooked, current | "cooked 9f3a61c2" | none |
 | Cooked, older than the level | "The level has changed since this cook. Play runs the cooked level, without those changes." | "Cook first" |
 | Not cooked | "Cook the level to play it." | "Cook" |
-| Unsaved changes, cooked | the second row's sentence; saving is not forced | "Cook first" (which saves) |
+| Unsaved changes, cooked | the second row's sentence; saving is not forced | "Cook first" |
 
-"Cook first" saves, cooks and then leaves the menu open on the new hash; it does not start
-the game by itself. Playing an older cook stays possible on purpose: it is the fast way to
-look at something again.
+"Cook first" cooks the level as it is open in the editor, saved or not, and leaves the menu
+open on the new hash. It does not save the level, and it does not start the game by itself:
+the core cooks the open level, not the file. Playing an older cook stays possible on purpose:
+it is the fast way to look at something again.
 
 ### 1.6 What "ready" shows (proposed)
 
@@ -160,7 +164,7 @@ Refusals are one sentence each, in the status bar, because nothing happened:
 ### 1.8 Editing during a run, and closing (proposed)
 
 - Editing, saving and cooking all stay available. A cook during a run makes a new package;
-  the run keeps its own. When the saved level moves on, one Notice offers "Cook and play
+  the run keeps its own. When the open level moves on, one Notice offers "Cook and play
   again", which stops the run, cooks, checks and starts in the same mode.
 - In-editor play: a click in the view gives the game the pointer and the keyboard; Escape
   takes them back. While the game has them, the editor's shortcuts and tools do nothing, as

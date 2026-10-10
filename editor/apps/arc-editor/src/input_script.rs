@@ -447,7 +447,7 @@ pub struct Screen<'w, 's> {
             &'static ChildOf,
         ),
     >,
-    buttons: Query<'w, 's, (), With<Button>>,
+    buttons: Query<'w, 's, &'static InheritedVisibility, With<Button>>,
     menu_buttons: Query<'w, 's, (), With<MenuButton>>,
     menu_items: Query<'w, 's, &'static InheritedVisibility, With<MenuItem>>,
     toolbar: Query<
@@ -535,13 +535,19 @@ impl Screen<'_, '_> {
             .map(|(_, node, transform)| centre(node, transform))
     }
 
-    /// The caption of a button that is laid out on the window. A panel's title with the same
-    /// words is not a button and is not found.
+    /// The caption of a button that is laid out and shown on the window. A panel's title with
+    /// the same words is not a button and is not found; nor is a button in a closed menu,
+    /// which is laid out but not shown.
     pub fn button(&self, caption: &str) -> Option<Vec2> {
         self.texts
             .iter()
             .find(|(text, node, _, parent)| {
-                text.0 == caption && !node.is_empty() && self.buttons.contains(parent.parent())
+                text.0 == caption
+                    && !node.is_empty()
+                    && self
+                        .buttons
+                        .get(parent.parent())
+                        .is_ok_and(|visibility| visibility.get())
             })
             .map(|(_, node, transform, _)| centre(node, transform))
     }

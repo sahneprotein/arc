@@ -45,7 +45,8 @@
 //! Steps that call the editor directly, for set-up: `select=N`, `reparent=CHILD:PARENT` (row
 //! numbers), `look-at=X:Y:Z` (the point the view turns about), `tilt=ROW:DEGREES` (turn an
 //! object about X), `inspector` (show the
-//! inspector, hide the hierarchy), `save`, `cook`.
+//! inspector, hide the hierarchy), `save`, `cook`, `spoil-cooked` (something else writes into
+//! the cooked level on disk).
 //!
 //! `ARC_EDITOR_CHECK_WINDOW=WIDTHxHEIGHT` asks the desktop for a window of that size in
 //! logical pixels, for the cases that check the layout at a given width. The desktop may give
@@ -359,6 +360,7 @@ fn scripted(
     } else if reactive || script.frame == finished_at + 2 * SETTLE {
         let snapshot = editor.snapshot();
         let status = &snapshot.status;
+        let play = editor_ui::panels::play::PlayView::of(&editor);
         // The lowest and highest sample of all landscapes; a flat new one is 0 to 0.
         let (lowest, highest) = snapshot
             .document
@@ -381,7 +383,7 @@ fn scripted(
             .first()
             .and_then(|id| snapshot.document.object(id));
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -487,6 +489,17 @@ fn scripted(
             // Folded is what is laid out: the tool menu's button is there instead of the tools.
             screen.menu_button("Tool").is_some(),
             closing.6.0,
+            // The Play control as it would be shown: the cooked level, whether the level has
+            // moved on from it, what a check of it found, and whether Stop is there.
+            play.cooked.as_deref().unwrap_or("none"),
+            play.older,
+            match &play.check {
+                editor_ui::PackageCheck::NotAsked => "none".to_owned(),
+                editor_ui::PackageCheck::Checking => "checking".to_owned(),
+                editor_ui::PackageCheck::Passed { .. } => "passed".to_owned(),
+                editor_ui::PackageCheck::Refused { code } => format!("refused:{code}"),
+            },
+            play.stop_shown(),
         );
         exit.write(AppExit::Success);
     }
@@ -765,6 +778,12 @@ fn play(
         "inspector" => panels.set(Some(false), Some(true)),
         "save" => editor.save(),
         "cook" => editor.cook(),
+        "spoil-cooked" => {
+            // Set-up: the cooked level's simulation data is overwritten, as by another program.
+            let package = editor.cooked().ok_or("nothing is cooked")?;
+            std::fs::write(package.path().join("level.sim.json"), b"spoiled")
+                .map_err(|error| error.to_string())?;
+        }
         _ => return Err("unknown step".into()),
     }
     Ok(None)

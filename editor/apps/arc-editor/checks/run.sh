@@ -216,6 +216,31 @@ check_sized "$narrow" narrow-panels 'inspector,choose=Panels>Hierarchy,choose=Pa
 check_sized "$narrow" narrow-add    'choose=Add>Landscape,choose=Level>Save' 'window=621x' 'toolbar_folded=true' 'objects=23' 'ground_tiles=4' 'dirty=false' 'problem=none'
 check_sized "$narrow" narrow-menu   'click-button=Panels' 'window=621x' 'menu_open=true' "$row" 'toolbar_fits=Some\(true\)'
 
+# The Play control. It is in the toolbar at every width. Nothing can be played yet: the two
+# ways to play are in its menu and are off, and choosing one does nothing. Its foot names the
+# cooked level and offers to cook; a cooked level can be checked on disk by the editor's core.
+check play-menu       'click-button=Play'                 'menu_open=true' 'play_cooked=none' 'play_check=none' 'play_stop=false' "$row"
+check play-off        'click-button=Play,click-item=Open Game Window,click-item=Preview in Editor' 'menu_open=true' 'play_check=none' 'play_stop=false' 'problem=none'
+check play-no-check   'click-button=Play,click-item=Check cooked level' 'menu_open=true' 'play_cooked=none' 'play_check=none' 'problem=none'
+# The foot's button cooks, and the menu stays open on the new cooked level.
+check play-cooks      'click-button=Play,click-button=Cook' 'menu_open=true' 'play_cooked=[0-9a-f]{8}' 'play_older=false' 'cook_needed=false' 'problem=none'
+# A check of the cooked level passes, and is asked for from the menu.
+check play-check      'cook,click-button=Play,click-item=Check cooked level' 'menu_open=false' 'play_cooked=[0-9a-f]{8}' 'play_check=passed' 'play_stop=false' 'problem=none' 'notice=false'
+# Something else wrote into the cooked level: the core refuses it and the notice says so.
+check play-refused    'cook,spoil-cooked,click-button=Play,click-item=Check cooked level' 'play_check=refused:payload\.hash_mismatch' 'problem=payload\.hash_mismatch' 'notice=true' 'play_stop=false'
+# The level changes and is cooked first: that is a new cooked level, and it passes. (Cooking the
+# same level again would not help: the core leaves a cooked folder that is there as it is.)
+check play-recooked   'cook,spoil-cooked,click-button=Play,click-item=Check cooked level,click-row=11,drag-gizmo=-60,click-button=Play,click-button=Cook first,click-item=Check cooked level' 'play_check=passed' 'play_older=false' 'problem=none' 'notice=false'
+# The level moves on after a cook: the control warns, the foot offers to cook first, and the
+# older cook can still be checked.
+check play-older      'cook,click-row=11,drag-gizmo=-60,click-button=Play' 'play_older=true' 'cook_needed=true' 'menu_open=true'
+check play-cook-first 'cook,click-row=11,drag-gizmo=-60,click-button=Play,click-button=Cook first' 'play_older=false' 'cook_needed=false' 'menu_open=true' 'problem=none'
+check play-older-check 'cook,click-row=11,drag-gizmo=-60,click-button=Play,click-item=Check cooked level' 'play_older=true' 'play_check=passed' 'problem=none'
+# At both accepted widths the control is in the row, and its menu opens inside the window.
+check_sized "$wide" wide-play     'click-button=Play'     'window=1261x' 'menu_open=true' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-play 'click-button=Play'     'window=621x' 'menu_open=true' 'toolbar_folded=true' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-play-check 'cook,click-button=Play,click-item=Check cooked level' 'window=621x' 'play_check=passed' 'problem=none'
+
 # The landscape tool: T chooses it, its panel takes the inspector's place, a mode button
 # chooses the brush, and the brush points at the ground under the cursor.
 check sculpt-key      'key=t'                             'sculpt=true'
@@ -279,7 +304,8 @@ check empty-opens     'key=ctrl+n,type=7,key=enter,click-button=Discard changes,
 check add-box         'choose=Add>Box' 'objects=23' 'selected=Some\("Box 15"\)' 'position=Some\(\[0\.0, 0\.5, 2\.0\]\)' 'half_size=Some\(\[0\.5, 0\.5, 0\.5\]\)' 'undo=Some\("create"\)'
 check add-box-undo    'choose=Add>Box,key=ctrl+z' 'objects=22' 'redo=Some\("create"\)'
 check add-spawn       'choose=Add>Spawn point' 'objects=23' 'selected=Some\("Spawn 9"\)' 'position=Some\(\[0\.0, 2\.0, 2\.0\]\)'
-check remove-button   'click-row=11,click-button=Remove' 'objects=21' 'selected=None' 'undo=Some\("delete"\)'
+# The Remove button is there in a wide window; in a narrow one the Delete key removes.
+check_sized "$wide" remove-button 'click-row=11,click-button=Remove' 'window=1261x' 'objects=21' 'selected=None' 'undo=Some\("delete"\)'
 check delete-key      'click-row=11,key=delete' 'objects=21' 'undo=Some\("delete"\)'
 check delete-undo     'click-row=11,key=delete,key=ctrl+z' 'objects=22' 'redo=Some\("delete"\)'
 # The landscape's layers, in the Paint part of the landscape tool.
