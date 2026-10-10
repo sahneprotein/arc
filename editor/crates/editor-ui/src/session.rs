@@ -1148,6 +1148,12 @@ impl Editor {
                             Ok(())
                         }
                         Ok(JobOutput::Opened { disk_hash, .. }) => {
+                            // Another level is open now: the cooked package the editor
+                            // held was of the level before it.
+                            self.cancel_check();
+                            self.check_ticket = None;
+                            self.cooked = None;
+                            self.package_check = PackageCheck::NotAsked;
                             self.on_disk = DiskVersion::Hash(disk_hash);
                             self.has_file = true;
                             if let Some(path) = pending_path {
@@ -1396,6 +1402,30 @@ mod tests {
         editor.add_box(&down_at(3.0, 3.0));
         settle(editor);
         assert_eq!(editor.snapshot().document.objects.len(), before + 1);
+    }
+
+    #[test]
+    fn the_play_control_names_the_cooked_level_by_its_manifests_hash() {
+        use crate::panels::play::PlayView;
+        let folder = tempfile::tempdir().unwrap();
+        let editor = cooked_in(folder.path());
+        let identity = editor.cooked().unwrap().identity().clone();
+        let manifest = identity.manifest_hash.hex();
+        let simulation = identity.simulation_hash.hex();
+        assert_ne!(
+            manifest[..8],
+            simulation[..8],
+            "the two hashes of this package begin differently, so the test tells them apart"
+        );
+
+        let view = PlayView::of(&editor);
+        assert_eq!(view.cooked.as_deref(), Some(&manifest[..8]));
+        assert_eq!(view.cooked_line(), format!("cooked {}", &manifest[..8]));
+        assert_eq!(view.status_words(), format!("cooked {}", &manifest[..8]));
+        // It is the name of the cooked folder, which is what the game is started with.
+        let folder_name = editor.cooked().unwrap().path().file_name().unwrap();
+        assert!(folder_name.to_string_lossy().starts_with(&manifest[..8]));
+        assert!(view.can_check);
     }
 
     #[test]

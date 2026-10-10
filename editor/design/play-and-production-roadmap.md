@@ -26,8 +26,10 @@ Sources:
 Words used here. The **open level** is the level as it is in the editor now, with every
 change made to it; the **saved file** is what the last Save wrote, and the two differ while
 there are unsaved changes. A **cooked level** is the package the cook step makes from the
-open level as it is at that moment, saved or not; it is what the game loads, and it is named
-by a hash. A **receipt** is the core's record that
+open level as it is at that moment, saved or not; it is what the game loads. Its identity is
+the hash of its manifest, the small file that lists its contents and their hashes: the cooked
+folder is named by that hash, the game is started with it, and client and server compare it.
+The editor shows a cooked level by the first eight digits of that same hash. A **receipt** is the core's record that
 a cooked package on disk was read and verified. A **run** is one start of the game from the
 editor, from the request to the end of its cleanup.
 
@@ -226,11 +228,12 @@ Asked for in addition, for the core's writer to accept or change:
    the game cannot run one: `play.start_failed` after a process has died is a worse answer
    to a question the core can settle from the package.
 
-One thing to settle with the game's side before P1: the editor names a cooked level to the
-person by the first eight digits of its simulation hash, and the game names it on the wire
-by the hash of its manifest. They are two hashes of the same package. Either the editor
-shows the manifest's, or both are shown where a mismatch is reported; otherwise the hash in
-a refusal from the game will not be the one in the status bar.
+The editor and the game name a cooked level by the same hash. The editor shows the first
+eight digits of the manifest's hash, taken from the receipt of its own cook, in the Play
+menu's foot, in the word "Checking" and in the status bar; the game is started with that
+hash and compares it on the wire. So the digits in a refusal from the game are the digits in
+the status bar. Only without a receipt, when the level's status says it is cooked and this
+editor did not cook it, does the editor show the simulation data's hash instead.
 
 ### 1.11 Order of work (proposed)
 
@@ -310,9 +313,13 @@ the editor shows which:
 
 | Kind | Side | Consequence |
 |---|---|---|
-| Collision, heights, spawn points, zone exits, triggers, spawners, safe areas, walkable area | Affects simulation | changes the simulation hash; a client with another version is refused by the server |
-| Ground textures, grass, lights, decoration, sound areas | Visual only | changes the package, not the simulation hash; the server never loads it |
+| Collision, heights, spawn points, zone exits, triggers, spawners, safe areas, walkable area | Affects simulation | changes the simulation hash, and with it the package's identity; a client with another version is refused by the server |
+| Ground textures, grass, lights, decoration, sound areas | Visual only | leaves the simulation hash as it is and changes the package's identity. As the game's handshake stands, server and client must hold the same package, so a client that differs only in decoration is refused too |
 | Cover and sightline overlays, distance rings, cost readouts | Editor only | never saved into the level, never cooked |
+
+Whether the game should accept a client whose package differs only in what is visual is
+open: its handshake compares the manifest's hash, which covers both kinds, and the simulation
+hash alone would let such a client in.
 
 The label is set by the core, shown by the UI and not a switch a person flips. The Review
 workspace's "what did this change do" is this table applied to the last edit.

@@ -50,7 +50,8 @@ pub const NOT_YET: &str = "The editor cannot start the game yet. \
 /// Everything the Play control shows, as plain values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlayView {
-    /// The cooked level by the first eight digits of its hash, if the level was cooked.
+    /// The cooked level by the short form of its identity, if the level was cooked: see
+    /// [`package_id`].
     pub cooked: Option<String>,
     /// Whether the level has changed since that cook.
     pub older: bool,
@@ -60,17 +61,36 @@ pub struct PlayView {
     pub check: PackageCheck,
 }
 
+/// The short name a cooked level is shown by: the first eight digits of the hash of its
+/// manifest. That hash is the package's identity everywhere else too: the cooked folder is
+/// named by it, the game is started with it, and client and server compare it when they
+/// meet. So the digits in the editor are the digits in a refusal from the game.
+///
+/// The editor knows the manifest's hash from the receipt of its own cook. Without a receipt
+/// the level's status still says that it is cooked, by the hash of the simulation data alone;
+/// that is shown then, for want of the other.
+pub fn package_id(manifest_hash: Option<&str>, simulation_hash: Option<&str>) -> Option<String> {
+    manifest_hash
+        .or(simulation_hash)
+        .map(|hash| wording::short_hash(hash).to_owned())
+}
+
 impl PlayView {
     pub fn of(editor: &Editor) -> Self {
         let snapshot = editor.snapshot();
         let status = &snapshot.status;
-        let cooked = status
-            .simulation_hash
-            .as_ref()
-            .map(|hash| wording::short_hash(&hash.hex()).to_owned());
+        let simulation = status.simulation_hash.as_ref().map(|hash| hash.hex());
+        // The receipt, if it is of the cooked level the status speaks of.
+        let receipt = editor.cooked().filter(|receipt| {
+            simulation.as_deref() == Some(receipt.identity().simulation_hash.hex().as_str())
+        });
+        let manifest = receipt.map(|receipt| receipt.identity().manifest_hash.hex());
+        let cooked = simulation
+            .as_deref()
+            .and_then(|simulation| package_id(manifest.as_deref(), Some(simulation)));
         Self {
             older: cooked.is_some() && status.cook_needed,
-            can_check: cooked.is_some() && editor.cooked().is_some(),
+            can_check: receipt.is_some(),
             cooked,
             check: editor.package_check().clone(),
         }
@@ -523,6 +543,21 @@ mod tests {
             check: PackageCheck::NotAsked,
         };
         assert!(!view.check_offered());
+    }
+
+    #[test]
+    fn a_cooked_level_is_shown_by_its_manifests_hash_and_by_the_simulations_only_without_it() {
+        let manifest = "6105ad50c97caf0b488b5147c68f30e7";
+        let simulation = "14571ca6aa00bb11cc22dd33ee44ff55";
+        assert_eq!(
+            package_id(Some(manifest), Some(simulation)).as_deref(),
+            Some("6105ad50")
+        );
+        assert_eq!(
+            package_id(None, Some(simulation)).as_deref(),
+            Some("14571ca6")
+        );
+        assert_eq!(package_id(None, None), None);
     }
 
     #[test]
