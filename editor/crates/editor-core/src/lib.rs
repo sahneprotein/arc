@@ -1,6 +1,10 @@
 //! UI-independent document actor, immutable views and validated command history.
 mod brush;
 mod command;
+mod editing;
+mod review;
+pub use editing::*;
+pub use review::*;
 mod paint;
 pub use paint::{terrain_paint, MAX_PAINT_CHANGED_TEXELS, MAX_PAINT_POINTS, MAX_PAINT_RADIUS_M};
 mod sculpt;

@@ -9,6 +9,7 @@ pub struct RegionRevisions {
     pub inspector: u64,
     pub jobs: u64,
     pub status: u64,
+    pub review: u64,
 }
 #[derive(Clone, Debug)]
 pub struct ViewSnapshot {
@@ -19,6 +20,10 @@ pub struct ViewSnapshot {
     pub document: Arc<SceneDocument>,
     pub hierarchy: Arc<[HierarchyRow]>,
     pub selection: Arc<[ObjectId]>,
+    pub active: Option<ObjectId>,
+    pub pivot: GizmoPivot,
+    pub snap: SnapSettings,
+    pub review: Arc<[ReviewProblem]>,
     pub changed_objects: Arc<[ObjectId]>,
     pub inspector: Arc<[FieldDescriptor]>,
     pub preview: Option<PreviewSnapshot>,
@@ -141,7 +146,11 @@ pub(crate) fn inspector(scene: &SceneDocument, selection: &[ObjectId]) -> Arc<[F
             None,
         ),
     ];
-    if let ObjectData::Box { half_extents_m } = &first.data {
+    if let ObjectData::Box { half_extents_m } = &first.data
+        && selected
+            .iter()
+            .all(|o| matches!(o.data, ObjectData::Box { .. }))
+    {
         let mut f = field(
             "half_extents",
             FieldValue::Vector(half_extents_m.to_vec()),

@@ -1,5 +1,7 @@
 use crate::{package::verify_package_payloads, VerifiedPackageReceipt};
-use scene_data::{Diagnostic, SimulationPayload, VisualPayload};
+use scene_data::Diagnostic;
+#[cfg(test)]
+use scene_data::{SimulationPayload, VisualPayload};
 use std::sync::atomic::AtomicBool;
 pub(crate) fn verify(
     receipt: &VerifiedPackageReceipt,
@@ -7,10 +9,14 @@ pub(crate) fn verify(
 ) -> Result<(), Diagnostic> {
     let (_, simulation, visual) =
         verify_package_payloads(receipt.path(), Some(receipt.identity()), cancel)?;
-    capabilities(&Subset::of(&simulation, &visual))
+    editor_core::review_play_payloads(&simulation, &visual)
+        .into_iter()
+        .next()
+        .map_or(Ok(()), |problem| Err(problem.diagnostic))
 }
 /// What of a verified package decides whether the game runtime can run it. The
 /// payloads themselves were validated by the same read that produced them.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Subset {
     spawns: usize,
@@ -21,6 +27,7 @@ struct Subset {
     decoration: usize,
     derived_layers: usize,
 }
+#[cfg(test)]
 impl Subset {
     fn of(simulation: &SimulationPayload, visual: &VisualPayload) -> Self {
         let sum = |count: fn(&scene_data::VisualTerrain) -> usize| -> usize {
@@ -39,24 +46,21 @@ impl Subset {
 /// weights and masks). It does not run procedural terrain: a package carrying
 /// rules, decoration or derived layers is refused before any child is spawned,
 /// with the first unsupported kind as `reason`.
+#[cfg(test)]
 fn capabilities(subset: &Subset) -> Result<(), Diagnostic> {
-    let unsupported = [
-        ("rules", subset.rules),
-        ("decoration", subset.decoration),
-        ("derived_layers", subset.derived_layers),
-    ];
-    if let Some((reason, count)) = unsupported.into_iter().find(|(_, count)| *count != 0) {
-        return Err(Diagnostic::new("play.terrain_unsupported")
-            .with("reason", reason)
-            .with("count", count));
-    }
-    if subset.spawns == 0 {
-        return Err(Diagnostic::new("play.spawn_required"));
-    }
-    if subset.boxes > 100_000 || subset.spawns > 100_000 {
-        return Err(Diagnostic::new("play.runtime_limit"));
-    }
-    Ok(())
+    editor_core::play_problems(&editor_core::PlayCapabilityFacts {
+        spawns: subset.spawns,
+        boxes: subset.boxes,
+        terrain: vec![editor_core::ProceduralTerrainFacts {
+            object: scene_data::StableId::from_u128(1),
+            rules: subset.rules,
+            decoration: subset.decoration,
+            derived_layers: subset.derived_layers,
+        }],
+    })
+    .into_iter()
+    .next()
+    .map_or(Ok(()), |problem| Err(problem.diagnostic))
 }
 /// One verifier thread and one queued preparation per coordinator. Cancellation
 /// cannot interrupt a blocked filesystem call, but repeated starts cannot create
@@ -108,6 +112,30 @@ impl Worker {
 mod tests {
     use super::*;
     use scene_data::{DerivedTerrainLayer, StableId, VisualTerrain, COOK_SCHEMA};
+
+    #[test]
+    fn preflight_refusal_is_the_same_object_scoped_problem_as_review() {
+        let visual = VisualPayload {
+            schema: COOK_SCHEMA,
+            terrain: vec![terrain(vec![DerivedTerrainLayer {
+                rule: StableId::from_u128(10),
+                layer: StableId::from_u128(11),
+                tile: StableId::from_u128(12),
+                side_samples: 2,
+                weights: vec![0.; 4],
+            }])],
+        };
+        let (simulation, _) = payloads(Vec::new());
+        let problems = editor_core::review_play_payloads(&simulation, &visual);
+        assert_eq!(problems.len(), 2);
+        assert_eq!(problems[0].diagnostic.code, "play.terrain_unsupported");
+        assert_eq!(problems[0].diagnostic.object, Some(StableId::from_u128(1)));
+        assert_eq!(
+            problems[0].diagnostic.parameters["reason"],
+            "derived_layers"
+        );
+        assert_eq!(problems[1].diagnostic.code, "play.spawn_required");
+    }
 
     fn playable() -> Subset {
         Subset {

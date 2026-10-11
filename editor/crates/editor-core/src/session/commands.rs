@@ -15,6 +15,89 @@ impl EditorSession {
             return Err(Diagnostic::new("transaction.busy"));
         }
         match command {
+            Command::AssignField {
+                objects,
+                assignment,
+                label_key,
+            } => {
+                let supplied: BTreeSet<_> = objects.iter().cloned().collect();
+                if supplied.is_empty() || supplied.iter().ne(self.selection.iter()) {
+                    return Err(Diagnostic::new("selection.stale"));
+                }
+                let mutations = crate::editing::assign_field(&self.document, objects, assignment)?;
+                self.apply(&Command::Edit {
+                    label_key: label_key.clone(),
+                    mutations,
+                })
+            }
+            Command::DuplicateObjects { copies, label_key } => {
+                let crate::editing::Duplication {
+                    mutations,
+                    selected,
+                    remap,
+                } = crate::editing::duplicate_objects(&self.document, &self.selection, copies)?;
+                let mut source_active = self.active.clone();
+                let active = loop {
+                    let Some(id) = source_active else {
+                        break selected.first().cloned();
+                    };
+                    if let Some(copy) = remap.get(&id)
+                        && selected.contains(copy)
+                    {
+                        break Some(copy.clone());
+                    }
+                    source_active = self.document.object(&id).and_then(|o| o.parent.clone());
+                };
+                let mut next = (*self.document).clone();
+                mutate(&mut next, &mutations)?;
+                self.commit(Arc::new(next), label_key.clone())?;
+                self.set_selection(selected, active);
+                Ok(CommandOutcome::Applied)
+            }
+            Command::ReparentObjects {
+                objects,
+                parent,
+                keep,
+            } => {
+                let mutations =
+                    crate::editing::reparent_objects(&self.document, objects, parent, *keep)?;
+                self.apply(&Command::Edit {
+                    label_key: "reparent".into(),
+                    mutations,
+                })
+            }
+            Command::SetActiveObject(active) => {
+                if active
+                    .as_ref()
+                    .is_some_and(|id| !self.selection.contains(id))
+                    || (active.is_none() && !self.selection.is_empty())
+                {
+                    return Err(Diagnostic::new("selection.active_not_selected"));
+                }
+                if self.active != *active {
+                    self.active = active.clone();
+                    self.regions.selection += 1;
+                    self.view_revision += 1;
+                }
+                Ok(CommandOutcome::SelectionChanged)
+            }
+            Command::SetGizmoPivot(pivot) => {
+                if self.pivot != *pivot {
+                    self.pivot = *pivot;
+                    self.regions.selection += 1;
+                    self.view_revision += 1;
+                }
+                Ok(CommandOutcome::SelectionChanged)
+            }
+            Command::SetSnap(snap) => {
+                snap.validate()?;
+                if self.snap != *snap {
+                    self.snap = *snap;
+                    self.regions.selection += 1;
+                    self.view_revision += 1;
+                }
+                Ok(CommandOutcome::SelectionChanged)
+            }
             Command::Edit {
                 label_key,
                 mutations,
@@ -25,15 +108,10 @@ impl EditorSession {
                 Ok(CommandOutcome::Applied)
             }
             Command::Select(ids) => {
-                let ids: BTreeSet<_> = ids.iter().cloned().collect();
                 if ids.iter().any(|id| self.document.object(id).is_none()) {
                     return Err(Diagnostic::new("selection.missing"));
                 }
-                self.selection = ids.into_iter().collect::<Vec<_>>().into();
-                self.inspector = inspector(&self.document, &self.selection);
-                self.regions.selection += 1;
-                self.regions.inspector += 1;
-                self.view_revision += 1;
+                self.set_selection(ids.clone(), ids.last().cloned());
                 Ok(CommandOutcome::SelectionChanged)
             }
             Command::Undo => {
@@ -170,5 +248,20 @@ impl EditorSession {
                 Ok(CommandOutcome::Cancelled)
             }
         }
+    }
+    fn set_selection(&mut self, ids: Vec<ObjectId>, active: Option<ObjectId>) {
+        self.selection = ids
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into();
+        self.active = active
+            .filter(|id| self.selection.contains(id))
+            .or_else(|| self.selection.first().cloned());
+        self.inspector = inspector(&self.document, &self.selection);
+        self.regions.selection += 1;
+        self.regions.inspector += 1;
+        self.view_revision += 1;
     }
 }

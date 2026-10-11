@@ -89,6 +89,23 @@ pub struct CommandRequest {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
+    AssignField {
+        objects: Vec<ObjectId>,
+        assignment: crate::FieldAssignment,
+        label_key: String,
+    },
+    DuplicateObjects {
+        copies: Vec<crate::DuplicateObject>,
+        label_key: String,
+    },
+    ReparentObjects {
+        objects: Vec<ObjectId>,
+        parent: Option<ObjectId>,
+        keep: crate::TransformRetention,
+    },
+    SetActiveObject(Option<ObjectId>),
+    SetGizmoPivot(crate::GizmoPivot),
+    SetSnap(crate::SnapSettings),
     Edit {
         label_key: String,
         mutations: Vec<Mutation>,

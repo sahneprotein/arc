@@ -9,7 +9,7 @@ mod validation;
 pub use fixture::current_map;
 pub use model::*;
 pub use runtime::*;
-pub use validation::{validate, MAX_OBJECTS};
+pub use validation::{validate, validation_diagnostics, MAX_OBJECTS};
 
 use sha2::{Digest, Sha256};
 

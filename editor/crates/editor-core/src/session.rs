@@ -43,6 +43,10 @@ pub struct EditorSession {
     hash: ContentHash,
     saved: Option<ContentHash>,
     selection: Arc<[ObjectId]>,
+    active: Option<ObjectId>,
+    pivot: GizmoPivot,
+    snap: SnapSettings,
+    review: Arc<[ReviewProblem]>,
     hierarchy: Arc<[HierarchyRow]>,
     inspector: Arc<[FieldDescriptor]>,
     changed: Arc<[ObjectId]>,
@@ -63,10 +67,14 @@ impl EditorSession {
             view_revision: 0,
             regions: RegionRevisions::default(),
             hierarchy: hierarchy(&document),
+            review: review_document(&document).into(),
             document: Arc::new(document),
             hash,
             saved: None,
             selection: Arc::from([]),
+            active: None,
+            pivot: GizmoPivot::Active,
+            snap: SnapSettings::default(),
             inspector: Arc::from([]),
             changed: Arc::from([]),
             undo: VecDeque::new(),
@@ -93,6 +101,10 @@ impl EditorSession {
             document: self.document.clone(),
             hierarchy: self.hierarchy.clone(),
             selection: self.selection.clone(),
+            active: self.active.clone(),
+            pivot: self.pivot,
+            snap: self.snap,
+            review: self.review.clone(),
             inspector: self.inspector.clone(),
             changed_objects: self.changed.clone(),
             jobs: self.jobs.clone(),
@@ -173,6 +185,10 @@ impl EditorSession {
             .is_some_and(|r| r != self.regions.inspector)
         {
             Err(Diagnostic::new("inspector.stale"))
+        } else if matches!(request.command, Command::AssignField { .. })
+            && request.expected_inspector_revision.is_none()
+        {
+            Err(Diagnostic::new("inspector.revision_required"))
         } else {
             self.apply(&request.command)
         };
