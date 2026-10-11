@@ -11,6 +11,7 @@ pub mod menu;
 pub mod notice;
 pub mod paint;
 pub mod play;
+pub mod review;
 pub mod rules;
 pub mod snap;
 pub mod status;

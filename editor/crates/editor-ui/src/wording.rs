@@ -266,6 +266,41 @@ pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
     }
 }
 
+/// A problem the core's review of the level lists, in words. What stops the game from running
+/// the level is said as what to change in the level; anything else is a problem as
+/// [`problem`] words it.
+pub fn review<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> Problem {
+    let (title, remedy): (&str, String) = match code {
+        "play.spawn_required" => (
+            "The level has no spawn point",
+            "The game needs a place to put the player. Add a spawn point from the Add menu.".into(),
+        ),
+        "play.terrain_unsupported" => {
+            let has = match (parameter("reason"), parameter("count")) {
+                (Some("rules") | None, Some("1")) => "It has 1 rule. ".to_owned(),
+                (Some("rules") | None, Some(count)) => format!("It has {count} rules. "),
+                _ => String::new(),
+            };
+            (
+                "The game cannot run what this landscape's rules make",
+                format!(
+                    "{has}Grass and layers a rule fills are not run. Remove the landscape's \
+                     rules to play the level; sculpted ground and painted layers are run."
+                ),
+            )
+        }
+        "play.runtime_limit" => (
+            "The level has more boxes or spawn points than the game takes",
+            "Remove objects, or split the level.".into(),
+        ),
+        other => return problem(other, parameter),
+    };
+    Problem {
+        title: title.into(),
+        remedy,
+    }
+}
+
 /// How a run of the game ended, when it is an end the person did not ask for: a notice that
 /// stays. `cause` is the code of what lay behind it, if the core gave one. `None` for an end
 /// the person asked for, which is said in the status bar ([`play_end_asked`]).
@@ -374,7 +409,9 @@ pub fn play_refusal(code: &str) -> String {
             "No game is set up for this editor. Start it with --game and the game's folder.".into()
         }
         "play.blocked" => {
-            "The game cannot run this level as it is. Nothing was cooked or started.".into()
+            "The game cannot run this level as it is: Review says why. Nothing was cooked or \
+             started."
+                .into()
         }
         "play.mode_unsupported" => "The game cannot be played inside the editor yet.".into(),
         "play.queue_full" => "The editor is still dealing with the last request. Try again.".into(),

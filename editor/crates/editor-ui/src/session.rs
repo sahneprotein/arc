@@ -2550,6 +2550,68 @@ mod tests {
     }
 
     #[test]
+    fn the_review_lists_what_stops_the_game_names_its_object_and_empties_when_it_is_mended() {
+        use crate::panels::review::review_items;
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_landscape(folder.path(), true);
+        let snapshot = editor.snapshot();
+        let items = review_items(&snapshot);
+        let [item] = items.as_slice() else {
+            panic!("one problem, not {items:?}");
+        };
+        assert_eq!(item.code, "play.terrain_unsupported");
+        assert!(item.remedy.starts_with("It has 1 rule."), "{}", item.remedy);
+        // It is about the landscape, which a button of the panel selects.
+        let (landscape_id, _) = landscape(&snapshot)
+            .map(|(object, terrain)| (object.id.clone(), terrain.rules[0].id.clone()))
+            .unwrap();
+        assert_eq!(item.object.as_ref().map(|(id, _)| id), Some(&landscape_id));
+        // The one key goes by the same list.
+        assert_eq!(play_blockers(&snapshot), 1);
+
+        // With the rule removed there is nothing left to review, and nothing stops the key.
+        let rule = landscape(&snapshot).unwrap().1.rules[0].id.0.clone();
+        editor.remove_rule(&rule);
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        assert_eq!(review_items(&editor.snapshot()), []);
+        assert_eq!(play_blockers(&editor.snapshot()), 0);
+    }
+
+    #[test]
+    fn the_one_key_on_a_level_the_game_cannot_run_chooses_the_review_tool() {
+        use crate::{panels::play::cook_and_play, tool::Tool};
+        // An empty level with its folders in a place of its own: this test cooks.
+        let folder = tempfile::tempdir().unwrap();
+        let document = SceneDocument {
+            schema: scene_data::SCHEMA_VERSION,
+            id: ObjectId::from_u128(0xd0c),
+            objects: Vec::new(),
+        };
+        let mut editor = Editor::new(
+            document,
+            folder.path().join("levels/empty.level.json"),
+            folder.path().join("cooked"),
+        )
+        .unwrap();
+        editor.connect_play(Script::Runs.handle().unwrap());
+        let mut tool = Tool::Objects;
+        cook_and_play(&mut editor, &mut tool);
+        assert_eq!(tool, Tool::Review);
+        assert!(!editor.busy(), "nothing was cooked");
+
+        // With a spawn point the level is cooked and played, and the tool is left alone.
+        editor.add_spawn(&down_at(0.0, 0.0));
+        settle(&mut editor);
+        let mut tool = Tool::Objects;
+        cook_and_play(&mut editor, &mut tool);
+        assert_eq!(tool, Tool::Objects);
+        assert!(editor.cooking_to_play());
+        editor.stop_play();
+        settle(&mut editor);
+    }
+
+    #[test]
     fn a_level_with_ground_and_painted_layers_is_played() {
         let folder = tempfile::tempdir().unwrap();
         let mut editor = with_landscape(folder.path(), false);

@@ -23,6 +23,9 @@ pub enum Tool {
     Paint,
     /// The landscape's rules are set: what grows where, and which layers fill themselves.
     Rules,
+    /// The level is looked over: the right-hand panel lists what the core finds wrong with
+    /// it. Objects can be chosen; nothing is dragged.
+    Review,
 }
 
 impl Tool {

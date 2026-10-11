@@ -33,6 +33,7 @@ use crate::{
         notice::{notice, show_notice},
         paint::{commit_layer_name, fill_layer_names, show_layers},
         play::show_play,
+        review::{fit_review, review_panel, show_review},
         rules::{fill_rule_fields, show_rules},
         snap::{mirror_snap, show_snap, snap_overlay},
         status::{show_status, status_bar},
@@ -144,6 +145,7 @@ fn shell() -> impl Scene {
                     ),
                     inspector_panel(),
                     brush_panel(),
+                    review_panel(),
                 ]
             ),
             status_bar(),
@@ -158,7 +160,8 @@ fn shell() -> impl Scene {
 type Only<A, B, C> = (With<A>, Without<B>, Without<C>);
 
 /// Shows the side panels that fit and that the person chose. The right-hand place holds the
-/// inspector, or the landscape tool's settings while that tool is chosen.
+/// inspector, or the landscape tool's settings while that tool is chosen, or the Review panel
+/// while Review is (`review::fit_review`).
 fn fit_panels(
     window: Single<&Window, With<PrimaryWindow>>,
     tool: Res<Tool>,
@@ -183,8 +186,9 @@ fn fit_panels(
     }
     let sculpting = tool.is_landscape();
     for mut node in &mut inspector {
-        if node.display != display(show.1 && !sculpting) {
-            node.display = display(show.1 && !sculpting);
+        let inspecting = show.1 && *tool == Tool::Objects;
+        if node.display != display(inspecting) {
+            node.display = display(inspecting);
         }
     }
     for mut node in &mut brush {
@@ -324,7 +328,8 @@ impl Plugin for EditorUiPlugin {
             .add_systems(
                 Update,
                 (
-                    fit_panels,
+                    (fit_panels, fit_review).chain(),
+                    show_review,
                     show_hierarchy,
                     (show_selection, show_drop_target).after(show_hierarchy),
                     fold_rows.after(show_hierarchy),

@@ -428,6 +428,42 @@ check_sized "$wide" wide-drag     'click-row=11,drag-row=11:10' 'window=1261x' '
 check_sized "$narrow" narrow-drag 'click-row=11,drag-row=11:10' 'window=621x' 'under=\["Wall"\]' 'worlds=\[\[0\.0, 0\.5, -8\.0\]\]' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-drag-top 'reparent=11:10,click-row=11,drag-row=11:top' 'window=621x' 'under=\["top"\]' 'worlds=\[\[-8\.5, 3\.5, -8\.0\]\]'
 
+# Review is a tool: its panel, in the inspector's place, lists what the core's review finds.
+# The game's map has nothing to review.
+EMPTY='key=ctrl+n,type=7,key=enter,click-button=Discard changes'
+RULE='choose=Add>Landscape,inspector,choose=Tool>Rules,click-button=Add grass'
+check review-clean    'choose=Tool>Review'                'workspace=Review' 'review=\[\]' 'review_rows=0' "$row" 'toolbar_fits=Some\(true\)' 'problem=none'
+# A level without a spawn point: one problem under Play, about no object. With a spawn point
+# added the list is empty again.
+check review-no-spawn "$EMPTY,choose=Tool>Review"         'objects=0' 'workspace=Review' 'review=\["Play:play\.spawn_required"\]' 'review_rows=1' 'problem=none'
+check review-spawn-added "$EMPTY,choose=Tool>Review,choose=Add>Spawn point" 'objects=1' 'review=\[\]' 'review_rows=0' 'workspace=Review'
+# A landscape with a rule: one problem under Play, about the landscape, whose button selects
+# it. Nothing was selected before.
+check review-rule     "$RULE,choose=Tool>Review"          'workspace=Review' 'review=\["Play:play\.terrain_unsupported"\]' 'review_rows=1' 'selection=0'
+check review-rule-select "$RULE,choose=Tool>Review,click-button=Select Landscape" 'selection=1' 'selected=Some\("Landscape"\)' 'workspace=Review' 'review_rows=1' 'problem=none'
+# Both at once, in the core's order: the landscape's rules first, then the missing spawn point.
+check review-both     "$EMPTY,$RULE,choose=Tool>Review"   'review=\["Play:play\.terrain_unsupported", "Play:play\.spawn_required"\]' 'review_rows=2'
+# The one key on such a level cooks nothing, says so, and chooses the Review tool; with the
+# level mended it plays.
+with_game runs check review-key     "$RULE,key=f5"        'play_run=None' 'play_refusal=play\.blocked' 'play_cooked=none' 'workspace=Review' 'review_rows=1'
+with_game runs check review-key-menu "$RULE,click-button=Play,click-item=Cook and Play" 'play_run=None' 'play_refusal=play\.blocked' 'workspace=Review' 'menu_open=false'
+with_game runs check review-key-mended "$EMPTY,key=f5,choose=Add>Spawn point,key=f5,wait-run=running" 'play_run=Running' 'play_refusal=none' 'review=\[\]' 'workspace=Review'
+# Another tool brings the inspector back, and Review's panel goes.
+check review-left     "$RULE,choose=Tool>Review,key=w"    'workspace=Objects' 'tool=Translate' 'review_rows=0' 'review=\["Play:play\.terrain_unsupported"\]'
+# At 1261 pixels Review is one more button of the row. The row with every tool as a button is
+# longer than 900 pixels, the narrowest window that has the panel switches as buttons: there,
+# and at 1000, the tools are in their menu, which the row holds, and the panel switches are
+# buttons still. At 621 Review is a row of the tool menu as well, and the panel shows when
+# the right-hand place is shown.
+check_sized "$wide" wide-review   "$RULE,choose=Tool>Review" 'window=1261x' 'toolbar_folded=false' 'workspace=Review' 'review_rows=1' "$row" 'toolbar_fits=Some\(true\)'
+check_sized 900x700 fold-review   'choose=Tool>Review'    'window=900x' 'toolbar_folded=true' 'workspace=Review' "$row" 'toolbar_fits=Some\(true\)'
+check_sized 900x700 fold-panels   'click-button=Inspector,choose=Tool>Rotate' 'window=900x' 'toolbar_folded=true' 'tool=Rotate' "$row" 'toolbar_fits=Some\(true\)'
+check_sized 1000x700 fold-tools   'choose=Tool>Review'    'window=1000x' 'toolbar_folded=true' 'workspace=Review' "$row" 'toolbar_fits=Some\(true\)'
+check_sized 1100x700 fold-not     'click-button=Review'   'window=1100x' 'toolbar_folded=false' 'workspace=Review' "$row" 'toolbar_fits=Some\(true\)'
+with_game runs check_sized 1100x700 fold-game 'cook,click-button=Play,click-item=Open Game Window,wait-run=running' 'window=1100x' 'play_run=Running' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-review "$RULE,choose=Tool>Review" 'window=621x' 'toolbar_folded=true' 'workspace=Review' 'review_rows=1' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-review-select "$RULE,choose=Tool>Review,click-button=Select Landscape" 'window=621x' 'selected=Some\("Landscape"\)' 'selection=1'
+
 # Duplicate copies the selection: with Ctrl+D and from the Add menu. The copy stands a metre
 # beside what it was copied from, is called after it, is what is selected afterwards, and is
 # one undo step. What is under an object is copied with it.
@@ -483,7 +519,7 @@ with_game hangs check key-stop-start 'key=f5,wait-run=starting,key=shift+f5,wait
 # game, with a game that runs already, and with a level that has no spawn point.
 check key-no-game     'key=f5'                              'game=false' 'play_run=None' 'play_refusal=play\.no_game' 'play_cooked=none' 'problem=none'
 with_game runs check key-twice      'key=f5,wait-run=running,key=f5' 'play_run=Running' 'play_refusal=play\.already_active' 'problem=none'
-with_game runs check key-blocked    'key=ctrl+n,type=7,key=enter,click-button=Discard changes,key=f5' 'objects=0' 'play_run=None' 'play_refusal=play\.blocked' 'play_cooked=none' 'problem=none'
+with_game runs check key-blocked    'key=ctrl+n,type=7,key=enter,click-button=Discard changes,key=f5' 'objects=0' 'play_run=None' 'play_refusal=play\.blocked' 'play_cooked=none' 'problem=none' 'workspace=Review' 'review=\["Play:play\.spawn_required"\]' 'review_rows=1'
 # The keys act while a field has the keyboard, and not behind a menu.
 with_game runs check key-in-field   'click-row=11,inspector,type-field=translation.0:2,key=f5,wait-run=running' 'play_run=Running' 'position=Some\(\[2\.0, 0\.5, -8\.0\]\)'
 with_game runs check key-behind-menu 'click-button=Play,key=f5' 'menu_open=true' 'play_run=None' 'play_cooked=none'

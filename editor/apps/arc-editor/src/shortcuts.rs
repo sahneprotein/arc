@@ -6,8 +6,9 @@
 //! landscape tool, and Delete removes the selection, unless a field has the keyboard. Ctrl+D
 //! duplicates the selection. F5
 //! cooks the level if it has changed, checks the cooked level and plays it in the game's
-//! window; Shift+F5 stops what F5 began, at whatever step it is. While a dialog or a menu is
-//! open none of them act.
+//! window; Shift+F5 stops what F5 began, at whatever step it is. When the level has something
+//! the game cannot run, F5 cooks nothing and chooses the Review tool, which lists it. While a
+//! dialog or a menu is open none of them act.
 
 use bevy::{
     gizmos::transform_gizmo::{TransformGizmoMode, TransformGizmoSettings},
@@ -49,7 +50,7 @@ fn shortcuts(
         if shift {
             editor.stop_play();
         } else {
-            editor.play_now();
+            editor_ui::panels::play::cook_and_play(&mut editor, &mut tool);
         }
         return;
     }

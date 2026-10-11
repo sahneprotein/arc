@@ -111,6 +111,7 @@ fn words(
         },
         (Tool::Paint, _) => "Paint".into(),
         (Tool::Rules, _) => "Rules".into(),
+        (Tool::Review, _) => "Review".into(),
         (Tool::Objects, TransformGizmoMode::Translate) => "Move".into(),
         (Tool::Objects, TransformGizmoMode::Rotate) => "Rotate".into(),
         (Tool::Objects, TransformGizmoMode::Scale) => "Scale".into(),

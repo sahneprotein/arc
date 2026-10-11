@@ -47,6 +47,7 @@ use crate::{
         feathers::{BORDER, SIGNAL_ERROR, SIGNAL_PLAY, SIGNAL_WARN},
         size, spacing, text,
     },
+    tool::Tool,
     wording,
 };
 
@@ -521,7 +522,11 @@ pub fn play_control() -> impl Scene {
                                 menu_item(COOK_AND_PLAY, "F5")
                                 PlayPiece::CookAndPlayRow
                                 InteractionDisabled
-                                on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.play_now())
+                                on(|_: On<Activate>,
+                                    mut tool: ResMut<Tool>,
+                                    mut editor: NonSendMut<Editor>| {
+                                    cook_and_play(&mut editor, &mut tool);
+                                })
                             ),
                             @FeathersMenuDivider,
                             (
@@ -567,6 +572,19 @@ pub fn play_control() -> impl Scene {
                 on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.stop_play())
             ),
         ]
+    }
+}
+
+/// Cooks, checks and plays, as the row "Cook and Play" and its key do. When the level has
+/// something the game cannot run, nothing is cooked, and the Review tool is chosen: its panel
+/// lists what that is.
+pub fn cook_and_play(editor: &mut Editor, tool: &mut Tool) {
+    editor.play_now();
+    let blocked = editor
+        .play_refusal()
+        .is_some_and(|refusal| refusal.code == "play.blocked");
+    if blocked && *tool != Tool::Review {
+        *tool = Tool::Review;
     }
 }
 

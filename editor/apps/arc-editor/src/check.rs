@@ -487,7 +487,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -727,6 +727,15 @@ fn scripted(
                     .collect::<Vec<_>>()
             }),
             editor_ui::panels::hierarchy::drop_target(&snapshot, &row_drag),
+            // The tool that is chosen, what the core's review lists, each as scope and code,
+            // and how many problems the Review panel has laid out.
+            *tool,
+            snapshot
+                .review
+                .iter()
+                .map(|problem| format!("{:?}:{}", problem.scope, problem.diagnostic.code))
+                .collect::<Vec<_>>(),
+            screen.review_rows(),
         );
         exit.write(AppExit::Success);
     }

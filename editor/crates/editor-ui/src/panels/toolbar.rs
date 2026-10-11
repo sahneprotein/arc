@@ -1,10 +1,14 @@
 //! The toolbar: one row at every window width.
 //!
+//! The tools are the ways the gizmo moves an object, the landscape's tools, and Review, which
+//! lists in the right-hand panel what the core finds wrong with the level.
+//!
 //! As the layout "Narrow window: one toolbar row with menus" has it: Level and Add are menus
 //! at every width. In a window narrower than the design's fold width the tools fold into one
 //! menu that names the chosen tool, the snap switch into a row of that menu, and the two panel
-//! switches into another. A button or a row
-//! is added when what it does exists.
+//! switches into another. The tools also fold into their menu in a wider window whose row
+//! cannot hold them as buttons, which is measured: the row keeps to one line at every width.
+//! A button or a row is added when what it does exists.
 
 use bevy::{
     app::PropagateOver,
@@ -20,7 +24,7 @@ use bevy::{
     gizmos::transform_gizmo::{TransformGizmoMode, TransformGizmoSettings},
     prelude::*,
     text::FontSourceTemplate,
-    ui::InteractionDisabled,
+    ui::{ComputedNode, InteractionDisabled, UiGlobalTransform},
     ui_widgets::Activate,
     window::PrimaryWindow,
 };
@@ -48,13 +52,70 @@ pub(crate) const LANDSCAPE_SPACING: f32 = 1.0;
 pub struct Toolbar;
 
 /// A part of the toolbar that is there only at some window widths.
-#[derive(Component, Clone, Copy, PartialEq, Eq, FromTemplate)]
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, FromTemplate)]
 pub enum Fold {
-    /// Shown in a window wide enough for every tool and panel switch as a button.
+    /// Shown in a window wide enough for the panel switches as buttons.
     #[default]
     Wide,
-    /// Shown in a narrower window: the menu the buttons fold into.
+    /// Shown in a narrower window: the menu those buttons fold into.
     Narrow,
+    /// The tools as buttons, and the snap switch beside them: shown while the row holds
+    /// them.
+    WideTools,
+    /// The menu the tools fold into: shown in a narrow window, and in a wider one whose row
+    /// cannot hold the tools as buttons.
+    NarrowTools,
+}
+
+impl Fold {
+    /// Whether the part is laid out. `folded` says that the window is narrower than the
+    /// design's fold width, and `tools_folded` that the tools are in their menu.
+    pub fn shown(self, folded: bool, tools_folded: bool) -> bool {
+        match self {
+            Self::Wide => !folded,
+            Self::Narrow => folded,
+            Self::WideTools => !tools_folded,
+            Self::NarrowTools => tools_folded,
+        }
+    }
+}
+
+/// What takes up the room the toolbar's row has left, between the tools and the Play control.
+#[derive(Component, Default, Clone)]
+pub struct ToolbarSpacer;
+
+/// Whether the tools are in their menu although the window is wider than the fold width.
+///
+/// The row is as long as its captions make it, and the Play control grows by a word and Stop
+/// while a game runs, so the width at which the tools fit as buttons is measured and not
+/// written down: the tools fold into their menu when the row is longer than the window, and
+/// come back when the row with them as buttons would fit again.
+#[derive(Default)]
+pub(crate) struct ToolsFold {
+    folded: bool,
+    /// Frames since what is laid out last changed here: a row is measured only once it has
+    /// been laid out as it is.
+    settled: u8,
+    /// How wide the tools are as buttons, with the gap between them, when last seen so.
+    wide_width: f32,
+}
+
+/// Frames a change of the row needs to be laid out before the row is measured again.
+const FRAMES_TO_SETTLE: u8 = 2;
+
+/// Half a physical pixel of slack for rounding, in logical pixels.
+const FOLD_SLACK: f32 = 0.5;
+
+/// Whether the tools are to be in their menu. `needed` is the width the row needs as it is
+/// laid out now, `narrow` the width of the tool menu's button in it (nothing while the tools
+/// are buttons), `wide` the width of the tools as buttons, and `available` the window's.
+pub fn tools_fold(folded: bool, needed: f32, narrow: f32, wide: f32, available: f32) -> bool {
+    if folded {
+        // They come back when the row with them as buttons would fit.
+        needed - narrow + wide > available - FOLD_SLACK
+    } else {
+        needed > available + FOLD_SLACK
+    }
 }
 
 /// Whether the tools and the panel switches fold into menus in a window this wide.
@@ -73,16 +134,18 @@ pub enum ToolChoice {
     Sculpt,
     Paint,
     Rules,
+    Review,
 }
 
 impl ToolChoice {
-    pub const ALL: [ToolChoice; 6] = [
+    pub const ALL: [ToolChoice; 7] = [
         Self::Move,
         Self::Rotate,
         Self::Scale,
         Self::Sculpt,
         Self::Paint,
         Self::Rules,
+        Self::Review,
     ];
 
     pub fn name(self) -> &'static str {
@@ -93,6 +156,7 @@ impl ToolChoice {
             Self::Sculpt => "Sculpt",
             Self::Paint => "Paint",
             Self::Rules => "Rules",
+            Self::Review => "Review",
         }
     }
 
@@ -103,7 +167,7 @@ impl ToolChoice {
             Self::Rotate => "E",
             Self::Scale => "R",
             Self::Sculpt => "T",
-            Self::Paint | Self::Rules => "",
+            Self::Paint | Self::Rules | Self::Review => "",
         }
     }
 
@@ -113,6 +177,7 @@ impl ToolChoice {
             (Tool::Sculpt, _) => Self::Sculpt,
             (Tool::Paint, _) => Self::Paint,
             (Tool::Rules, _) => Self::Rules,
+            (Tool::Review, _) => Self::Review,
             (Tool::Objects, TransformGizmoMode::Rotate) => Self::Rotate,
             (Tool::Objects, TransformGizmoMode::Scale) => Self::Scale,
             (Tool::Objects, _) => Self::Move,
@@ -127,6 +192,7 @@ impl ToolChoice {
             Self::Sculpt => (Tool::Sculpt, None),
             Self::Paint => (Tool::Paint, None),
             Self::Rules => (Tool::Rules, None),
+            Self::Review => (Tool::Review, None),
         };
         if let Some(mode) = mode {
             gizmo.mode = mode;
@@ -336,7 +402,7 @@ pub(crate) fn show_duplicate(
 fn tool_menu() -> impl Scene {
     bsn! {
         @FeathersMenu
-        Fold::Narrow
+        Fold::NarrowTools
         Node { display: Display::None }
         Children [
             (@FeathersMenuButton { @caption: bsn! { Text("Tool: Move") ThemedText ToolCaption } }),
@@ -350,6 +416,8 @@ fn tool_menu() -> impl Scene {
                     tool_item(ToolChoice::Sculpt),
                     tool_item(ToolChoice::Paint),
                     tool_item(ToolChoice::Rules),
+                    @FeathersMenuDivider,
+                    tool_item(ToolChoice::Review),
                     @FeathersMenuDivider,
                     snap_item(),
                 ]
@@ -427,7 +495,7 @@ pub fn toolbar() -> impl Scene {
             pane_header_divider(),
             (
                 group()
-                Fold::Wide
+                Fold::WideTools
                 Children [
                     tool_button(ToolChoice::Move),
                     tool_button(ToolChoice::Rotate),
@@ -435,10 +503,11 @@ pub fn toolbar() -> impl Scene {
                     tool_button(ToolChoice::Sculpt),
                     tool_button(ToolChoice::Paint),
                     tool_button(ToolChoice::Rules),
+                    tool_button(ToolChoice::Review),
                 ]
             ),
             // Snap is a toggle of its own beside the tools, not one of them.
-            (snap_button() Fold::Wide),
+            (snap_button() Fold::WideTools),
             tool_menu(),
             add_menu(),
             (
@@ -451,7 +520,7 @@ pub fn toolbar() -> impl Scene {
                 Fold::Wide
                 on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.delete_selected())
             ),
-            Node { flex_grow: 1.0, min_width: px(spacing::SPACE_4) },
+            (Node { flex_grow: 1.0, min_width: px(spacing::SPACE_4) } ToolbarSpacer),
             // The Play control is at the right end at every width and never folds away.
             play_control(),
             pane_header_divider(),
@@ -474,20 +543,76 @@ pub fn toolbar() -> impl Scene {
     }
 }
 
-/// Shows the buttons or the menus they fold into, by the window's width.
+/// Shows the buttons or the menus they fold into: by the window's width against the design's
+/// fold width, and for the tools also by whether the row can hold them ([`ToolsFold`]).
 pub(crate) fn fold_toolbar(
     window: Single<&Window, With<PrimaryWindow>>,
-    mut parts: Query<(&Fold, &mut Node)>,
+    bar: Query<(&ComputedNode, &UiGlobalTransform, &Children), With<Toolbar>>,
+    placed: Query<(&ComputedNode, &UiGlobalTransform, Has<ToolbarSpacer>)>,
+    mut parts: Query<(&Fold, &mut Node, &ComputedNode)>,
+    mut tools: Local<ToolsFold>,
 ) {
     let folded = toolbar_folds(window.width());
-    for (part, mut node) in &mut parts {
-        let wanted = if (*part == Fold::Narrow) == folded {
+    tools.settled = tools.settled.saturating_add(1);
+    // In a narrow window everything is folded and there is nothing to measure. Otherwise the
+    // row is measured as it was last laid out: how long it is, with the room it has to spare
+    // taken off and what hangs over its end added.
+    if !folded
+        && tools.settled >= FRAMES_TO_SETTLE
+        && let Ok((bar_node, bar_at, children)) = bar.single()
+        && !bar_node.is_empty()
+    {
+        let scale = bar_node.inverse_scale_factor;
+        let end = (bar_at.translation.x + bar_node.size.x / 2.0) * scale - spacing::SPACE_4;
+        let (mut last, mut spare) = (f32::MIN, 0.0_f32);
+        for child in children.iter() {
+            let Ok((node, at, spacer)) = placed.get(child) else {
+                continue;
+            };
+            if node.is_empty() {
+                continue;
+            }
+            last = last.max((at.translation.x + node.size.x / 2.0) * scale);
+            if spacer {
+                spare = (node.size.x * scale - spacing::SPACE_4).max(0.0);
+            }
+        }
+        let needed = bar_node.size.x * scale - spare + (last - end).max(0.0);
+        let (mut wide, mut narrow) = (0.0_f32, 0.0_f32);
+        for (part, _, node) in &parts {
+            let width = node.size.x * node.inverse_scale_factor;
+            match part {
+                Fold::WideTools if width > 0.0 => wide += width + spacing::SPACE_2,
+                Fold::NarrowTools => narrow += width,
+                _ => {}
+            }
+        }
+        if !tools.folded {
+            // Two parts with one gap between them; the gap before them is there either way.
+            tools.wide_width = (wide - spacing::SPACE_2).max(0.0);
+        }
+        let wanted = tools_fold(
+            tools.folded,
+            needed,
+            narrow,
+            tools.wide_width,
+            window.width(),
+        );
+        if wanted != tools.folded {
+            tools.folded = wanted;
+            tools.settled = 0;
+        }
+    }
+    let tools_folded = folded || tools.folded;
+    for (part, mut node, _) in &mut parts {
+        let wanted = if part.shown(folded, tools_folded) {
             Display::Flex
         } else {
             Display::None
         };
         if node.display != wanted {
             node.display = wanted;
+            tools.settled = 0;
         }
     }
 }
@@ -535,6 +660,35 @@ mod tests {
         assert!(duplicate_reason(DuplicateOffer::NothingSelected).contains("Select"));
         assert!(duplicate_reason(DuplicateOffer::Landscape).contains("landscape"));
         assert!(duplicate_reason(DuplicateOffer::NoNumberLeft).contains("no number left"));
+    }
+
+    #[test]
+    fn the_tools_fold_when_the_row_is_longer_than_the_window_and_come_back_when_they_fit() {
+        // The row needs 1060 with the tools as buttons, which take 470 of it; their menu's
+        // button takes 90.
+        let (wide, narrow) = (470.0, 90.0);
+        assert!(tools_fold(false, 1060.0, 0.0, wide, 900.0));
+        assert!(tools_fold(false, 1060.0, 0.0, wide, 1059.0));
+        assert!(!tools_fold(false, 1060.0, 0.0, wide, 1060.0));
+        // Folded, the row needs 680. They stay folded until 1060 would fit again.
+        let folded_needs = 1060.0 - wide + narrow;
+        assert!(tools_fold(true, folded_needs, narrow, wide, 1000.0));
+        assert!(tools_fold(true, folded_needs, narrow, wide, 1060.0));
+        assert!(!tools_fold(true, folded_needs, narrow, wide, 1061.0));
+        // While a game runs the Play control is longer, and so is what is needed.
+        assert!(tools_fold(true, folded_needs + 110.0, narrow, wide, 1100.0));
+    }
+
+    #[test]
+    fn each_part_of_the_row_shows_with_its_fold() {
+        // Wider than the fold width, the tools in their menu: the panel switches are buttons.
+        assert!(Fold::Wide.shown(false, true) && !Fold::Narrow.shown(false, true));
+        assert!(Fold::NarrowTools.shown(false, true) && !Fold::WideTools.shown(false, true));
+        // Wide enough for everything.
+        assert!(Fold::WideTools.shown(false, false) && !Fold::NarrowTools.shown(false, false));
+        // Narrower than the fold width: every menu, no button.
+        assert!(Fold::Narrow.shown(true, true) && Fold::NarrowTools.shown(true, true));
+        assert!(!Fold::Wide.shown(true, true) && !Fold::WideTools.shown(true, true));
     }
 
     #[test]

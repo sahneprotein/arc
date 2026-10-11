@@ -32,6 +32,7 @@ use editor_ui::panels::{
     hierarchy::{HierarchyBody, RowObject, RowToggle},
     inspector::{FieldInput, NameInput},
     paint::{LayerNameInput, LayerRow},
+    review::ReviewRow,
     rules::{RuleField, RuleLayerButton, RuleRow},
     toolbar::Toolbar,
 };
@@ -495,6 +496,7 @@ pub struct Screen<'w, 's> {
     >,
     objects: Query<'w, 's, (&'static Projected, &'static GlobalTransform)>,
     gizmo_focus: Query<'w, 's, &'static GlobalTransform, With<TransformGizmoFocus>>,
+    review_rows: Query<'w, 's, &'static ComputedNode, With<ReviewRow>>,
     hierarchy:
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<HierarchyBody>>,
     camera: Single<'w, 's, (&'static Camera, &'static GlobalTransform), With<ViewCamera>>,
@@ -531,6 +533,14 @@ impl Screen<'_, '_> {
             .map(|(_, node, at)| (at.translation.y + node.size.y / 2.0) * node.inverse_scale_factor)
             .fold(f32::MIN, f32::max);
         (lowest_row < point.y - 2.0).then_some(point)
+    }
+
+    /// How many problems the Review panel has laid out.
+    pub fn review_rows(&self) -> usize {
+        self.review_rows
+            .iter()
+            .filter(|node| !node.is_empty())
+            .count()
     }
 
     /// How many hierarchy rows are laid out, folded ones not counted.

@@ -115,7 +115,7 @@ pub fn inspector_panel() -> impl Scene {
 }
 
 /// The title of a group of rows: the design's small text, in capitals.
-fn group_title(title: &str) -> impl Scene {
+pub(crate) fn group_title(title: &str) -> impl Scene {
     let title = title.to_uppercase();
     bsn! {
         Text({title})

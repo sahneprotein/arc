@@ -189,7 +189,7 @@ fn sculpt(
                     // Without a layer there is nothing to paint.
                     None => return,
                 },
-                Tool::Objects | Tool::Rules => return,
+                Tool::Objects | Tool::Rules | Tool::Review => return,
             };
             let held = Held {
                 tool: *tool,
