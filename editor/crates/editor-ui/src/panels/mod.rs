@@ -2,6 +2,7 @@
 //! the Claude Design canvas "Arc Editor Layouts".
 
 pub mod brush;
+pub mod closing;
 pub mod empty;
 pub mod hierarchy;
 pub mod inspector;

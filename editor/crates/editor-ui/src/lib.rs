@@ -7,12 +7,14 @@
 //! - `shell.rs`: the window's regions and the plugin.
 //! - `rules.rs`: landscape rules as the panel handles them, without drawing.
 //! - `tool.rs`: which tool the pointer has, and the landscape brush's settings.
+//! - `play_script.rs`: a stand-in for the game's processes, for tests and scripted checks.
 //! - `panels/`: toolbar and its menus, hierarchy, inspector, landscape tool, status bar, the
 //!   notice of a problem, and the dialogs for levels and for unsaved changes.
 //!
 //! Each panel and widget is named after its page in the Claude Design system "Arc Editor".
 
 pub mod panels;
+pub mod play_script;
 pub mod rules;
 pub mod session;
 pub mod shell;
@@ -20,6 +22,7 @@ pub mod theme;
 pub mod tool;
 pub mod wording;
 
+pub use panels::closing::Shutdown;
 pub use panels::levels::LevelDialog;
 pub use panels::menu::MenuOpen;
 pub use panels::unsaved::{Question, Unsaved};

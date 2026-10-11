@@ -15,7 +15,7 @@ use crate::{
     panels::play::PlayView,
     session::Editor,
     theme::{
-        feathers::{SIGNAL_ERROR, SIGNAL_WARN},
+        feathers::{SIGNAL_ERROR, SIGNAL_PLAY, SIGNAL_WARN},
         size, spacing,
     },
     tool::{Brush, BrushAim, Tool},
@@ -30,6 +30,8 @@ pub enum StatusPart {
     Saved,
     Work,
     Problem,
+    /// The game the editor started: where its run stands, or how it ended.
+    Run,
     Cooked,
 }
 
@@ -50,6 +52,7 @@ pub fn status_bar() -> impl Scene {
             (label("") StatusPart::Work),
             (label("") StatusPart::Problem ThemeTextColor(SIGNAL_ERROR)),
             Node { flex_grow: 1.0 },
+            (label("") StatusPart::Run),
             (label("") StatusPart::Cooked),
         ]
     }
@@ -63,7 +66,18 @@ pub struct StatusWords {
     attention: bool,
     work: String,
     problem: String,
+    run: String,
+    /// How the words about the game are shown: plainly, as a game that runs, or as a refusal.
+    run_tone: RunTone,
     cooked: String,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Default)]
+enum RunTone {
+    #[default]
+    Plain,
+    Playing,
+    Refused,
 }
 
 fn words(
@@ -119,14 +133,26 @@ fn words(
             });
             format!("{}. {}", shown.title, shown.remedy)
         });
-    // The cooked level, how it stands to the level, and what a check of it found.
-    let cooked = PlayView::of(editor).status_words();
+    // The cooked level, how it stands to the level, and what a check of it found; and the
+    // game, if the editor started one.
+    let play = PlayView::of(editor);
+    let cooked = play.status_words();
+    let run = play.run_words();
+    let run_tone = if play.run_words_warn() {
+        RunTone::Refused
+    } else if play.word_is_running() {
+        RunTone::Playing
+    } else {
+        RunTone::Plain
+    };
     StatusWords {
         level: format!("{level}{selected}   Tool: {tool}"),
         saved: saved.into(),
         attention,
         work,
         problem,
+        run,
+        run_tone,
         cooked,
     }
 }
@@ -152,9 +178,18 @@ pub(crate) fn show_status(
             StatusPart::Saved => &now.saved,
             StatusPart::Work => &now.work,
             StatusPart::Problem => &now.problem,
+            StatusPart::Run => &now.run,
             StatusPart::Cooked => &now.cooked,
         };
         text.0.clone_from(words);
+        if *part == StatusPart::Run {
+            let color = match now.run_tone {
+                RunTone::Plain => tokens::TEXT_MAIN,
+                RunTone::Playing => SIGNAL_PLAY,
+                RunTone::Refused => SIGNAL_WARN,
+            };
+            commands.entity(entity).insert(ThemeTextColor(color));
+        }
         if *part == StatusPart::Saved {
             let color = if now.attention {
                 SIGNAL_WARN

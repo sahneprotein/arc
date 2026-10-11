@@ -1,11 +1,17 @@
 //! The Play control of the design system: the one place the game is started and stopped from.
 //!
-//! What is built is its first step. The control is in the toolbar at every width. Its menu
+//! The control is in the toolbar at every width. At rest it is a button with a menu: the menu
 //! names the cooked level that would run and how it stands to the level being edited, offers
-//! to cook, and lets the person ask the editor's core whether the cooked level on disk is still
-//! the one this editor cooked. The two ways to play are in the menu and are off: the core
-//! cannot start the game yet (`crates/editor-services/docs/play-boundary.md`), and the menu
-//! says so. Nothing here shows a game as starting or running.
+//! to cook, lets the person ask the editor's core whether the cooked level on disk is still
+//! the one this editor cooked, and holds the two ways to play. "Open Game Window" asks the
+//! core's Play coordinator to start the game in a window of its own, from the receipt of a
+//! check made just before. "Preview in Editor" is off: it is not built.
+//!
+//! While something is under way the control is a word and one Stop: checking, starting, the
+//! game window open, stopping. The words follow what the coordinator reports and nothing
+//! else: a run is shown as running when the coordinator says the game is ready, never because
+//! a start was asked for. Without a game to start, the way to play is off and the menu says
+//! why.
 //!
 //! What the control and its menu say is worked out by plain functions of [`PlayView`], so
 //! that every sentence has a test without a window.
@@ -25,13 +31,18 @@ use bevy::{
     text::FontSourceTemplate,
     ui::InteractionDisabled,
     ui_widgets::Activate,
+    window::PrimaryWindow,
 };
+use editor_services::{PlayRole, PlayRun, PlayStage, PlayState};
 
 use crate::{
-    panels::menu::{menu_item, menu_popup_end},
+    panels::{
+        menu::{menu_item, menu_popup_end},
+        toolbar::toolbar_folds,
+    },
     session::{Editor, PackageCheck},
     theme::{
-        feathers::{BORDER, SIGNAL_ERROR, SIGNAL_WARN},
+        feathers::{BORDER, SIGNAL_ERROR, SIGNAL_PLAY, SIGNAL_WARN},
         size, spacing, text,
     },
     wording,
@@ -43,9 +54,25 @@ pub const OPEN_GAME_WINDOW: &str = "Open Game Window";
 /// The row that asks the core about the cooked level on disk.
 pub const CHECK_COOKED_LEVEL: &str = "Check cooked level";
 
-/// Why the two ways to play are off. It stays in the menu's foot as long as they are.
-pub const NOT_YET: &str = "The editor cannot start the game yet. \
-    Until it can, the cooked level can be cooked and checked here.";
+/// Why nothing can be played, when this editor was started without a game.
+pub const NO_GAME: &str = "No game is set up for this editor: start the editor with --game \
+    and the game's folder to play from here. The cooked level can be cooked and checked.";
+/// Why the one way to play that is always off is off.
+pub const NO_PREVIEW: &str = "Preview in Editor is not built yet.";
+
+/// Where a run of the game stands, as the coordinator reports it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum RunView {
+    /// No run: none was started, or the last one has ended.
+    #[default]
+    None,
+    /// The start was asked for, or the processes are starting and not yet ready.
+    Starting,
+    /// The game is ready and can be played.
+    Running,
+    /// The run is being stopped and cleaned up.
+    Stopping,
+}
 
 /// Everything the Play control shows, as plain values.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +86,48 @@ pub struct PlayView {
     /// cooked before this editor started has a hash in the level's status and no receipt.
     pub can_check: bool,
     pub check: PackageCheck,
+    /// Whether this editor has a game to start.
+    pub game: bool,
+    pub run: RunView,
+    /// The cooked level the run plays, by the same short name.
+    pub run_package: Option<String>,
+    /// Whether the level has moved on from the cooked level the run plays.
+    pub run_older: bool,
+    /// How far each process has come while the run starts, in words. Empty when none has
+    /// reported anything: a step nobody measured is not shown as done.
+    pub steps: String,
+    /// The code of what the coordinator last refused.
+    pub refusal: Option<String>,
+    /// The code of how the last run ended, once no run is under way.
+    pub ended: Option<String>,
+}
+
+/// A step a process reports while it starts, in words.
+pub fn stage_words(stage: PlayStage) -> &'static str {
+    match stage {
+        PlayStage::PackageVerified => "level verified",
+        PlayStage::CollisionReady => "collision ready",
+        PlayStage::HandshakeAccepted => "accepted by the server",
+        PlayStage::Simulating => "simulating",
+        PlayStage::LevelDrawn => "level drawn",
+        PlayStage::FirstControllableFrame => "first controllable frame",
+    }
+}
+
+/// How far each process of a run has come: its latest step, for each that reported one.
+fn steps_of(run: &PlayRun) -> String {
+    run.processes
+        .iter()
+        .filter_map(|process| {
+            let role = match process.role {
+                PlayRole::Server => "server",
+                PlayRole::Client => "client",
+            };
+            let latest = process.stages.last()?;
+            Some(format!("{role} {}", stage_words(*latest)))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The short name a cooked level is shown by: the first eight digits of the hash of its
@@ -88,11 +157,40 @@ impl PlayView {
         let cooked = simulation
             .as_deref()
             .and_then(|simulation| package_id(manifest.as_deref(), Some(simulation)));
+        let play = editor.play_status();
+        let active = play
+            .as_ref()
+            .and_then(|status| status.run.as_ref())
+            .filter(|run| !matches!(run.state, PlayState::Ended(_)));
+        let run = match active.map(|run| &run.state) {
+            Some(PlayState::Running) => RunView::Running,
+            Some(PlayState::Stopping) => RunView::Stopping,
+            Some(PlayState::Starting) => RunView::Starting,
+            // Asked for and not yet answered: the coordinator has it, or the check before it.
+            Some(PlayState::Ended(_)) | None if editor.play_requested() => RunView::Starting,
+            Some(PlayState::Ended(_)) | None => RunView::None,
+        };
         Self {
             older: cooked.is_some() && status.cook_needed,
             can_check: receipt.is_some(),
             cooked,
             check: editor.package_check().clone(),
+            game: editor.play_connected(),
+            run,
+            run_package: active
+                .and_then(|run| package_id(Some(&run.identity.manifest_hash.hex()), None)),
+            // The run's cooked level is current only if it is the last cook and the level
+            // has not changed since that cook.
+            run_older: active.is_some_and(|run| {
+                status.cook_needed
+                    || editor.cooked().map(|receipt| receipt.identity()) != Some(&run.identity)
+            }),
+            steps: active.map(steps_of).unwrap_or_default(),
+            refusal: editor.play_refusal().map(|problem| problem.code.clone()),
+            ended: match active {
+                Some(_) => None,
+                None => editor.last_end().map(|end| end.primary.code.clone()),
+            },
         }
     }
 
@@ -100,14 +198,27 @@ impl PlayView {
         self.check == PackageCheck::Checking
     }
 
-    /// The word the control shows in place of its button while something is under way: the
-    /// state and the cooked level's hash. `None` at rest, when the control is its button.
+    /// The word the control shows in place of its button while something is under way.
+    /// `None` at rest, when the control is its button. While the cooked level is checked the
+    /// word carries its hash; a run is named by where the coordinator says it stands.
     pub fn word(&self) -> Option<String> {
-        match (&self.cooked, self.checking()) {
-            (Some(hash), true) => Some(format!("Checking {hash}")),
-            (None, true) => Some("Checking".into()),
-            _ => None,
+        if self.checking() {
+            return Some(match &self.cooked {
+                Some(hash) => format!("Checking {hash}"),
+                None => "Checking".into(),
+            });
         }
+        match self.run {
+            RunView::None => None,
+            RunView::Starting => Some("Starting".into()),
+            RunView::Running => Some("Game window open".into()),
+            RunView::Stopping => Some("Stopping".into()),
+        }
+    }
+
+    /// Whether the word is the one for a game that runs, which is shown in the play colour.
+    pub fn word_is_running(&self) -> bool {
+        !self.checking() && self.run == RunView::Running
     }
 
     /// Whether the control carries the warning dot: there is a cooked level, and the level
@@ -116,15 +227,66 @@ impl PlayView {
         self.older
     }
 
-    /// Whether the control shows Stop. While a check runs it cancels the check; there is
-    /// nothing else to stop yet.
+    /// Whether the control shows Stop: while the cooked level is checked, and for a run in
+    /// every state. There is one Stop, in the same place.
     pub fn stop_shown(&self) -> bool {
-        self.checking()
+        self.checking() || self.run != RunView::None
+    }
+
+    /// Whether Stop can be pressed. Not while the run is already stopping: it is shown, off,
+    /// so that it cannot be pressed twice.
+    pub fn stop_offered(&self) -> bool {
+        self.checking() || matches!(self.run, RunView::Starting | RunView::Running)
     }
 
     /// Whether the row that checks the cooked level can be chosen.
     pub fn check_offered(&self) -> bool {
-        self.can_check && !self.checking()
+        self.can_check && !self.checking() && self.run == RunView::None
+    }
+
+    /// Whether "Open Game Window" can be chosen: there is a game, a cooked level this editor
+    /// holds the receipt of, and nothing under way.
+    pub fn game_window_offered(&self) -> bool {
+        self.game && self.check_offered()
+    }
+
+    /// Why a way to play is off: in the menu's foot as long as one is.
+    pub fn reason_line(&self) -> &'static str {
+        if self.game {
+            NO_PREVIEW
+        } else {
+            NO_GAME
+        }
+    }
+
+    /// The status bar's words about the game: a refusal, where the run stands, or how the
+    /// last run ended if the person asked for that end. Empty when there is nothing to say.
+    pub fn run_words(&self) -> String {
+        if let Some(code) = &self.refusal {
+            return wording::play_refusal(code);
+        }
+        let package = self.run_package.as_deref().unwrap_or_default();
+        match self.run {
+            RunView::Starting if package.is_empty() => "starting the game".into(),
+            RunView::Starting if self.steps.is_empty() => format!("starting cooked {package}"),
+            RunView::Starting => format!("starting cooked {package}: {}", self.steps),
+            RunView::Running if self.run_older => {
+                format!("playing cooked {package}, older than the level")
+            }
+            RunView::Running => format!("playing cooked {package}"),
+            RunView::Stopping => "stopping the game".into(),
+            RunView::None => self
+                .ended
+                .as_deref()
+                .and_then(wording::play_end_asked)
+                .unwrap_or_default()
+                .to_owned(),
+        }
+    }
+
+    /// Whether the status bar's words about the game are a refusal, which needs attention.
+    pub fn run_words_warn(&self) -> bool {
+        self.refusal.is_some()
     }
 
     /// The first line of the menu's foot: which cooked level would run.
@@ -201,12 +363,18 @@ pub enum PlayPiece {
     Menu,
     /// The word that takes the button's place while something is under way.
     Word,
+    /// The dot the word shortens to in a narrow window.
+    WordDot,
     /// The warning dot on the control's button.
     Dot,
     /// The Stop button beside the control.
     Stop,
+    /// The row that opens the game in its own window.
+    GameWindowRow,
     /// The row that checks the cooked level.
     CheckRow,
+    /// Why a way to play is off.
+    ReasonLine,
     /// The foot's lines, and its button with that button's caption.
     CookedLine,
     StandingLine,
@@ -246,13 +414,14 @@ fn foot() -> impl Scene {
             (foot_line(false) PlayPiece::StandingLine),
             (foot_line(false) PlayPiece::CheckLine),
             (
-                Text(NOT_YET)
+                Text(NO_GAME)
                 TextFont {
                     font: FontSourceTemplate::Handle(fonts::REGULAR),
                     font_size: {FontSize::Px(text::SMALL.size)},
                 }
                 PropagateOver<TextFont>
                 ThemeTextColor(tokens::TEXT_DIM)
+                PlayPiece::ReasonLine
             ),
             (
                 @FeathersButton {
@@ -309,7 +478,12 @@ pub fn play_control() -> impl Scene {
                         Node { width: px(size::MENU_WIDTH) }
                         Children [
                             (menu_item(PREVIEW_IN_EDITOR, "") InteractionDisabled),
-                            (menu_item(OPEN_GAME_WINDOW, "") InteractionDisabled),
+                            (
+                                menu_item(OPEN_GAME_WINDOW, "")
+                                PlayPiece::GameWindowRow
+                                InteractionDisabled
+                                on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.play_external())
+                            ),
                             @FeathersMenuDivider,
                             (
                                 menu_item(CHECK_COOKED_LEVEL, "")
@@ -334,15 +508,35 @@ pub fn play_control() -> impl Scene {
                 Node { display: Display::None }
             ),
             (
+                // The design's dot, for the word in a narrow window.
+                Node {
+                    width: px(spacing::SPACE_4),
+                    height: px(spacing::SPACE_4),
+                    border_radius: BorderRadius::all(px(spacing::SPACE_2)),
+                    display: Display::None,
+                }
+                ThemeBackgroundColor(tokens::TEXT_DIM)
+                PlayPiece::WordDot
+            ),
+            (
                 @FeathersButton {
                     @caption: bsn! { Text("Stop") ThemedText },
                     @variant: ButtonVariant::Primary,
                 }
                 PlayPiece::Stop
                 Node { display: Display::None }
-                on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.cancel_check())
+                on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.stop_play())
             ),
         ]
+    }
+}
+
+/// Sets whether a row or a button can be chosen. It stays in its place either way.
+fn set_offered(commands: &mut Commands, entity: Entity, offered: bool, off: bool) {
+    if !offered && !off {
+        commands.entity(entity).insert(InteractionDisabled);
+    } else if offered && off {
+        commands.entity(entity).remove::<InteractionDisabled>();
     }
 }
 
@@ -355,7 +549,8 @@ pub fn play_control() -> impl Scene {
 pub(crate) fn show_play(
     mut commands: Commands,
     editor: NonSend<Editor>,
-    mut shown: Local<Option<PlayView>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut shown: Local<Option<(PlayView, bool)>>,
     mut pieces: Query<(
         Entity,
         &PlayPiece,
@@ -367,8 +562,11 @@ pub(crate) fn show_play(
     if pieces.is_empty() {
         return;
     }
+    // In a narrow window the word shortens to its dot; Stop stays, and the status bar
+    // carries the words.
+    let narrow = toolbar_folds(window.width());
     let view = PlayView::of(&editor);
-    if shown.as_ref() == Some(&view) {
+    if shown.as_ref() == Some(&(view.clone(), narrow)) {
         return;
     }
     let display = |shown: bool| if shown { Display::Flex } else { Display::None };
@@ -379,21 +577,39 @@ pub(crate) fn show_play(
             PlayPiece::Menu => (None, view.word().is_none()),
             PlayPiece::Word => {
                 let word = view.word();
-                let laid_out = word.is_some();
+                let laid_out = word.is_some() && !narrow;
+                let color = if view.word_is_running() {
+                    SIGNAL_PLAY
+                } else {
+                    tokens::TEXT_MAIN
+                };
+                commands.entity(entity).insert(ThemeTextColor(color));
                 (Some(word.unwrap_or_default()), laid_out)
             }
+            PlayPiece::WordDot => {
+                let color = if view.word_is_running() {
+                    SIGNAL_PLAY
+                } else {
+                    tokens::TEXT_DIM
+                };
+                commands.entity(entity).insert(ThemeBackgroundColor(color));
+                (None, view.word().is_some() && narrow)
+            }
             PlayPiece::Dot => (None, view.warns()),
-            PlayPiece::Stop => (None, view.stop_shown()),
-            PlayPiece::CheckRow => {
-                // The row stays in its place; it is only on or off.
-                let wanted_off = !view.check_offered();
-                if wanted_off && !off {
-                    commands.entity(entity).insert(InteractionDisabled);
-                } else if !wanted_off && off {
-                    commands.entity(entity).remove::<InteractionDisabled>();
-                }
+            PlayPiece::Stop => {
+                set_offered(&mut commands, entity, view.stop_offered(), off);
+                (None, view.stop_shown())
+            }
+            // The rows stay in their places; they are only on or off.
+            PlayPiece::GameWindowRow => {
+                set_offered(&mut commands, entity, view.game_window_offered(), off);
                 (None, true)
             }
+            PlayPiece::CheckRow => {
+                set_offered(&mut commands, entity, view.check_offered(), off);
+                (None, true)
+            }
+            PlayPiece::ReasonLine => (Some(view.reason_line().to_owned()), true),
             PlayPiece::CookedLine => (Some(view.cooked_line()), true),
             PlayPiece::StandingLine => {
                 let line = view.standing_line();
@@ -428,7 +644,7 @@ pub(crate) fn show_play(
             node.display = display(laid_out);
         }
     }
-    *shown = Some(view);
+    *shown = Some((view, narrow));
 }
 
 #[cfg(test)]
@@ -441,6 +657,22 @@ mod tests {
             older,
             can_check: cooked.is_some(),
             check,
+            game: true,
+            run: RunView::None,
+            run_package: None,
+            run_older: false,
+            steps: String::new(),
+            refusal: None,
+            ended: None,
+        }
+    }
+
+    /// A view of a run of the cooked level `6105ad50` in this state.
+    fn running(run: RunView) -> PlayView {
+        PlayView {
+            run,
+            run_package: Some("6105ad50".into()),
+            ..view(Some("6105ad50"), false, PackageCheck::Passed { micros: 1 })
         }
     }
 
@@ -537,12 +769,14 @@ mod tests {
     #[test]
     fn a_level_cooked_before_this_editor_started_cannot_be_checked() {
         let view = PlayView {
-            cooked: Some("9f3a61c2".into()),
-            older: false,
             can_check: false,
-            check: PackageCheck::NotAsked,
+            ..view(Some("9f3a61c2"), false, PackageCheck::NotAsked)
         };
         assert!(!view.check_offered());
+        assert!(
+            !view.game_window_offered(),
+            "nor played: there is no receipt"
+        );
     }
 
     #[test]
@@ -561,8 +795,138 @@ mod tests {
     }
 
     #[test]
-    fn the_reason_the_game_cannot_be_played_names_what_can_be_done_instead() {
-        assert!(NOT_YET.contains("cannot start the game yet"));
-        assert!(NOT_YET.contains("cooked and checked"));
+    fn without_a_game_the_way_to_play_is_off_and_the_foot_says_how_to_get_one() {
+        let view = PlayView {
+            game: false,
+            ..view(Some("6105ad50"), false, PackageCheck::NotAsked)
+        };
+        assert!(!view.game_window_offered());
+        assert!(
+            view.check_offered(),
+            "the cooked level can still be checked"
+        );
+        assert!(view.reason_line().contains("--game"));
+        assert!(view.reason_line().contains("cooked and checked"));
+    }
+
+    #[test]
+    fn with_a_game_and_a_cooked_level_the_game_window_is_offered_and_preview_is_not_built() {
+        let view = view(Some("6105ad50"), false, PackageCheck::NotAsked);
+        assert!(view.game_window_offered());
+        assert_eq!(view.reason_line(), NO_PREVIEW);
+        // Not without a cooked level, and not while the cooked level is being checked.
+        assert!(!self::view(None, false, PackageCheck::NotAsked).game_window_offered());
+        assert!(!self::view(Some("6105ad50"), false, PackageCheck::Checking).game_window_offered());
+    }
+
+    #[test]
+    fn a_run_is_a_word_and_one_stop_in_every_state() {
+        for (run, word) in [
+            (RunView::Starting, "Starting"),
+            (RunView::Running, "Game window open"),
+            (RunView::Stopping, "Stopping"),
+        ] {
+            let view = running(run);
+            assert_eq!(view.word().as_deref(), Some(word));
+            assert!(view.stop_shown(), "{run:?}");
+            assert!(!view.game_window_offered(), "{run:?}: one run at a time");
+            assert!(!view.check_offered(), "{run:?}");
+        }
+        assert_eq!(running(RunView::None).word(), None);
+        assert!(!running(RunView::None).stop_shown());
+    }
+
+    #[test]
+    fn stop_cannot_be_pressed_twice_and_a_start_can_be_stopped() {
+        assert!(running(RunView::Starting).stop_offered());
+        assert!(running(RunView::Running).stop_offered());
+        let stopping = running(RunView::Stopping);
+        assert!(stopping.stop_shown() && !stopping.stop_offered());
+    }
+
+    #[test]
+    fn only_a_game_that_is_ready_is_shown_in_the_play_colour() {
+        assert!(running(RunView::Running).word_is_running());
+        assert!(!running(RunView::Starting).word_is_running());
+        assert!(!running(RunView::Stopping).word_is_running());
+        let checking = PlayView {
+            check: PackageCheck::Checking,
+            ..running(RunView::Running)
+        };
+        assert!(!checking.word_is_running());
+    }
+
+    #[test]
+    fn the_status_bar_says_where_the_run_stands_with_its_cooked_level() {
+        assert_eq!(
+            running(RunView::Starting).run_words(),
+            "starting cooked 6105ad50"
+        );
+        let starting = PlayView {
+            steps: "server collision ready, client level verified".into(),
+            ..running(RunView::Starting)
+        };
+        assert_eq!(
+            starting.run_words(),
+            "starting cooked 6105ad50: server collision ready, client level verified"
+        );
+        assert_eq!(
+            running(RunView::Running).run_words(),
+            "playing cooked 6105ad50"
+        );
+        let older = PlayView {
+            run_older: true,
+            ..running(RunView::Running)
+        };
+        assert_eq!(
+            older.run_words(),
+            "playing cooked 6105ad50, older than the level"
+        );
+        assert_eq!(running(RunView::Stopping).run_words(), "stopping the game");
+        assert_eq!(running(RunView::None).run_words(), "");
+    }
+
+    #[test]
+    fn an_end_the_person_asked_for_is_in_the_status_bar_and_any_other_is_not() {
+        let ended = |code: &str| PlayView {
+            ended: Some(code.into()),
+            ..running(RunView::None)
+        };
+        assert_eq!(ended("play.stopped").run_words(), "Stopped");
+        assert_eq!(
+            ended("play.window_closed").run_words(),
+            "The game window was closed"
+        );
+        // A crash and a failed start are notices: the status bar does not repeat them.
+        assert_eq!(ended("play.crashed").run_words(), "");
+        assert_eq!(ended("play.start_failed").run_words(), "");
+    }
+
+    #[test]
+    fn a_refusal_is_one_sentence_in_the_status_bar_and_needs_attention() {
+        let refused = PlayView {
+            refusal: Some("play.already_active".into()),
+            ..running(RunView::Running)
+        };
+        assert_eq!(
+            refused.run_words(),
+            "A game is already running. Stop it first."
+        );
+        assert!(refused.run_words_warn());
+        assert!(!running(RunView::Running).run_words_warn());
+    }
+
+    #[test]
+    fn every_step_a_process_reports_has_words() {
+        for stage in [
+            PlayStage::PackageVerified,
+            PlayStage::CollisionReady,
+            PlayStage::HandshakeAccepted,
+            PlayStage::Simulating,
+            PlayStage::LevelDrawn,
+            PlayStage::FirstControllableFrame,
+        ] {
+            assert!(!stage_words(stage).is_empty());
+        }
     }
 }

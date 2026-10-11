@@ -103,6 +103,16 @@ check_sized() {
     check "$@"
     unset ARC_EDITOR_CHECK_WINDOW
 }
+# with_game <script> <check function> <name> <steps> <expected>...: the same with a scripted
+# stand-in for the game (runs, hangs, crashes, window-closed, server-stays, needs-kill,
+# unavailable), so
+# that the Play control can be checked without the game's programs.
+with_game() {
+    ARC_EDITOR_CHECK_GAME="$1"; export ARC_EDITOR_CHECK_GAME
+    shift
+    "$@"
+    unset ARC_EDITOR_CHECK_GAME
+}
 # The two widths the one-row toolbar is accepted at: the wide and the narrow window the tiling
 # desktop of the first checks gave. At 1261 the tools and panel switches are buttons, at 621
 # they are menus.
@@ -216,9 +226,9 @@ check_sized "$narrow" narrow-panels 'inspector,choose=Panels>Hierarchy,choose=Pa
 check_sized "$narrow" narrow-add    'choose=Add>Landscape,choose=Level>Save' 'window=621x' 'toolbar_folded=true' 'objects=23' 'ground_tiles=4' 'dirty=false' 'problem=none'
 check_sized "$narrow" narrow-menu   'click-button=Panels' 'window=621x' 'menu_open=true' "$row" 'toolbar_fits=Some\(true\)'
 
-# The Play control. It is in the toolbar at every width. Nothing can be played yet: the two
-# ways to play are in its menu and are off, and choosing one does nothing. Its foot names the
-# cooked level and offers to cook; a cooked level can be checked on disk by the editor's core.
+# The Play control. It is in the toolbar at every width. Its foot names the cooked level and
+# offers to cook; a cooked level can be checked on disk by the editor's core. Started without
+# a game, as in these cases, the ways to play are off and choosing one does nothing.
 check play-menu       'click-button=Play'                 'menu_open=true' 'play_cooked=none' 'play_check=none' 'play_stop=false' "$row"
 check play-off        'click-button=Play,click-item=Open Game Window,click-item=Preview in Editor' 'menu_open=true' 'play_check=none' 'play_stop=false' 'problem=none'
 check play-no-check   'click-button=Play,click-item=Check cooked level' 'menu_open=true' 'play_cooked=none' 'play_check=none' 'problem=none'
@@ -240,6 +250,43 @@ check play-older-check 'cook,click-row=11,drag-gizmo=-60,click-button=Play,click
 check_sized "$wide" wide-play     'click-button=Play'     'window=1261x' 'menu_open=true' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-play 'click-button=Play'     'window=621x' 'menu_open=true' 'toolbar_folded=true' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-play-check 'cook,click-button=Play,click-item=Check cooked level' 'window=621x' 'play_check=passed' 'problem=none'
+
+# Playing, with a scripted stand-in for the game. "Open Game Window" checks the cooked level
+# and starts the game from that check; the control shows it running only once it is ready.
+PLAY='cook,click-button=Play,click-item=Open Game Window'
+check play-no-game    "$PLAY"                                'game=false' 'play_run=None' 'play_check=none' 'menu_open=true' 'problem=none'
+with_game runs check game-runs "$PLAY,wait-run=running" 'game=true' 'play_run=Running' 'play_check=passed' 'play_stop=true' 'menu_open=false' 'run_notice=false' 'problem=none' "$row" 'toolbar_fits=Some\(true\)'
+# Stop ends it, and that is what was asked for: no notice.
+with_game runs check game-stops "$PLAY,wait-run=running,click-button=Stop,wait-run=none" 'play_run=None' 'play_end=play\.stopped' 'play_stop=false' 'run_notice=false' 'left_notice=false'
+# A game that never becomes ready stays "starting", and Stop cancels the start.
+with_game hangs check game-starting "$PLAY,wait-run=starting" 'play_run=Starting' 'play_stop=true' 'play_end=none'
+with_game hangs check game-start-stopped "$PLAY,wait-run=starting,click-button=Stop,wait-run=none" 'play_run=None' 'play_end=play\.stopped' 'run_notice=false'
+# The game ends by itself: a notice that stays until it is dismissed.
+with_game crashes check game-crashes "$PLAY,wait-run=running,wait-run=none" 'play_run=None' 'play_end=play\.crashed' 'run_notice=true' 'left_notice=false' 'notice=false'
+with_game crashes check game-crash-dismissed "$PLAY,wait-run=running,wait-run=none,click-button=Dismiss" 'play_end=play\.crashed' 'run_notice=false'
+# The person closes the game's window: said in the status bar, no notice.
+with_game window-closed check game-window-closed "$PLAY,wait-run=running,wait-run=none" 'play_end=play\.window_closed' 'run_notice=false' 'left_notice=false'
+# The server will not go: a notice of its own, and the end the person asked for stays said.
+with_game server-stays check game-server-stays "$PLAY,wait-run=running,click-button=Stop,wait-run=none" 'play_end=play\.stopped' 'run_notice=false' 'left_notice=true'
+# A server that goes only when it is killed is gone all the same: nothing was left behind.
+with_game needs-kill check game-killed-server "$PLAY,wait-run=running,click-button=Stop,wait-run=none" 'play_end=play\.stopped' 'run_notice=false' 'left_notice=false'
+# The game cannot be launched: it did not start, and the notice says so. It was never running.
+with_game unavailable check game-unavailable "$PLAY,wait-run=none" 'play_run=None' 'play_end=play\.start_failed' 'run_notice=true' 'play_check=passed' 'problem=none'
+# A cooked level the core refuses is not played.
+with_game runs check game-refused-package 'cook,spoil-cooked,click-button=Play,click-item=Open Game Window' 'play_run=None' 'play_end=none' 'play_check=refused:payload\.hash_mismatch' 'notice=true'
+# In the narrow window the word is a dot and Stop stays; the row is still one row.
+with_game runs check_sized "$narrow" narrow-game "$PLAY,wait-run=running" 'window=621x' 'play_run=Running' 'play_stop=true' "$row" 'toolbar_fits=Some\(true\)'
+with_game runs check_sized "$wide" wide-game "$PLAY,wait-run=running" 'window=1261x' 'play_run=Running' "$row" 'toolbar_fits=Some\(true\)'
+
+# Closing the editor while the game runs. With unsaved changes the usual question comes first
+# and says the game is stopped; without, the question is only about the game.
+CLOSING="key=ctrl+s,$PLAY,wait-run=running,close"
+with_game runs check close-asks-game "$CLOSING" 'shutdown=AskRun' 'question=No' 'play_run=Running'
+with_game runs check close-keeps-playing "$CLOSING,click-button=Keep playing" 'shutdown=No' 'play_run=Running'
+with_game runs check close-unsaved-first "$PLAY,wait-run=running,close" 'question=Asking' 'shutdown=No' 'play_run=Running'
+# The server will not go: closing waits, then asks once more; the editor can be kept open.
+with_game server-stays check close-left-behind "$CLOSING,click-button=Stop and close,wait-run=none" 'shutdown=LeftBehind' 'left_notice=true'
+with_game server-stays check close-kept-open "$CLOSING,click-button=Stop and close,wait-run=none,click-button=Keep the editor open" 'shutdown=No' 'left_notice=true'
 
 # The landscape tool: T chooses it, its panel takes the inspector's place, a mode button
 # chooses the brush, and the brush points at the ground under the cursor.
@@ -428,6 +475,15 @@ check_reactive reactive-undo    'choose=Add>Box,key=ctrl+z' 'objects=22' 'rows_s
 check_reactive reactive-layers  'choose=Add>Landscape,inspector,choose=Tool>Paint,click-button=Add layer,click-button=Add layer' 'layers=2' 'layer_rows=2' 'ground_tiles=4'
 check_reactive reactive-rules   'choose=Add>Landscape,inspector,choose=Tool>Rules,click-button=Add grass' 'rules=\["Grass everywhere"\]' 'rule_rows=1' 'grass=4096'
 check_reactive reactive-rename  'click-row=11,inspector,type-name=42' 'selected=Some\("42"\)'
+# The game changes on its own time, while the editor sleeps: the Play coordinator wakes the
+# editor for each change. Here nothing asks for a frame but the input played and the editor
+# itself. The count is of wakes the coordinator sent and the window system took. (A reactive
+# check looks only once the editor is at rest, so it sees where a run has come to, not the
+# states it passed through on the way.)
+with_game runs check_reactive reactive-game "$PLAY,wait-run=running" 'play_run=Running' 'play_stop=true' 'game_wakes=[1-9]' 'problem=none'
+with_game crashes check_reactive reactive-game-crash "$PLAY,wait-run=none" 'play_end=play\.crashed' 'run_notice=true' 'game_wakes=[1-9]'
+# Without a game there is nobody to wake the editor.
+check play-no-wakes   'click-button=Play'                 'game=false' 'game_wakes=0'
 # The brush finds the ground on the corners of its cells too. A ray exactly through a corner
 # can slip between the triangles; the brush then looks a fraction of a pixel aside.
 check aim-on-corners  'choose=Add>Landscape,key=t,aim-ground=3:-3' 'brush_aim=Some\(Vec3\((2\.9[0-9]*|3\.0[0-9]*), 0\.0, -(2\.9[0-9]*|3\.0[0-9]*)\)\)'
@@ -508,6 +564,11 @@ check_exit() {
 # writing; Save and close writes and then closes.
 check_exit close-discard 'close,click-button=Discard changes' no
 check_exit close-saves   'close,click-button=Save and close' yes
+# With a game running the editor closes by itself once the game has stopped: after the
+# question about the game, after the question about unsaved changes, and after "Close anyway".
+with_game runs check_exit close-stops-game "key=ctrl+s,$PLAY,wait-run=running,close,click-button=Stop and close" yes
+with_game runs check_exit close-discard-stops-game "$PLAY,wait-run=running,close,click-button=Discard changes" no
+with_game server-stays check_exit close-anyway "key=ctrl+s,$PLAY,wait-run=running,close,click-button=Stop and close,wait-run=none,click-button=Close anyway" yes
 
 [ "$overridden" -eq 0 ] || echo "The desktop gave another window size than a case asked for: see NOT CHECKED AT above."
 exit "$failed"

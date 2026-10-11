@@ -218,6 +218,95 @@ pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
     }
 }
 
+/// How a run of the game ended, when it is an end the person did not ask for: a notice that
+/// stays. `cause` is the code of what lay behind it, if the core gave one. `None` for an end
+/// the person asked for, which is said in the status bar ([`play_end_asked`]).
+pub fn play_end(code: &str, cause: Option<&str>) -> Option<Problem> {
+    let (title, remedy): (&str, String) = match code {
+        "play.crashed" => (
+            "The game stopped unexpectedly",
+            match cause {
+                Some("play.unexpected_exit") => "It ended by itself while it was running.".into(),
+                Some("play.exit_during_stop") => {
+                    "It ended with an error while it was being stopped.".into()
+                }
+                Some("play.wait_failed") => "The editor lost track of the game's process.".into(),
+                Some(other) => format!("Reason: {other}."),
+                None => String::new(),
+            },
+        ),
+        "play.start_failed" => (
+            "The game did not start",
+            match cause {
+                Some("play.runtime_adapter_unavailable") => {
+                    "This editor cannot launch the game yet: the part that starts the game's \
+                     processes is not built. The cooked level itself is not at fault."
+                        .into()
+                }
+                Some("play.readiness_timeout") => "It did not become ready in time.".into(),
+                Some(
+                    "play.invalid_listening"
+                    | "play.invalid_close"
+                    | "play.readiness_order"
+                    | "play.server_not_ready",
+                ) => "It reported its start in a way the editor does not accept.".into(),
+                Some(other) => format!("Reason: {other}."),
+                None => String::new(),
+            },
+        ),
+        _ => return None,
+    };
+    Some(Problem {
+        title: title.into(),
+        remedy,
+    })
+}
+
+/// How a run ended, in the status bar's words, when the person asked for that end.
+pub fn play_end_asked(code: &str) -> Option<&'static str> {
+    match code {
+        "play.stopped" => Some("Stopped"),
+        "play.window_closed" => Some("The game window was closed"),
+        _ => None,
+    }
+}
+
+/// What a run left behind when it could not be cleaned up, from the core's cleanup code.
+pub fn play_left_behind(code: &str) -> Option<Problem> {
+    let title = match code {
+        "play.server_cleanup_failed" => "The game's server did not shut down",
+        "play.client_cleanup_failed" => "The game did not shut down",
+        _ => return None,
+    };
+    Some(Problem {
+        title: title.into(),
+        remedy: "It may still be running.".into(),
+    })
+}
+
+/// A refusal of the Play coordinator as one sentence. Nothing happened, so it is not a notice.
+pub fn play_refusal(code: &str) -> String {
+    match code {
+        "play.already_active" => "A game is already running. Stop it first.".into(),
+        "play.package_required" => "Cook the level before playing.".into(),
+        "play.mode_unsupported" => "The game cannot be played inside the editor yet.".into(),
+        "play.queue_full" => "The editor is still dealing with the last request. Try again.".into(),
+        "play.coordinator_closed" | "play.supervisor_start_failed" => {
+            "The part of the editor that starts the game has stopped. Restart the editor.".into()
+        }
+        other => format!("The game could not be started ({other})."),
+    }
+}
+
+/// How a process ended, as a fact for a notice: its exit code, or the signal that ended it.
+pub fn exit_facts(code: Option<i32>, signal: Option<i32>) -> Option<String> {
+    match (code, signal) {
+        (_, Some(signal)) => Some(format!("ended by signal {signal}")),
+        (Some(code), None) => Some(format!("exit code {code}")),
+        (None, None) => None,
+    }
+}
+
 /// The label of an inspector field, from the core's label key.
 pub fn field_label(label_key: &str) -> &str {
     match label_key {
@@ -331,6 +420,72 @@ mod tests {
         assert_eq!(saved_state(true, true), ("Unsaved", true));
         assert_eq!(saved_state(false, true), ("Saved, cook needed", true));
         assert_eq!(saved_state(false, false), ("Saved", false));
+    }
+
+    #[test]
+    fn an_end_the_person_asked_for_is_a_word_and_any_other_end_is_a_notice() {
+        assert_eq!(play_end_asked("play.stopped"), Some("Stopped"));
+        assert_eq!(
+            play_end_asked("play.window_closed"),
+            Some("The game window was closed")
+        );
+        assert_eq!(play_end("play.stopped", None), None);
+        assert_eq!(play_end("play.window_closed", None), None);
+        for code in ["play.crashed", "play.start_failed"] {
+            assert_eq!(play_end_asked(code), None, "{code}");
+            assert!(play_end(code, None).is_some(), "{code}");
+        }
+    }
+
+    #[test]
+    fn a_game_that_cannot_be_launched_yet_is_said_so_and_not_blamed_on_the_level() {
+        let shown = play_end(
+            "play.start_failed",
+            Some("play.runtime_adapter_unavailable"),
+        )
+        .unwrap();
+        assert_eq!(shown.title, "The game did not start");
+        assert!(shown.remedy.contains("cannot launch the game yet"));
+        assert!(shown.remedy.contains("not at fault"));
+        assert!(!shown.remedy.contains("play."), "no code in the words");
+    }
+
+    #[test]
+    fn a_cause_the_table_does_not_know_is_still_named() {
+        let shown = play_end("play.crashed", Some("runtime.panic")).unwrap();
+        assert!(shown.remedy.contains("runtime.panic"));
+    }
+
+    #[test]
+    fn what_a_run_left_behind_names_the_server_or_the_game() {
+        assert!(play_left_behind("play.server_cleanup_failed")
+            .unwrap()
+            .title
+            .contains("server"));
+        assert!(play_left_behind("play.client_cleanup_failed").is_some());
+        assert_eq!(play_left_behind("play.stopped"), None);
+    }
+
+    #[test]
+    fn a_refusal_is_one_sentence_and_an_unknown_one_keeps_its_code() {
+        assert_eq!(
+            play_refusal("play.already_active"),
+            "A game is already running. Stop it first."
+        );
+        assert!(play_refusal("play.something_new").contains("play.something_new"));
+    }
+
+    #[test]
+    fn how_a_process_ended_is_its_signal_or_its_exit_code() {
+        assert_eq!(
+            exit_facts(Some(101), None).as_deref(),
+            Some("exit code 101")
+        );
+        assert_eq!(
+            exit_facts(None, Some(9)).as_deref(),
+            Some("ended by signal 9")
+        );
+        assert_eq!(exit_facts(None, None), None);
     }
 
     #[test]

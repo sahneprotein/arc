@@ -60,6 +60,8 @@ pub const SELECTION: ThemeToken = ThemeToken::new_static(theme_key::SELECTION);
 pub const SIGNAL_WARN: ThemeToken = ThemeToken::new_static(theme_key::SIGNAL_WARN);
 /// Error text.
 pub const SIGNAL_ERROR: ThemeToken = ThemeToken::new_static(theme_key::SIGNAL_ERROR);
+/// A game that runs: the Play control's word and the status bar's.
+pub const SIGNAL_PLAY: ThemeToken = ThemeToken::new_static(theme_key::SIGNAL_PLAY);
 /// Behind the 3D view.
 pub const SURFACE_SUNKEN: ThemeToken = ThemeToken::new_static(theme_key::SURFACE_SUNKEN);
 /// Between the window and a dialog.
@@ -109,6 +111,7 @@ mod tests {
             SELECTION,
             SIGNAL_WARN,
             SIGNAL_ERROR,
+            SIGNAL_PLAY,
             SURFACE_SUNKEN,
             SCRIM,
             BORDER,

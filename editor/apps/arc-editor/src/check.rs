@@ -48,6 +48,12 @@
 //! inspector, hide the hierarchy), `save`, `cook`, `spoil-cooked` (something else writes into
 //! the cooked level on disk).
 //!
+//! `wait-run=STATE` plays nothing: the script waits until the game the editor started is in
+//! that state (`none`, `starting`, `running`, `stopping`). A game runs on its own time, and
+//! the editor does not count it as work it waits for, so a step that follows a start or a
+//! stop says what it waits for. `ARC_EDITOR_CHECK_GAME` puts a scripted stand-in in the game's
+//! place (`editor_ui::play_script`).
+//!
 //! `ARC_EDITOR_CHECK_WINDOW=WIDTHxHEIGHT` asks the desktop for a window of that size in
 //! logical pixels, for the cases that check the layout at a given width. The desktop may give
 //! another.
@@ -81,6 +87,21 @@ const SETTLE: u32 = 40;
 /// Whether this run is a scripted check.
 pub fn is_scripted() -> bool {
     std::env::var_os("ARC_EDITOR_CHECK").is_some()
+}
+
+/// How often the Play coordinator has woken the editor. A check reads it to see that the
+/// editor is told of a run's changes and does not merely come across them.
+#[derive(Resource, Default, Clone)]
+pub struct GameWakes(pub std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+/// The stand-in for the game a scripted check asks for with `ARC_EDITOR_CHECK_GAME`: `runs`,
+/// `hangs`, `crashes`, `window-closed`, `server-stays`, `needs-kill` or `unavailable`. Without it, and
+/// outside a check, there is none: the editor's game is the real one or not there.
+pub fn scripted_game() -> Option<editor_ui::play_script::Script> {
+    if !is_scripted() {
+        return None;
+    }
+    editor_ui::play_script::Script::named(&std::env::var("ARC_EDITOR_CHECK_GAME").ok()?)
 }
 
 /// The window size a scripted check asks for, if it names one.
@@ -188,6 +209,7 @@ impl Plugin for CheckPlugin {
                 finished_at: None,
                 failed: Vec::new(),
                 last_frame: Instant::now(),
+                waiting_for: None,
             })
             .init_resource::<InputScript>()
             .add_observer(log_clicks)
@@ -220,6 +242,8 @@ type Dialogs<'w, 's> = (
     Res<'w, editor_ui::panels::hierarchy::Collapsed>,
     Res<'w, editor_ui::ChosenRule>,
     Res<'w, editor_ui::MenuOpen>,
+    Res<'w, editor_ui::Shutdown>,
+    Res<'w, GameWakes>,
 );
 
 /// Saves the first frames as pictures into the folder named by `ARC_EDITOR_CHECK_EARLY`, to
@@ -279,7 +303,12 @@ struct Scripted {
     failed: Vec<String>,
     /// When the check last ran, which is when the editor last drew.
     last_frame: Instant,
+    /// The state of the game's run a `wait-run` step waits for, and the frame it gives up at.
+    waiting_for: Option<(String, u32)>,
 }
+
+/// How many frames a `wait-run` step waits before it counts as failed.
+const WAIT_FOR_THE_GAME: u32 = 20_000;
 
 #[expect(
     clippy::too_many_arguments,
@@ -326,7 +355,27 @@ fn scripted(
             return;
         }
     }
+    if let Some((wanted, give_up_at)) = script.waiting_for.clone() {
+        let now = format!("{:?}", editor_ui::panels::play::PlayView::of(&editor).run);
+        if now.eq_ignore_ascii_case(&wanted) {
+            script.waiting_for = None;
+            script.next_step_at = script.frame + BETWEEN_STEPS;
+        } else if script.frame >= give_up_at {
+            script.waiting_for = None;
+            script
+                .failed
+                .push(format!("wait-run={wanted}: the game stayed {now}"));
+        } else {
+            redraw.write(RequestRedraw);
+        }
+        return;
+    }
     if let Some(step) = script.steps.pop() {
+        if let Some(wanted) = step.strip_prefix("wait-run=") {
+            script.waiting_for = Some((wanted.to_owned(), script.frame + WAIT_FOR_THE_GAME));
+            redraw.write(RequestRedraw);
+            return;
+        }
         script.next_step_at = script.frame + BETWEEN_STEPS;
         // The step's first event, or its call into the editor, wakes the editor once.
         redraw.write(RequestRedraw);
@@ -361,6 +410,7 @@ fn scripted(
         let snapshot = editor.snapshot();
         let status = &snapshot.status;
         let play = editor_ui::panels::play::PlayView::of(&editor);
+        let run_notices = editor_ui::panels::notice::notices(&editor);
         // The lowest and highest sample of all landscapes; a flat new one is 0 to 0.
         let (lowest, highest) = snapshot
             .document
@@ -383,7 +433,7 @@ fn scripted(
             .first()
             .and_then(|id| snapshot.document.object(id));
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -500,6 +550,16 @@ fn scripted(
                 editor_ui::PackageCheck::Refused { code } => format!("refused:{code}"),
             },
             play.stop_shown(),
+            // The game: where its run stands, how the last one ended, what was refused,
+            // which of its notices are up, and where closing the editor stands.
+            play.run,
+            play.ended.as_deref().unwrap_or("none"),
+            play.refusal.as_deref().unwrap_or("none"),
+            run_notices[1].is_some(),
+            run_notices[2].is_some(),
+            *closing.7,
+            play.game,
+            closing.8.0.load(std::sync::atomic::Ordering::Relaxed),
         );
         exit.write(AppExit::Success);
     }

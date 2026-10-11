@@ -8,9 +8,13 @@
 //!
 //! The panels, the theme and the link to the editor core are in the `editor-ui` crate.
 //!
-//! `arc-editor [--level <file>] [--package <directory>]`: the level file is opened if it exists.
-//! Otherwise the editor starts with the game's current map, converted, and saves it there.
-//! Without `--level` the file is `levels/current-map.level.json`.
+//! `arc-editor [--level <file>] [--package <directory>] [--game <folder>]`: the level file is
+//! opened if it exists. Otherwise the editor starts with the game's current map, converted, and
+//! saves it there. Without `--level` the file is `levels/current-map.level.json`.
+//!
+//! `--game` names the game's folder, the one its server and client are built in. With it the
+//! Play control can ask the editor's core to start the game on a cooked level; without it the
+//! control says that no game is set up.
 
 mod brush;
 mod check;
@@ -25,7 +29,7 @@ use bevy::{
     prelude::*,
     render::RenderPlugin,
     window::{PresentMode, WindowResolution},
-    winit::{UpdateMode, WinitSettings},
+    winit::{EventLoopProxyWrapper, UpdateMode, WinitSettings, WinitUserEvent},
 };
 use editor_ui::{
     theme::{color, feathers::to_color},
@@ -39,24 +43,30 @@ const DEFAULT_PACKAGE: &str = "cooked";
 struct Arguments {
     level: PathBuf,
     package: PathBuf,
+    game: Option<PathBuf>,
 }
 
 fn arguments() -> Result<Arguments, String> {
     let mut parsed = Arguments {
         level: DEFAULT_LEVEL.into(),
         package: DEFAULT_PACKAGE.into(),
+        game: None,
     };
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
-        let target = match arg.as_str() {
-            "--level" => &mut parsed.level,
-            "--package" => &mut parsed.package,
-            other => return Err(format!("unknown argument {other:?}")),
+        let name = arg.to_string_lossy().into_owned();
+        // A path is taken as the system gives it: it need not be text.
+        let mut path = || -> Result<PathBuf, String> {
+            args.next()
+                .map(PathBuf::from)
+                .ok_or_else(|| format!("{name} needs a path"))
         };
-        *target = args
-            .next()
-            .ok_or_else(|| format!("{arg} needs a path"))?
-            .into();
+        match name.as_str() {
+            "--level" => parsed.level = path()?,
+            "--package" => parsed.package = path()?,
+            "--game" => parsed.game = Some(path()?),
+            other => return Err(format!("unknown argument {other:?}")),
+        }
     }
     Ok(parsed)
 }
@@ -67,7 +77,7 @@ fn main() -> AppExit {
         Ok(arguments) => arguments,
         Err(problem) => {
             eprintln!(
-                "error: {problem}\nusage: arc-editor [--level <file>] [--package <directory>]"
+                "error: {problem}\nusage: arc-editor [--level <file>] [--package <directory>] [--game <folder>]"
             );
             return AppExit::from_code(2);
         }
@@ -76,7 +86,8 @@ fn main() -> AppExit {
     // level file exists it is opened in its place; if opening fails, the map stays and the
     // problem is shown.
     let saved_level = arguments.level.exists().then(|| arguments.level.clone());
-    let editor = match Editor::new(
+    let game = arguments.game.clone();
+    let mut editor = match Editor::new(
         scene_data::current_map(),
         arguments.level,
         arguments.package,
@@ -92,6 +103,17 @@ fn main() -> AppExit {
             return AppExit::from_code(2);
         }
     };
+    // The game to play from here, if one was named: the core's Play coordinator, which owns
+    // the game's processes. A scripted check may put a stand-in in the game's place.
+    let connected = match (check::scripted_game(), game) {
+        (Some(script), _) => script.handle().map(|handle| editor.connect_play(handle)),
+        (None, Some(folder)) => editor.connect_game(folder),
+        (None, None) => Ok(()),
+    };
+    if let Err(problem) = connected {
+        eprintln!("error: the part of the editor that starts the game did not start: {problem}");
+        return AppExit::from_code(2);
+    }
 
     // A scripted check may ask for another window size, to see the layout at that width.
     let (width, height) = check::wanted_window().unwrap_or((1440, 900));
@@ -145,6 +167,26 @@ fn main() -> AppExit {
     } else {
         WinitSettings::desktop_app()
     })
-    .insert_non_send(editor);
+    .insert_non_send(editor)
+    .init_resource::<check::GameWakes>()
+    .add_systems(Startup, wake_for_the_game);
     app.run()
+}
+
+/// Lets the Play coordinator wake the editor. The editor sleeps while nothing happens in its
+/// window, and a game runs, becomes ready or ends on its own time: the coordinator calls this
+/// from its own thread whenever a run changes, and the editor draws a frame and looks.
+fn wake_for_the_game(
+    editor: NonSend<Editor>,
+    proxy: Res<EventLoopProxyWrapper>,
+    wakes: Res<check::GameWakes>,
+) {
+    let proxy = (**proxy).clone();
+    let wakes = wakes.0.clone();
+    editor.set_play_waker(Box::new(move || {
+        // The window may be gone when the last change of a run arrives; then nobody looks.
+        if proxy.send_event(WinitUserEvent::WakeUp).is_ok() {
+            wakes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }));
 }

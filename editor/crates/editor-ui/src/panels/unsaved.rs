@@ -7,7 +7,8 @@
 //! notice says why.
 //!
 //! The window does not close by itself: the application turns that off, and a request to
-//! close arrives here.
+//! close arrives here. Closing while a game the editor started runs goes on in
+//! `closing.rs`: the game is stopped first.
 
 use std::path::PathBuf;
 
@@ -24,6 +25,7 @@ use bevy::{
 };
 
 use crate::{
+    panels::closing::{self, Shutdown},
     session::Editor,
     theme::{
         feathers::{BORDER, SCRIM},
@@ -81,6 +83,11 @@ pub struct UnsavedDialog;
 #[derive(Component, Default, Clone)]
 pub struct SaveFirstCaption;
 
+/// The line that says a game is running and is stopped before the editor closes. Shown only
+/// when the editor is closing and a game runs.
+#[derive(Component, Default, Clone)]
+pub struct GameRunsLine;
+
 pub fn unsaved_dialog() -> impl Scene {
     bsn! {
         UnsavedDialog
@@ -111,6 +118,11 @@ pub fn unsaved_dialog() -> impl Scene {
                 label("Save changes to the level?"),
                 label_dim("The level has changes that are not saved. Discarding them cannot be undone."),
                 (
+                    label_dim("A game is running. It is stopped before the editor closes.")
+                    GameRunsLine
+                    Node { display: Display::None }
+                ),
+                (
                     Node {
                         flex_direction: FlexDirection::Row,
                         flex_wrap: FlexWrap::Wrap,
@@ -123,10 +135,11 @@ pub fn unsaved_dialog() -> impl Scene {
                             @FeathersButton { @caption: bsn! { Text("Discard changes") ThemedText } }
                             on(|_: On<Activate>,
                                 mut unsaved: ResMut<Unsaved>,
+                                mut shutdown: ResMut<Shutdown>,
                                 mut editor: NonSendMut<Editor>,
                                 mut exit: MessageWriter<AppExit>| {
                                 unsaved.question = Question::No;
-                                leave(&unsaved.then, &mut editor, &mut exit);
+                                leave(&unsaved.then, &mut editor, &mut shutdown, &mut exit, true);
                             })
                         ),
                         (
@@ -152,12 +165,18 @@ pub fn unsaved_dialog() -> impl Scene {
     }
 }
 
-/// Does what was asked for, the unsaved changes being saved or given up.
-fn leave(then: &Leave, editor: &mut Editor, exit: &mut MessageWriter<AppExit>) {
+/// Does what was asked for, the unsaved changes being saved or given up. `asked` says that
+/// the person answered the question about them. Closing goes on in `closing.rs`: with a game
+/// running the editor does not close yet.
+fn leave(
+    then: &Leave,
+    editor: &mut Editor,
+    shutdown: &mut Shutdown,
+    exit: &mut MessageWriter<AppExit>,
+    asked: bool,
+) {
     match then {
-        Leave::Close => {
-            exit.write(AppExit::Success);
-        }
+        Leave::Close => closing::close(editor, shutdown, exit, asked),
         Leave::Open(file) => editor.open(file.clone()),
         Leave::New(file) => editor.new_level(file.clone()),
     }
@@ -168,17 +187,25 @@ fn leave(then: &Leave, editor: &mut Editor, exit: &mut MessageWriter<AppExit>) {
 pub(crate) fn leave_or_ask(
     request: On<Leave>,
     mut unsaved: ResMut<Unsaved>,
+    mut shutdown: ResMut<Shutdown>,
     mut editor: NonSendMut<Editor>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if unsaved.question != Question::No {
+    // A second request changes nothing either while the editor is closing around a game.
+    if unsaved.question != Question::No || *shutdown != Shutdown::No {
         return;
     }
     if editor.snapshot().status.dirty {
         unsaved.then = request.event().clone();
         unsaved.question = Question::Asking;
     } else {
-        leave(request.event(), &mut editor, &mut exit);
+        leave(
+            request.event(),
+            &mut editor,
+            &mut shutdown,
+            &mut exit,
+            false,
+        );
     }
 }
 
@@ -195,8 +222,10 @@ pub(crate) fn close_requested(
 /// Finishes a save that was chosen in the dialog, and shows or hides the dialog.
 pub(crate) fn answer_unsaved(
     mut unsaved: ResMut<Unsaved>,
+    mut shutdown: ResMut<Shutdown>,
     mut editor: NonSendMut<Editor>,
-    mut dialog: Query<&mut Node, With<UnsavedDialog>>,
+    mut dialog: Query<&mut Node, (With<UnsavedDialog>, Without<GameRunsLine>)>,
+    mut game_runs: Query<&mut Node, With<GameRunsLine>>,
     mut caption: Query<&mut Text, With<SaveFirstCaption>>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -205,7 +234,19 @@ pub(crate) fn answer_unsaved(
         // A save that failed leaves everything as it is; the notice says why.
         if !editor.snapshot().status.dirty && editor.problem.is_none() {
             let then = unsaved.then.clone();
-            leave(&then, &mut editor, &mut exit);
+            leave(&then, &mut editor, &mut shutdown, &mut exit, true);
+        }
+    }
+    let line = if unsaved.then == Leave::Close
+        && (editor.active_run().is_some() || editor.play_requested())
+    {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for mut node in &mut game_runs {
+        if node.display != line {
+            node.display = line;
         }
     }
     let wanted = if unsaved.question == Question::Asking {

@@ -15,6 +15,7 @@ use bevy::{
 use crate::{
     panels::{
         brush::{brush_panel, show_brush_mode, show_landscape_parts, BrushPanel},
+        closing::{drive_shutdown, shutdown_dialog, Shutdown},
         empty::{empty_hint, show_empty_hint},
         hierarchy::{
             fold_rows, hierarchy_panel, show_hierarchy, show_selection, Collapsed, HierarchyPanel,
@@ -56,9 +57,13 @@ fn mark_modal(
     unsaved: Res<Unsaved>,
     levels: Res<LevelDialog>,
     menu: Res<MenuOpen>,
+    shutdown: Res<Shutdown>,
     mut modal: ResMut<Modal>,
 ) {
-    let open = unsaved.question == Question::Asking || *levels != LevelDialog::Closed || menu.0;
+    let open = unsaved.question == Question::Asking
+        || *levels != LevelDialog::Closed
+        || menu.0
+        || *shutdown != Shutdown::No;
     if modal.0 != open {
         modal.0 = open;
     }
@@ -143,6 +148,7 @@ fn shell() -> impl Scene {
             menu_scrim(),
             level_dialog(),
             unsaved_dialog(),
+            shutdown_dialog(),
         ]
     }
 }
@@ -200,6 +206,10 @@ const FRAMES_AFTER_A_CHANGE: u8 = 4;
 /// mouse moved. So every frame in which the pointer or the keyboard did something, the core
 /// owed or delivered something, or one of the editor's own choices changed, asks for a few
 /// more.
+///
+/// A game the editor started is not such a thing: while it runs nothing changes here, and the
+/// editor sleeps. What the Play coordinator reports of it (a step, the end) counts as a change
+/// like any other, once: the coordinator wakes the editor for it.
 #[expect(
     clippy::type_complexity,
     reason = "every choice the panels show is looked at once"
@@ -219,12 +229,17 @@ fn keep_drawing(
         Res<Collapsed>,
         Res<Modal>,
     ),
-    mut seen: Local<Option<(u64, u64)>>,
+    mut seen: Local<Option<(u64, u64, u64, bool)>>,
     mut frames_left: Local<u8>,
     mut redraw: MessageWriter<RequestRedraw>,
 ) {
     let snapshot = editor.snapshot();
-    let view = (snapshot.session, snapshot.view_revision);
+    let view = (
+        snapshot.session,
+        snapshot.view_revision,
+        editor.play_status().map_or(0, |status| status.revision),
+        editor.play_requested(),
+    );
     let input = mouse.get_just_pressed().len() + mouse.get_just_released().len() > 0
         || keys.get_just_pressed().len() + keys.get_just_released().len() > 0;
     let (tool, brush, layer, rule, panels, levels, name, unsaved, collapsed, modal) = choices;
@@ -292,6 +307,7 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<ChosenRule>()
             .init_resource::<Collapsed>()
             .init_resource::<Unsaved>()
+            .init_resource::<Shutdown>()
             .add_observer(leave_or_ask)
             .init_resource::<LevelDialog>()
             .init_resource::<LevelNameProblem>()
@@ -313,7 +329,7 @@ impl Plugin for EditorUiPlugin {
                     show_status,
                     show_brush_mode,
                     show_notice,
-                    (close_requested, answer_unsaved).chain(),
+                    (close_requested, answer_unsaved, drive_shutdown).chain(),
                     fill_names,
                     commit_name,
                     show_empty_hint,
