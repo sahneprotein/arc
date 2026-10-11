@@ -63,6 +63,12 @@
 //! (`opened=` in the result). With `ARC_EDITOR_CHECK_OPEN=missing` it fails as it does for a
 //! log that is gone.
 //!
+//! The result line says what the saved picture is (`picture=`): `nonblank`, or `blank` when
+//! every pixel of it has the same colour, as happens when the display is asleep and the
+//! desktop gives the window nothing drawn. A blank picture is evidence of nothing: neither
+//! that a look is right nor that it is wrong. `none` when no picture was taken, `unknown`
+//! when its pixels could not be read.
+//!
 //! `ARC_EDITOR_CHECK_WINDOW=WIDTHxHEIGHT` asks the desktop for a window of that size in
 //! logical pixels, for the cases that check the layout at a given width. The desktop may give
 //! another.
@@ -77,7 +83,7 @@ use bevy::{
     input::keyboard::Key,
     picking::PickingSystems,
     prelude::*,
-    render::view::screenshot::{save_to_disk, Screenshot},
+    render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured},
     window::{PrimaryWindow, RequestRedraw},
 };
 use editor_ui::{
@@ -95,6 +101,51 @@ use crate::{
 const FIRST_STEP_AT: u32 = 40;
 const BETWEEN_STEPS: u32 = 10;
 const SETTLE: u32 = 40;
+
+/// What the picture a scripted check saved turned out to be.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Picture {
+    /// No picture was taken, or it has not arrived.
+    #[default]
+    None,
+    /// Every pixel has the same colour: the window was given nothing drawn.
+    Blank,
+    Nonblank,
+    /// The picture's pixels are not four bytes each, or are not there.
+    Unknown,
+}
+
+impl Picture {
+    fn word(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Blank => "blank",
+            Self::Nonblank => "nonblank",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// What a picture of this size with these bytes is, four bytes a pixel. Only the three
+/// colour bytes are compared: a picture of one colour is blank whatever its alpha says.
+pub fn picture_of(width: u32, height: u32, data: Option<&[u8]>) -> Picture {
+    let pixels = width as usize * height as usize;
+    let Some(data) = data.filter(|data| pixels > 0 && data.len() == pixels * 4) else {
+        return Picture::Unknown;
+    };
+    let first = &data[..3];
+    if data.chunks_exact(4).all(|pixel| &pixel[..3] == first) {
+        Picture::Blank
+    } else {
+        Picture::Nonblank
+    }
+}
+
+/// Notes what the saved picture is, for the result line.
+fn note_picture(captured: On<ScreenshotCaptured>, mut picture: ResMut<Picture>) {
+    let image = &captured.image;
+    *picture = picture_of(image.width(), image.height(), image.data.as_deref());
+}
 
 /// Whether this run is a scripted check.
 pub fn is_scripted() -> bool {
@@ -251,6 +302,7 @@ impl Plugin for CheckPlugin {
                 waiting_for: None,
             })
             .init_resource::<InputScript>()
+            .init_resource::<Picture>()
             .add_observer(log_clicks)
             .add_systems(
                 First,
@@ -294,6 +346,7 @@ type Tools<'w> = (
     Res<'w, RowDrag>,
     Res<'w, editor_ui::ViewMode>,
     Res<'w, editor_ui::LookStatus>,
+    Res<'w, Picture>,
 );
 
 /// Saves the first frames as pictures into the folder named by `ARC_EDITOR_CHECK_EARLY`, to
@@ -376,7 +429,7 @@ fn scripted(
     gizmo: Res<TransformGizmoSettings>,
     gizmo_state: Res<TransformGizmoState>,
     (shown, ground, closing): (Res<Shown>, Res<GroundShown>, Dialogs),
-    (tool, brush, aim, stroke, row_drag, view, look): Tools,
+    (tool, brush, aim, stroke, row_drag, view, look, picture): Tools,
     mut redraw: MessageWriter<RequestRedraw>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -459,7 +512,8 @@ fn scripted(
     if !reactive && script.frame == finished_at + SETTLE {
         commands
             .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(script.picture.clone()));
+            .observe(save_to_disk(script.picture.clone()))
+            .observe(note_picture);
     } else if reactive || script.frame == finished_at + 2 * SETTLE {
         let snapshot = editor.snapshot();
         let status = &snapshot.status;
@@ -499,7 +553,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} picture={}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -765,6 +819,8 @@ fn scripted(
             screen
                 .ground_look()
                 .map(|look| (look.base_color_linear_rgba, look.roughness)),
+            // What the saved picture is: nothing is claimed of a picture that is blank.
+            picture.word(),
         );
         exit.write(AppExit::Success);
     }
@@ -1093,4 +1149,31 @@ fn log_clicks(
         "check click on {:?} at {:?}: object={object} view={view} row={row}",
         click.entity, click.pointer_location.position
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_picture_of_one_colour_is_blank_and_one_differing_pixel_makes_it_not() {
+        // Two by two, all black, with alpha that differs: still one colour.
+        let mut data = vec![0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 255];
+        assert_eq!(picture_of(2, 2, Some(&data)), Picture::Blank);
+        // One colour that is not black is blank as well: nothing was drawn into it.
+        let grey: Vec<u8> = [31, 31, 36, 255].repeat(4);
+        assert_eq!(picture_of(2, 2, Some(&grey)), Picture::Blank);
+        data[9] = 1;
+        assert_eq!(picture_of(2, 2, Some(&data)), Picture::Nonblank);
+    }
+
+    #[test]
+    fn a_picture_whose_pixels_cannot_be_read_is_neither() {
+        assert_eq!(picture_of(2, 2, None), Picture::Unknown);
+        assert_eq!(picture_of(2, 2, Some(&[0; 12])), Picture::Unknown);
+        assert_eq!(picture_of(0, 0, Some(&[])), Picture::Unknown);
+        assert_eq!(Picture::default().word(), "none");
+        assert_eq!(Picture::Blank.word(), "blank");
+        assert_eq!(Picture::Nonblank.word(), "nonblank");
+    }
 }
