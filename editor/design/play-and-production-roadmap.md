@@ -409,6 +409,10 @@ What was run, each of a different kind, and nothing more:
     how the last run ended and why, or that none was started. Three such waits ended at
     once; before, each would have gone on for minutes. What counts as running is not
     touched: it is only what the coordinator reports.
+  - The two unit tests of the application behind this, one of the wait and one of the words
+    for an exit, each run by its name and by itself: 1 of 1 and 1 of 1. They were built in
+    the workspace's usual incremental way, from what was built already: only the
+    application was compiled, no other crate.
 - For the hidden window, one case run hidden and once shown: hidden, its window was at no
   moment among the windows on screen; shown, it was.
 - The game's client, as the game's side reports and not run by the editor's side: its
@@ -427,9 +431,6 @@ What that does not show:
   field for those.
 - **The exits of a real run are still unrecorded.** The fields for them are there and were
   read from the stand-in. The real server and client have not been run since.
-- **Two unit tests were not built or run:** those of the wait and of the words for an exit,
-  which are the application's. A test build of the application does not fit on the
-  machine's disk as it is.
 - **No run of the game with changed settings.** The real client has not been started from
   the editor on a project whose keys or profile were changed there. The one run of the
   fourth note was before this.
