@@ -200,9 +200,11 @@ name = "arc-editor"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_hanabi",
  "editor-core",
  "editor-ui",
  "landscape-render",
+ "particle-runtime",
  "scene-data",
 ]
 

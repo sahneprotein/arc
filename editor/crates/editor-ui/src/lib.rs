@@ -36,7 +36,7 @@ pub use panels::closing::Shutdown;
 pub use panels::levels::LevelDialog;
 pub use panels::menu::MenuOpen;
 pub use panels::unsaved::{Question, Unsaved};
-pub use particles::{Particles, Preview};
+pub use particles::{GpuPreview, Particles, Preview, PreviewMode};
 pub use session::{Editor, PackageCheck};
 pub use shell::{EditorUiPlugin, Modal, PanelChoice, ViewportSlot};
 pub use tool::{

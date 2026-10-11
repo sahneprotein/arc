@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use editor_services::{
     emitters::{list_emitters, remove_emitter, EmitterEdit, ListedEmitter, OnDisk},
-    particle_spec::{self as spec, default_emitter},
+    particle_spec::{self as spec},
 };
 use scene_data::Diagnostic;
 
@@ -27,7 +27,7 @@ pub use editor_services::{
         number, number_bound, EmitterChange, EmitterPreview, NumberField, PreviewParticle,
         ShapeKind, NUMBER_FIELDS,
     },
-    particle_spec::{max_live_estimate, Blend, EmitterSpec, Shape},
+    particle_spec::{default_emitter, max_live_estimate, Blend, EmitterSpec, Shape},
 };
 
 /// One row of the emitters' list.
@@ -539,6 +539,43 @@ impl PreviewSpeed {
     }
 }
 
+/// Which picture of the chosen emitter is asked for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PreviewMode {
+    /// The editor's reference simulation, worked out on the processor.
+    #[default]
+    Reference,
+    /// The game's particle runtime, on the graphics card.
+    Gpu,
+}
+
+/// What the application says of the GPU preview: the game's particle runtime drawing the
+/// chosen emitter in the 3D view. The application is the one that knows; the panel shows
+/// the reference simulation, and says why, whenever this is not [`GpuPreview::Running`].
+#[derive(Resource, Clone, PartialEq, Eq, Debug, Default)]
+pub enum GpuPreview {
+    /// It is not asked for, or there is no emitter to show.
+    #[default]
+    Off,
+    /// The graphics device cannot run it, with what it lacks.
+    Unavailable(String),
+    /// The game's particle runtime does not draw an emitter with this setting: the field
+    /// by the particle format's dotted name, and the runtime's reason.
+    Unsupported { field: String, reason: String },
+    /// The effect is made and the graphics card has not said yet that it can draw it.
+    Starting,
+    /// The graphics card says it draws the effect.
+    Running,
+    /// It was asked for and did not start, with what is known of why.
+    Failed(String),
+}
+
+impl GpuPreview {
+    pub fn running(&self) -> bool {
+        *self == Self::Running
+    }
+}
+
 /// The preview of the chosen emitter: the services' reference simulation and its controls.
 /// Always from the same seed, so that Restart shows the same particles again.
 #[derive(Resource)]
@@ -547,6 +584,12 @@ pub struct Preview {
     /// Whether time goes on. Paused, the particles stand still.
     pub running: bool,
     pub speed: PreviewSpeed,
+    /// Which picture is asked for. What is shown is the application's to say
+    /// ([`GpuPreview`]).
+    pub mode: PreviewMode,
+    /// How many times the preview was begun again, for the application's own effect to
+    /// begin again with it.
+    restarts: u32,
 }
 
 impl Default for Preview {
@@ -555,6 +598,8 @@ impl Default for Preview {
             simulation: None,
             running: true,
             speed: PreviewSpeed::default(),
+            mode: PreviewMode::default(),
+            restarts: 0,
         }
     }
 }
@@ -584,9 +629,15 @@ impl Preview {
 
     /// Begins again at time zero: the same particles as before.
     pub fn restart(&mut self) {
+        self.restarts = self.restarts.wrapping_add(1);
         if let Some(simulation) = &mut self.simulation {
             simulation.restart();
         }
+    }
+
+    /// How many times the preview was begun again.
+    pub fn restarts(&self) -> u32 {
+        self.restarts
     }
 
     /// Whether time is going on: the preview runs, shows an emitter, and that emitter has

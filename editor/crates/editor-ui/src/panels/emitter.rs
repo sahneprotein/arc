@@ -13,10 +13,13 @@
 //! A file that cannot be read has no settings: the panel says why, what to do, and where the
 //! file is.
 //!
-//! Over the 3D view are the preview's controls: pause and resume, begin again, and three
-//! speeds. The preview is headed "Reference simulation", and the line under the heading says
-//! what that means: the editor draws it from the settings, the game's particle runtime is not
-//! connected, and the game may draw the emitter differently.
+//! Over the 3D view are the preview's controls: which picture is asked for, pause and
+//! resume, begin again, and three speeds. There are two pictures. The reference simulation
+//! is worked out by the editor on the processor; the GPU preview is the game's particle
+//! runtime drawing the emitter on the graphics card. The overlay is headed by what is drawn
+//! and never by what was asked for: "GPU preview" only while the application says the
+//! graphics card draws the effect, and "Reference simulation" otherwise, with a line that
+//! says why the GPU preview is not shown.
 
 use bevy::{
     feathers::{
@@ -26,7 +29,7 @@ use bevy::{
             FeathersTextInputContainer, NumberInputValue, UpdateNumberInput,
         },
         display::{label, label_dim},
-        theme::{ThemeBackgroundColor, ThemeBorderColor, ThemeToken, ThemedText},
+        theme::{ThemeBackgroundColor, ThemeBorderColor, ThemeTextColor, ThemeToken, ThemedText},
         tokens,
     },
     input_focus::InputFocus,
@@ -40,8 +43,8 @@ use bevy::{
 use crate::{
     panels::inspector::{group_title, shown_number},
     particles::{
-        max_live_estimate, number, number_bound, Blend, EmitterChange, EmitterSpec, NumberField,
-        Particles, Preview, PreviewSpeed, ShapeKind, NUMBER_FIELDS,
+        max_live_estimate, number, number_bound, Blend, EmitterChange, EmitterSpec, GpuPreview,
+        NumberField, Particles, Preview, PreviewMode, PreviewSpeed, ShapeKind, NUMBER_FIELDS,
     },
     shell::PanelChoice,
     theme::{
@@ -683,11 +686,98 @@ pub struct PreviewSpeedButton(pub usize);
 #[derive(Component, Default, Clone)]
 pub struct PreviewWords;
 
+/// The overlay's text marked `T`, which is not the one marked `Other` and no heading or
+/// note.
+type PreviewText<T, Other> = (With<T>, Without<Other>, Without<PreviewLine>);
+
 /// What the preview is headed, and what that means.
 pub const REFERENCE_TITLE: &str = "Reference simulation";
-pub const REFERENCE_NOTE: &str = "The editor draws this from the emitter's settings. The \
-    game's particle runtime is not connected to the editor, so the game may draw the emitter \
+pub const REFERENCE_NOTE: &str = "The editor works this out from the emitter's settings, on \
+    the processor. It is not the game's particle runtime, and the game may draw the emitter \
     differently.";
+
+/// What the preview is headed while the game's particle runtime draws it, and what that
+/// means.
+pub const GPU_TITLE: &str = "GPU preview";
+pub const GPU_NOTE: &str = "The game's particle runtime draws this on the graphics card, \
+    from the emitter's settings as the game builds an effect from them. It does not report \
+    how many particles are alive.";
+
+/// What the overlay is headed: what is drawn, whatever was asked for.
+pub fn preview_title(mode: PreviewMode, gpu: &GpuPreview) -> &'static str {
+    if mode == PreviewMode::Gpu && gpu.running() {
+        GPU_TITLE
+    } else {
+        REFERENCE_TITLE
+    }
+}
+
+/// The line under the heading: what the picture that is drawn is.
+pub fn preview_note(mode: PreviewMode, gpu: &GpuPreview) -> &'static str {
+    if mode == PreviewMode::Gpu && gpu.running() {
+        GPU_NOTE
+    } else {
+        REFERENCE_NOTE
+    }
+}
+
+/// Why the GPU preview was asked for and is not what is drawn, in words. Nothing while it
+/// is drawn, or was not asked for.
+pub fn gpu_reason(mode: PreviewMode, gpu: &GpuPreview) -> Option<String> {
+    if mode != PreviewMode::Gpu {
+        return None;
+    }
+    let shown = "The reference simulation is shown.";
+    match gpu {
+        GpuPreview::Running => None,
+        GpuPreview::Off => Some(format!("The GPU preview has no emitter to draw. {shown}")),
+        GpuPreview::Starting => Some(format!("The GPU preview is starting. {shown}")),
+        GpuPreview::Unavailable(lacks) => Some(format!(
+            "The GPU preview cannot run on this graphics device: {lacks}. {shown}"
+        )),
+        GpuPreview::Unsupported { field, .. } => {
+            let label = wording::emitter_field(field);
+            let setting = label.split(" (").next().unwrap_or(label).to_lowercase();
+            Some(format!(
+                "The game's particle runtime does not draw an emitter with this {setting} \
+                 yet, so the game cannot show this emitter as it is. {shown}"
+            ))
+        }
+        GpuPreview::Failed(why) => Some(format!("The GPU preview did not start: {why}. {shown}")),
+    }
+}
+
+/// The button of one picture of the emitter: the GPU preview, or the reference simulation.
+#[derive(Component, Default, Clone)]
+pub struct PreviewModeButton {
+    pub gpu: bool,
+}
+
+/// The overlay's heading, the line under it, and the line that says why the GPU preview is
+/// not shown.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, FromTemplate)]
+pub enum PreviewLine {
+    #[default]
+    Title,
+    Note,
+    GpuReason,
+}
+
+fn mode_button(gpu: bool) -> impl Scene {
+    let caption = if gpu { "GPU preview" } else { "Reference" };
+    bsn! {
+        @FeathersButton { @caption: bsn! { Text(caption) ThemedText } }
+        PreviewModeButton { gpu: {gpu} }
+        on(|activate: On<Activate>, buttons: Query<&PreviewModeButton>, mut preview: ResMut<Preview>| {
+            if let Ok(button) = buttons.get(activate.entity) {
+                let mode = if button.gpu { PreviewMode::Gpu } else { PreviewMode::Reference };
+                if preview.mode != mode {
+                    preview.mode = mode;
+                }
+            }
+        })
+    }
+}
 
 /// What the button that pauses and resumes says.
 pub fn run_caption(running: bool) -> &'static str {
@@ -731,8 +821,24 @@ pub fn preview_overlay() -> impl Scene {
         ThemeBackgroundColor(tokens::PANE_BODY_BG)
         ThemeBorderColor(BORDER)
         Children [
-            label(REFERENCE_TITLE),
-            label_dim(REFERENCE_NOTE),
+            (label(REFERENCE_TITLE) PreviewLine::Title),
+            (label_dim(REFERENCE_NOTE) PreviewLine::Note),
+            (
+                label("")
+                ThemeTextColor(SIGNAL_WARN)
+                PreviewLine::GpuReason
+                Node { display: Display::None }
+            ),
+            (
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    align_items: AlignItems::Center,
+                    column_gap: px(spacing::SPACE_2),
+                    row_gap: px(spacing::SPACE_2),
+                }
+                Children [ mode_button(false), mode_button(true) ]
+            ),
             (
                 Node {
                     flex_direction: FlexDirection::Row,
@@ -762,12 +868,23 @@ pub fn preview_overlay() -> impl Scene {
     }
 }
 
-/// What the overlay's last line says: of the preview, or why there is none.
-pub fn preview_words(particles: &Particles, preview: &Preview) -> String {
-    if !particles.has_game() {
-        "No game, so no emitter to show.".into()
-    } else if particles.chosen().is_none() {
-        "No emitter is chosen.".into()
+/// What the overlay's last line says: of the preview, or why there is none. Of the GPU
+/// preview it says the most the settings let be alive, which is all that is known: the
+/// graphics card does not say how many are.
+pub fn preview_words(particles: &Particles, preview: &Preview, gpu: &GpuPreview) -> String {
+    let Some(emitter) = particles.chosen() else {
+        return if particles.has_game() {
+            "No emitter is chosen.".into()
+        } else {
+            "No game, so no emitter to show.".into()
+        };
+    };
+    if preview.mode == PreviewMode::Gpu && gpu.running() {
+        let state = if preview.running { "" } else { " Paused." };
+        format!(
+            "At most {} particles alive, by the settings.{state}",
+            max_live_estimate(emitter)
+        )
     } else {
         preview.words()
     }
@@ -776,10 +893,12 @@ pub fn preview_words(particles: &Particles, preview: &Preview) -> String {
 /// Keeps the preview on the chosen emitter and lets its time pass while the Particles tool
 /// is chosen, and asks for the next frame while particles move: the editor otherwise draws
 /// only when something happens. Entering the tool reads the game's folder again, so that
-/// what changed there since is seen.
+/// what changed there since is seen. While the graphics card draws the GPU preview the
+/// reference simulation stands still: it is not what is shown.
 pub(crate) fn run_preview(
     tool: Res<Tool>,
     time: Res<Time<Real>>,
+    gpu: Res<GpuPreview>,
     mut particles: ResMut<Particles>,
     mut preview: ResMut<Preview>,
     mut redraw: MessageWriter<RequestRedraw>,
@@ -794,7 +913,8 @@ pub(crate) fn run_preview(
     if preview.simulation().map(|simulation| simulation.spec()) != chosen {
         preview.show(chosen);
     }
-    if preview.moving() {
+    let reference_shown = !(preview.mode == PreviewMode::Gpu && gpu.running());
+    if reference_shown && preview.moving() {
         preview.tick(time.delta_secs_f64());
         redraw.write(RequestRedraw);
     }
@@ -803,12 +923,19 @@ pub(crate) fn run_preview(
 /// Shows the overlay while the Particles tool is chosen, and what its controls say.
 pub(crate) fn show_preview(
     tool: Res<Tool>,
-    particles: Res<Particles>,
-    preview: Res<Preview>,
-    mut overlays: Query<&mut Node, With<PreviewOverlay>>,
-    mut captions: Query<&mut Text, (With<PreviewRunCaption>, Without<PreviewWords>)>,
-    mut speeds: Query<(&PreviewSpeedButton, &mut ButtonVariant)>,
-    mut words: Query<&mut Text, (With<PreviewWords>, Without<PreviewRunCaption>)>,
+    (particles, preview, gpu): (Res<Particles>, Res<Preview>, Res<GpuPreview>),
+    mut overlays: Query<&mut Node, (With<PreviewOverlay>, Without<PreviewLine>)>,
+    mut captions: Query<&mut Text, PreviewText<PreviewRunCaption, PreviewWords>>,
+    mut buttons: Query<
+        (
+            Option<&PreviewSpeedButton>,
+            Option<&PreviewModeButton>,
+            &mut ButtonVariant,
+        ),
+        Or<(With<PreviewSpeedButton>, With<PreviewModeButton>)>,
+    >,
+    mut words: Query<&mut Text, PreviewText<PreviewWords, PreviewRunCaption>>,
+    mut lines: Query<(&PreviewLine, &mut Text, &mut Node), Without<PreviewOverlay>>,
 ) {
     let wanted = if *tool == Tool::Particles {
         Display::Flex
@@ -829,8 +956,15 @@ pub(crate) fn show_preview(
             caption.clone_into(&mut text.0);
         }
     }
-    for (button, mut variant) in &mut speeds {
-        let wanted = if PreviewSpeed::ALL[button.0 % PreviewSpeed::ALL.len()] == preview.speed {
+    for (speed, mode, mut variant) in &mut buttons {
+        let chosen = match (speed, mode) {
+            (Some(speed), _) => {
+                PreviewSpeed::ALL[speed.0 % PreviewSpeed::ALL.len()] == preview.speed
+            }
+            (None, Some(mode)) => mode.gpu == (preview.mode == PreviewMode::Gpu),
+            (None, None) => false,
+        };
+        let wanted = if chosen {
             ButtonVariant::Primary
         } else {
             ButtonVariant::Normal
@@ -839,10 +973,25 @@ pub(crate) fn show_preview(
             *variant = wanted;
         }
     }
-    let said = preview_words(&particles, &preview);
+    let said = preview_words(&particles, &preview, &gpu);
     for mut text in &mut words {
         if text.0 != said {
             text.0.clone_from(&said);
+        }
+    }
+    let reason = gpu_reason(preview.mode, &gpu);
+    for (line, mut text, mut node) in &mut lines {
+        let (said, shown) = match line {
+            PreviewLine::Title => (preview_title(preview.mode, &gpu), true),
+            PreviewLine::Note => (preview_note(preview.mode, &gpu), true),
+            PreviewLine::GpuReason => (reason.as_deref().unwrap_or_default(), reason.is_some()),
+        };
+        if text.0 != said {
+            said.clone_into(&mut text.0);
+        }
+        let display = if shown { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
         }
     }
 }
@@ -962,23 +1111,110 @@ mod tests {
     #[test]
     fn the_preview_is_headed_a_reference_simulation_and_says_what_that_means() {
         assert_eq!(REFERENCE_TITLE, "Reference simulation");
-        assert!(REFERENCE_NOTE.contains("not connected"));
+        assert!(REFERENCE_NOTE.contains("not the game's particle runtime"));
         assert!(REFERENCE_NOTE.contains("may draw the emitter differently"));
         assert_eq!((run_caption(true), run_caption(false)), ("Pause", "Resume"));
 
         let game = tempfile::tempdir().unwrap();
         let mut preview = Preview::default();
+        let off = GpuPreview::Off;
+        assert_eq!(preview.mode, PreviewMode::Reference);
         assert_eq!(
-            preview_words(&Particles::default(), &preview),
+            preview_words(&Particles::default(), &preview, &off),
             "No game, so no emitter to show."
         );
         let empty = Particles::of_game(game.path().into());
-        assert_eq!(preview_words(&empty, &preview), "No emitter is chosen.");
+        assert_eq!(
+            preview_words(&empty, &preview, &off),
+            "No emitter is chosen."
+        );
         let particles = with_one_emitter(game.path());
         preview.show(particles.chosen());
         assert_eq!(
-            preview_words(&particles, &preview),
+            preview_words(&particles, &preview, &off),
             "0 particles alive, at most 20. 0.0 s"
+        );
+    }
+
+    #[test]
+    fn the_overlay_is_headed_by_what_is_drawn_and_never_by_what_was_asked_for() {
+        let states = [
+            GpuPreview::Off,
+            GpuPreview::Starting,
+            GpuPreview::Unavailable("it has 2 bind groups and 4 are needed".into()),
+            GpuPreview::Unsupported {
+                field: "shape".into(),
+                reason: "point emitters only".into(),
+            },
+            GpuPreview::Failed("the graphics card did not take the effect".into()),
+        ];
+        // Asked for and not drawn: the reference's heading and note, and the reason.
+        for gpu in &states {
+            assert_eq!(
+                preview_title(PreviewMode::Gpu, gpu),
+                REFERENCE_TITLE,
+                "{gpu:?}"
+            );
+            assert_eq!(preview_note(PreviewMode::Gpu, gpu), REFERENCE_NOTE);
+            let reason = gpu_reason(PreviewMode::Gpu, gpu).unwrap();
+            assert!(
+                reason.ends_with("The reference simulation is shown."),
+                "{reason}"
+            );
+            // Not asked for: nothing is said of it.
+            assert_eq!(gpu_reason(PreviewMode::Reference, gpu), None);
+        }
+        // Drawn: headed so, and no reason. Running without being asked for is the reference.
+        let running = GpuPreview::Running;
+        assert_eq!(preview_title(PreviewMode::Gpu, &running), "GPU preview");
+        assert!(preview_note(PreviewMode::Gpu, &running).contains("game's particle runtime"));
+        assert_eq!(gpu_reason(PreviewMode::Gpu, &running), None);
+        assert_eq!(
+            preview_title(PreviewMode::Reference, &running),
+            REFERENCE_TITLE
+        );
+
+        // Each reason says its own thing, in words.
+        let unsupported = gpu_reason(PreviewMode::Gpu, &states[3]).unwrap();
+        assert!(unsupported.contains("with this shape yet"), "{unsupported}");
+        assert!(
+            unsupported.contains("the game cannot show this emitter"),
+            "{unsupported}"
+        );
+        let drag = gpu_reason(
+            PreviewMode::Gpu,
+            &GpuPreview::Unsupported {
+                field: "motion.drag_per_s".into(),
+                reason: String::new(),
+            },
+        )
+        .unwrap();
+        assert!(drag.contains("with this drag yet"), "{drag}");
+        assert!(gpu_reason(PreviewMode::Gpu, &states[2])
+            .unwrap()
+            .contains("2 bind groups"));
+        assert!(gpu_reason(PreviewMode::Gpu, &states[1])
+            .unwrap()
+            .contains("starting"));
+    }
+
+    #[test]
+    fn the_gpu_preview_says_the_most_that_can_be_alive_and_not_a_count_it_cannot_read() {
+        let game = tempfile::tempdir().unwrap();
+        let particles = with_one_emitter(game.path());
+        let mut preview = Preview::default();
+        preview.show(particles.chosen());
+        preview.mode = PreviewMode::Gpu;
+        assert_eq!(
+            preview_words(&particles, &preview, &GpuPreview::Running),
+            "At most 20 particles alive, by the settings."
+        );
+        preview.running = false;
+        assert!(preview_words(&particles, &preview, &GpuPreview::Running).ends_with(" Paused."));
+        // Asked for and not drawn: the reference's own count.
+        assert_eq!(
+            preview_words(&particles, &preview, &GpuPreview::Starting),
+            "0 particles alive, at most 20. 0.0 s, paused"
         );
     }
 }

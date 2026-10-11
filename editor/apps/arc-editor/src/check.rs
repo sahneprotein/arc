@@ -55,6 +55,10 @@
 //! the cooked level on disk), `preview-steps=N` (N whole steps of the particle preview's
 //! reference simulation, whether it runs or not).
 //!
+//! `wait-gpu` plays nothing either: the script waits until the Particles tool's GPU preview
+//! is no longer starting, which is when the graphics card has said that it draws the effect,
+//! or the stage has said why it does not.
+//!
 //! `ARC_EDITOR_CHECK_PARTICLES` names a folder that stands in the game's place for the
 //! particle emitters; what the result line says of them is at `emitters_words`.
 //!
@@ -372,6 +376,7 @@ type Emitters<'w> = (
     ResMut<'w, editor_ui::Particles>,
     ResMut<'w, editor_ui::Preview>,
     Res<'w, crate::stage::Stage>,
+    Res<'w, editor_ui::GpuPreview>,
 );
 
 /// What the result line says of the Particles tool:
@@ -383,11 +388,14 @@ type Emitters<'w> = (
 /// would find in the game's folder now. `emitter_history` is whether the chosen emitter has
 /// a change to undo and one to redo. `preview` is how many particles are alive, the time the
 /// preview has come to, and whether it runs; `stage` whether the 3D view shows the stage
-/// and how many particles it drew in the last frame.
+/// and how many particles of the reference simulation it drew in the last frame. After
+/// these come `preview_mode=Gpu gpu=Running`: which picture is asked for, and what the stage
+/// says became of the GPU preview.
 fn emitters_words(
     particles: &editor_ui::Particles,
     preview: &editor_ui::Preview,
     stage: &crate::stage::Stage,
+    gpu: &editor_ui::GpuPreview,
     screen: &Screen,
 ) -> String {
     let rows = particles.rows();
@@ -396,7 +404,7 @@ fn emitters_words(
     };
     let simulation = preview.simulation();
     format!(
-        "emitters={:?} emitter={:?} emitter_game={} emitter_files={} emitter_rows={} emitter_fields={} emitter_rate={:?} emitter_shape={:?} emitter_problem={} emitter_refusal={} emitter_history=({}, {}) remove_asked={} preview=({}, {:.2}, {}) stage=({}, {})",
+        "emitters={:?} emitter={:?} emitter_game={} emitter_files={} emitter_rows={} emitter_fields={} emitter_rate={:?} emitter_shape={:?} emitter_problem={} emitter_refusal={} emitter_history=({}, {}) remove_asked={} preview=({}, {:.2}, {}) stage=({}, {}) preview_mode={:?} gpu={:?}",
         rows.iter()
             .map(|row| (row.name.as_str(), row.unsaved, row.refused()))
             .collect::<Vec<_>>(),
@@ -423,6 +431,8 @@ fn emitters_words(
         preview.running,
         stage.on(),
         stage.drawn,
+        preview.mode,
+        gpu,
     )
 }
 
@@ -487,6 +497,9 @@ struct Scripted {
     waiting_for: Option<(String, u32)>,
 }
 
+/// What a `wait-gpu` step waits for: the GPU preview being anything but starting.
+const GPU_SETTLED: &str = "gpu-settled";
+
 /// How many frames a `wait-run` step waits before it counts as failed.
 const WAIT_FOR_THE_GAME: u32 = 20_000;
 
@@ -507,7 +520,7 @@ fn scripted(
     gizmo_state: Res<TransformGizmoState>,
     (shown, ground, closing): (Res<Shown>, Res<GroundShown>, Dialogs),
     (tool, brush, aim, stroke, row_drag, view, look, picture): Tools,
-    (mut particles, mut preview, stage): Emitters,
+    (mut particles, mut preview, stage, gpu): Emitters,
     mut redraw: MessageWriter<RequestRedraw>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -537,7 +550,13 @@ fn scripted(
         }
     }
     if let Some((wanted, give_up_at)) = script.waiting_for.clone() {
-        let now = if editor.restarting() {
+        let now = if wanted == GPU_SETTLED {
+            // The GPU preview has settled once it is no longer starting.
+            match &*gpu {
+                editor_ui::GpuPreview::Starting => "Starting".to_owned(),
+                _ => GPU_SETTLED.to_owned(),
+            }
+        } else if editor.restarting() {
             "Restarting".to_owned()
         } else {
             format!("{:?}", editor_ui::panels::play::PlayView::of(&editor).run)
@@ -556,6 +575,16 @@ fn scripted(
         return;
     }
     if let Some(step) = script.steps.pop() {
+        if step == "wait-gpu" {
+            // An effect that does not start is given up by the stage after some seconds of
+            // the clock; frames can come much faster than a game's do, so more are allowed.
+            script.waiting_for = Some((
+                GPU_SETTLED.to_owned(),
+                script.frame + 20 * WAIT_FOR_THE_GAME,
+            ));
+            redraw.write(RequestRedraw);
+            return;
+        }
         if let Some(wanted) = step.strip_prefix("wait-run=") {
             script.waiting_for = Some((wanted.to_owned(), script.frame + WAIT_FOR_THE_GAME));
             redraw.write(RequestRedraw);
@@ -898,7 +927,7 @@ fn scripted(
             screen
                 .ground_look()
                 .map(|look| (look.base_color_linear_rgba, look.roughness)),
-            emitters_words(&particles, &preview, &stage, &screen),
+            emitters_words(&particles, &preview, &stage, &gpu, &screen),
             // What the saved picture is: nothing is claimed of a picture that is blank.
             picture.word(),
         );

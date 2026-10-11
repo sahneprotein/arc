@@ -863,6 +863,14 @@ check particles-smoke "$P,type-emitter=emission.rate_per_second.0:25,click-butto
 check particles-back "$P,choose=Tool>Move" \
     'workspace=Objects' 'stage=\(false, 0\)' 'camera=\(0\.600,0\.550,38\.00\)' \
     'emitters=\[\("New Emitter", true, false\)\]' 'emitter_files=0' 'objects=22' 'problem=none'
+# The GPU preview: the game's particle runtime draws the emitter on the graphics card. It
+# is said to run only once the graphics card has said that it draws the effect; the
+# reference simulation is then not drawn. An emitter the game's adapter does not draw, a
+# cone here, is said as that, and the reference simulation stays.
+check particles-gpu "$P,click-button=GPU preview,wait-gpu" \
+    'workspace=Particles' 'preview_mode=Gpu' 'gpu=Running' 'stage=\(true, 0\)' 'problem=none'
+check particles-gpu-refused "$P,click-button=Cone,click-button=GPU preview,wait-gpu" \
+    'emitter_shape=Some\(Cone\)' 'preview_mode=Gpu' 'gpu=Unsupported \{ field: "shape"' 'stage=\(true, [0-9]+\)'
 unset ARC_EDITOR_CHECK_PARTICLES
 
 # check_exit <name> <steps> <saved: yes|no>: the editor must end by itself before the check's

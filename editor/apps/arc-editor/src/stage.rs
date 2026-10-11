@@ -6,22 +6,39 @@
 //! simulation (`editor_ui::particles::Preview`): this draws what that says and works out
 //! nothing of its own. It is not the game's particle runtime, and the panel says so.
 //!
+//! The chosen emitter can also be drawn by the game's particle runtime, on the graphics
+//! card: the GPU preview. The effect is built by the adapter the game shares
+//! (`particle_runtime::build_effect`), so what is drawn is what the game would make of the
+//! same settings. The stage says what became of it (`editor_ui::GpuPreview`) and nothing it
+//! does not know: the effect counts as running only once the graphics card has said that it
+//! can draw it. An emitter the adapter refuses, a device that cannot run the runtime and an
+//! effect that does not start are each said as that, and the reference simulation is drawn
+//! in their place. The stage never draws both.
+//!
 //! The stage is on a render layer of its own, and the view's camera is moved to that layer
 //! while the tool is chosen: the level's meshes stay as they are and are neither drawn nor
 //! clicked on. The camera turns about the emitter; where it was in the level is remembered
 //! and put back when another tool is chosen, and so is the way the level was drawn.
+
+use std::time::{Duration, Instant};
 
 use bevy::{
     asset::RenderAssetUsages,
     camera::visibility::{NoFrustumCulling, RenderLayers},
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
+    render::renderer::RenderDevice,
+    window::RequestRedraw,
+};
+use bevy_hanabi::{
+    CompiledParticleEffect, EffectAsset, EffectSimulation, EffectSimulationTime, ParticleEffect,
 };
 use editor_ui::{
-    particles::{PreviewParticle, Shape},
+    particles::{EmitterSpec, PreviewParticle, Shape},
     theme::{color, feathers::to_color},
-    Particles, Preview, Tool, ViewMode,
+    GpuPreview, Particles, Preview, PreviewMode, Tool, ViewMode,
 };
+use particle_runtime::{build_effect, AdapterError, ParticleRuntimePlugin};
 
 use crate::viewport::{Orbit, ViewCamera};
 
@@ -89,10 +106,178 @@ pub struct StagePlugin;
 
 impl Plugin for StagePlugin {
     fn build(&self, app: &mut App) {
-        app.init_gizmo_group::<StageLines>()
+        app.add_plugins(ParticleRuntimePlugin)
+            .init_gizmo_group::<StageLines>()
             .init_resource::<Stage>()
+            .init_resource::<GpuStage>()
             .add_systems(Startup, setup)
-            .add_systems(Update, (switch_stage, draw_stage).chain());
+            .add_systems(Update, (switch_stage, drive_gpu, draw_stage).chain());
+    }
+}
+
+/// How many bind groups the game's particle runtime needs of the graphics device.
+const BIND_GROUPS_NEEDED: u32 = 4;
+
+/// How long an effect may take until the graphics card says it can draw it. Its shaders
+/// are compiled in that time; an effect that is not drawn by then is taken as not started.
+const GPU_START: Duration = Duration::from_secs(5);
+
+/// What a graphics device with this many bind groups lacks for the particle runtime, if it
+/// lacks anything: the one thing the runtime itself asks of a device before it starts.
+pub fn device_lacks(bind_groups: u32) -> Option<String> {
+    (bind_groups < BIND_GROUPS_NEEDED).then(|| {
+        format!(
+            "it has {bind_groups} bind groups and the particle runtime needs {BIND_GROUPS_NEEDED}"
+        )
+    })
+}
+
+/// What became of an emitter the adapter refused, as the panel is told it.
+pub fn refused(refusal: AdapterError) -> GpuPreview {
+    match refusal {
+        AdapterError::UnsupportedField { field, reason } => GpuPreview::Unsupported {
+            field: field.to_owned(),
+            reason: reason.to_owned(),
+        },
+        AdapterError::InvalidSpec { field, detail } => GpuPreview::Failed(match field {
+            Some(field) => format!("the particle runtime refused {field}: {detail}"),
+            None => format!("the particle runtime refused the emitter: {detail}"),
+        }),
+    }
+}
+
+/// The GPU preview's effect and what is known of it.
+#[derive(Resource, Default)]
+struct GpuStage {
+    /// What the graphics device lacks for the runtime, once it was looked at.
+    lacks: Option<Option<String>>,
+    /// The emitter an effect was last asked for, and how many times the preview had been
+    /// begun again by then: another emitter, or another beginning, is another effect.
+    asked: Option<(EmitterSpec, u32)>,
+    /// The effect, if the adapter built one.
+    effect: Option<Entity>,
+    /// When the effect was made, or was last known to be drawn.
+    alive_at: Option<Instant>,
+    /// What became of the last asking, if it is settled: refused, or not started.
+    settled: Option<GpuPreview>,
+}
+
+impl GpuStage {
+    fn remove_effect(&mut self, commands: &mut Commands) {
+        if let Some(effect) = self.effect.take() {
+            commands.entity(effect).despawn();
+        }
+        self.alive_at = None;
+    }
+}
+
+/// Has the game's particle runtime draw the chosen emitter while the stage is shown and the
+/// GPU preview is asked for, and says what became of it. The effect is made anew for
+/// another emitter, for a changed one, and when the preview is begun again: an effect on the
+/// graphics card cannot be wound back. Pause and the speeds are the runtime's own clock.
+fn drive_gpu(
+    mut commands: Commands,
+    (stage, particles, preview): (Res<Stage>, Res<Particles>, Res<Preview>),
+    (mut gpu, mut status): (ResMut<GpuStage>, ResMut<GpuPreview>),
+    (device, compiled): (Option<Res<RenderDevice>>, Query<&CompiledParticleEffect>),
+    (mut effects, mut clock): (ResMut<Assets<EffectAsset>>, ResMut<Time<EffectSimulation>>),
+    mut redraw: MessageWriter<RequestRedraw>,
+) {
+    let emitter = particles
+        .chosen()
+        .filter(|_| stage.on && preview.mode == PreviewMode::Gpu);
+    let now = match emitter {
+        None => {
+            // Not asked for: nothing is kept, and the next asking begins anew.
+            if gpu.effect.is_some() || gpu.asked.is_some() {
+                gpu.remove_effect(&mut commands);
+                gpu.asked = None;
+                gpu.settled = None;
+            }
+            GpuPreview::Off
+        }
+        Some(emitter) => {
+            if gpu.lacks.is_none() {
+                // The engine gives the main world the device it renders with. Where it is
+                // not to be had, nothing is known to be lacking: whether the effect is
+                // drawn is then the graphics card's to say, below.
+                gpu.lacks = Some(
+                    device
+                        .as_ref()
+                        .and_then(|device| device_lacks(device.limits().max_bind_groups)),
+                );
+            }
+            if let Some(Some(lacks)) = &gpu.lacks {
+                GpuPreview::Unavailable(lacks.clone())
+            } else {
+                let asked = gpu.asked.as_ref().is_some_and(|(spec, restarts)| {
+                    spec == emitter && *restarts == preview.restarts()
+                });
+                if !asked {
+                    gpu.remove_effect(&mut commands);
+                    gpu.asked = Some((emitter.clone(), preview.restarts()));
+                    gpu.settled = match build_effect(emitter, Preview::SEED as u32) {
+                        Ok(built) => {
+                            let effect = commands
+                                .spawn((
+                                    ParticleEffect::new(effects.add(built.asset)),
+                                    built.emission,
+                                    Transform::from_translation(EMITTER_AT),
+                                    RenderLayers::layer(STAGE_LAYER),
+                                    Pickable::IGNORE,
+                                ))
+                                .id();
+                            gpu.effect = Some(effect);
+                            gpu.alive_at = Some(Instant::now());
+                            None
+                        }
+                        Err(refusal) => Some(refused(refusal)),
+                    };
+                }
+                let ready = gpu
+                    .effect
+                    .and_then(|effect| compiled.get(effect).ok())
+                    .is_some_and(CompiledParticleEffect::is_ready);
+                if let Some(settled) = &gpu.settled {
+                    settled.clone()
+                } else if ready {
+                    gpu.alive_at = Some(Instant::now());
+                    GpuPreview::Running
+                } else if gpu.alive_at.is_some_and(|at| at.elapsed() > GPU_START) {
+                    // Whatever the reason, it is in the log and not known here.
+                    gpu.remove_effect(&mut commands);
+                    let failed = GpuPreview::Failed(format!(
+                        "the graphics card did not draw the effect within {} seconds, and \
+                         the editor's log says why",
+                        GPU_START.as_secs()
+                    ));
+                    gpu.settled = Some(failed.clone());
+                    failed
+                } else {
+                    // Frames must keep coming for the answer to arrive.
+                    redraw.write(RequestRedraw);
+                    GpuPreview::Starting
+                }
+            }
+        }
+    };
+    if *status != now {
+        *status = now;
+    }
+    // The runtime's clock follows the preview's controls, whether an effect is there or not.
+    if clock.is_paused() == preview.running {
+        if preview.running {
+            clock.unpause();
+        } else {
+            clock.pause();
+        }
+    }
+    let speed = preview.speed.factor() as f32;
+    if clock.relative_speed() != speed {
+        clock.set_relative_speed(speed);
+    }
+    if status.running() && preview.running {
+        redraw.write(RequestRedraw);
     }
 }
 
@@ -245,7 +430,12 @@ fn outline(shape: &Shape, lines: &mut Gizmos<StageLines>, color: Color) {
 /// preview's particles as they are in this frame.
 fn draw_stage(
     mut stage: ResMut<Stage>,
-    (particles, preview, looks): (Res<Particles>, Res<Preview>, Res<ParticleLooks>),
+    (particles, preview, gpu, looks): (
+        Res<Particles>,
+        Res<Preview>,
+        Res<GpuPreview>,
+        Res<ParticleLooks>,
+    ),
     camera: Single<&Transform, With<ViewCamera>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut quad: Single<(&mut MeshMaterial3d<StandardMaterial>, &mut Visibility), With<ParticleQuads>>,
@@ -269,7 +459,10 @@ fn draw_stage(
         outline(&emitter.shape, &mut lines, to_color(color::TEXT_DIM));
     }
 
-    let simulation = preview.simulation();
+    // The reference simulation is drawn unless the graphics card draws the GPU preview.
+    let simulation = preview
+        .simulation()
+        .filter(|_| !(preview.mode == PreviewMode::Gpu && gpu.running()));
     let alive: Vec<PreviewParticle> = simulation
         .map(|simulation| simulation.particles().collect())
         .unwrap_or_default();
@@ -367,6 +560,48 @@ mod tests {
             .map(|corners| corners[0].z)
             .collect();
         assert_eq!(depths, [-3.0, 0.5, 2.0]);
+    }
+
+    #[test]
+    fn a_device_with_too_few_bind_groups_is_said_to_lack_them_and_any_other_lacks_nothing() {
+        assert_eq!(device_lacks(4), None);
+        assert_eq!(device_lacks(8), None);
+        let lacks = device_lacks(2).unwrap();
+        assert!(
+            lacks.contains("2 bind groups") && lacks.contains("needs 4"),
+            "{lacks}"
+        );
+    }
+
+    #[test]
+    fn the_adapter_builds_a_point_emitter_and_what_it_refuses_is_said_as_that() {
+        let emitter = editor_ui::particles::default_emitter();
+        assert!(build_effect(&emitter, Preview::SEED as u32).is_ok());
+
+        // A shape the adapter does not draw: its field and reason, not a failure to start.
+        let unsupported = AdapterError::UnsupportedField {
+            field: "shape",
+            reason: "point emitters only",
+        };
+        assert_eq!(
+            refused(unsupported),
+            GpuPreview::Unsupported {
+                field: "shape".into(),
+                reason: "point emitters only".into()
+            }
+        );
+        // An emitter the format itself refuses could not be chosen; if it comes, it is said.
+        let invalid = AdapterError::InvalidSpec {
+            field: Some("lifetime.max_seconds".into()),
+            detail: "must be at least the minimum".into(),
+        };
+        let GpuPreview::Failed(why) = refused(invalid) else {
+            panic!("an invalid emitter is a preview that did not start");
+        };
+        assert!(
+            why.contains("lifetime.max_seconds") && why.contains("at least"),
+            "{why}"
+        );
     }
 
     #[test]

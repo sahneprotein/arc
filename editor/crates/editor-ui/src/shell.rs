@@ -50,7 +50,7 @@ use crate::{
         },
         view::{show_view, view_control},
     },
-    particles::{Particles, Preview},
+    particles::{GpuPreview, Particles, Preview},
     session::{pump_editor, Editor, PumpEditor},
     theme::{feathers::ui_theme, size, spacing},
     tool::{Brush, BrushAim, ChosenRule, LookStatus, PaintLayer, PlaceAt, Snap, Tool, ViewMode},
@@ -260,6 +260,7 @@ fn keep_drawing(
         Res<ViewMode>,
         Res<Particles>,
         Res<Preview>,
+        Res<GpuPreview>,
     ),
     mut seen: Local<Option<(u64, u64, u64, bool)>>,
     mut frames_left: Local<u8>,
@@ -288,6 +289,7 @@ fn keep_drawing(
         view_mode,
         particles,
         preview,
+        gpu,
     ) = choices;
     let chosen = tool.is_changed()
         || brush.is_changed()
@@ -301,7 +303,8 @@ fn keep_drawing(
         || modal.is_changed()
         || view_mode.is_changed()
         || particles.is_changed()
-        || preview.is_changed();
+        || preview.is_changed()
+        || gpu.is_changed();
     if input || chosen || editor.busy() || *seen != Some(view) {
         *frames_left = FRAMES_AFTER_A_CHANGE;
     }
@@ -368,6 +371,7 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<MenuOpen>()
             .init_resource::<Particles>()
             .init_resource::<Preview>()
+            .init_resource::<GpuPreview>()
             .add_observer(confirm_level_name)
             .add_systems(Startup, shell.spawn())
             .add_systems(PreUpdate, pump_editor.in_set(PumpEditor))
