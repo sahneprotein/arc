@@ -72,6 +72,15 @@ impl EditorSession {
             self.regions.inspector += 1;
         }
         self.selection = selection;
+        if self
+            .active
+            .as_ref()
+            .is_none_or(|id| !self.selection.contains(id))
+        {
+            self.active = self.selection.first().cloned();
+        }
+        self.review = review_document(&next).into();
+        self.regions.review += 1;
         self.document = next;
         self.hash = hash;
         self.revision += 1;
