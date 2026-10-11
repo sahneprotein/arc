@@ -305,7 +305,7 @@ these up.]
 8. Published models: a reference in the scene and the cooked level, an Assets browser, a
    model placed as an object (steps 6 and 7 of 2.5).
 
-Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `c60aefbf2`
+Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `0589bd7a7`
 and the game's `codex/play-readiness` at `626ec45`; both are pushed and merged nowhere. A
 project's settings can now be changed in the editor, what is saved is a manifest the game
 can play with, and the editor does not close over changes that were not saved.
@@ -428,6 +428,13 @@ What was run, each of a different kind, and nothing more:
     for an exit, each run by its name and by itself: 1 of 1 and 1 of 1. They were built in
     the workspace's usual incremental way, from what was built already: only the
     application was compiled, no other crate.
+- For the starter level a setup makes, a scripted case that stays in the checks
+  (`project-starter-cooks`, `0589bd7a7`): 1 of 1, run once with the editor as it was built
+  and its window hidden, as the one who ran it reports. A folder is set up as a project;
+  the starter level that the setup made is cooked from the Level menu; and "Check cooked
+  level" in the Play menu passes the cooked level, which is the check Play makes before it
+  starts the game. So a setup makes a level that can be played, not only one that can be
+  read. The game is not started in this case.
 - For the copy of a level before a newer schema (`c60aefbf2`): unit tests of the save in
   `editor-services`, chosen by name (`persistence::`), 7 of 7, four of them new; the wording
   test of the two refusals in `editor-ui`, 1 of 1; the application builds; and, scripted
@@ -541,7 +548,7 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend` (commit `c60aefbf2`), which continues
+- The editor as it is on the branch `codex/play-backend` (commit `0589bd7a7`), which continues
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
