@@ -87,6 +87,13 @@
 //! `ARC_EDITOR_CHECK_WINDOW=WIDTHxHEIGHT` asks the desktop for a window of that size in
 //! logical pixels, for the cases that check the layout at a given width. The desktop may give
 //! another.
+//!
+//! A check's window is not put on the desktop: a run of checks must not cover the screen of
+//! whoever is at the machine (`window_shown=false` in the result). The steps and the result
+//! are the same as with a shown window. No picture is taken of a hidden window, and the
+//! result says `picture=none`: the desktop gives such a window nothing drawn, and a picture
+//! of it would be of one colour whatever the editor shows. `ARC_EDITOR_CHECK_VISIBLE=1` shows
+//! the window, for a picture and for looking at a check while it runs.
 
 use std::{
     path::PathBuf,
@@ -226,6 +233,27 @@ pub fn scripted_project() -> Option<PathBuf> {
         return None;
     }
     std::env::var_os("ARC_EDITOR_CHECK_PROJECT").map(PathBuf::from)
+}
+
+/// Whether the editor's window is put on the desktop: always in real use, and in a scripted
+/// check only when `ARC_EDITOR_CHECK_VISIBLE` asks for it.
+pub fn window_shown() -> bool {
+    shown(
+        is_scripted(),
+        std::env::var("ARC_EDITOR_CHECK_VISIBLE").ok().as_deref(),
+    )
+}
+
+/// The rule of [`window_shown`]: `asked` is what `ARC_EDITOR_CHECK_VISIBLE` holds, and an
+/// empty value or `0` asks for nothing.
+fn shown(scripted: bool, asked: Option<&str>) -> bool {
+    !scripted || asked.is_some_and(|value| !matches!(value.trim(), "" | "0"))
+}
+
+/// Whether a check takes its picture: a reactive check takes none, since a picture needs
+/// frames, and a hidden window gives none that shows anything.
+fn takes_picture(reactive: bool, shown: bool) -> bool {
+    !reactive && shown
 }
 
 /// The window size a scripted check asks for, if it names one.
@@ -639,8 +667,9 @@ fn scripted(
     }
     let frame = script.frame;
     let finished_at = *script.finished_at.get_or_insert(frame);
-    // A reactive check reads the result at rest and takes no picture: a picture needs frames.
-    if !reactive && script.frame == finished_at + SETTLE {
+    // A reactive check reads the result at rest; a check without a picture, as of a hidden
+    // window, waits as long as one with a picture, so that both read the same frame.
+    if takes_picture(reactive, window_shown()) && script.frame == finished_at + SETTLE {
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(script.picture.clone()))
@@ -684,7 +713,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} project={} project_dialog={} picture={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} project={} project_dialog={} picture={} window_shown={}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -967,6 +996,8 @@ fn scripted(
             project_dialog.open,
             // What the saved picture is: nothing is claimed of a picture that is blank.
             picture.word(),
+            // Whether the window was on the desktop while the check ran.
+            window_shown(),
         );
         exit.write(AppExit::Success);
     }
@@ -1347,6 +1378,31 @@ fn log_clicks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_is_hidden_only_in_a_scripted_check_that_does_not_ask_to_be_seen() {
+        // Real use: shown, whatever the variable says.
+        assert!(shown(false, None));
+        assert!(shown(false, Some("0")));
+        // A scripted check: hidden unless it is asked for.
+        assert!(!shown(true, None));
+        assert!(!shown(true, Some("")));
+        assert!(!shown(true, Some("0")));
+        assert!(!shown(true, Some(" 0 ")));
+        assert!(shown(true, Some("1")));
+        assert!(shown(true, Some("yes")));
+    }
+
+    #[test]
+    fn no_picture_is_taken_of_a_hidden_window_and_the_result_says_none() {
+        assert!(takes_picture(false, true));
+        assert!(!takes_picture(false, false), "a hidden window");
+        assert!(!takes_picture(true, true), "a reactive check");
+        assert!(!takes_picture(true, false));
+        // What the result says while no picture has arrived, which is for good when none
+        // is taken: not `blank`, which is said of a picture that was read.
+        assert_eq!(Picture::default().word(), "none");
+    }
 
     #[test]
     fn a_picture_of_one_colour_is_blank_and_one_differing_pixel_makes_it_not() {

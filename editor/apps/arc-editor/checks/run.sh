@@ -8,6 +8,10 @@
 #
 #   cargo build -p arc-editor && apps/arc-editor/checks/run.sh
 #
+# The windows are not put on the desktop, so a run does not cover the screen of whoever is at
+# the machine; no picture is taken of them (`picture=none`). To watch a case or to have its
+# picture, show them: `ARC_EDITOR_CHECK_VISIBLE=1 run.sh stroke`.
+#
 # With an argument only the cases whose name contains it are run, for instance `run.sh stroke`.
 #
 # The cases assume the game's current map as the editor core converts it, in a window at

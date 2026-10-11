@@ -160,6 +160,9 @@ fn main() -> AppExit {
                 primary_window: Some(Window {
                     title: "Arc Editor".into(),
                     resolution: WindowResolution::new(width, height),
+                    // A scripted check keeps its window off the desktop unless it is asked
+                    // to show it; in real use the window is always shown.
+                    visible: check::window_shown(),
                     // A scripted check must not wait for the desktop to show the window.
                     present_mode: if check::is_scripted() {
                         PresentMode::AutoNoVsync
