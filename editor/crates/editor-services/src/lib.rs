@@ -2,6 +2,7 @@
 pub mod play;
 pub use play::*;
 mod actor;
+pub mod emitters;
 mod look;
 mod measurement;
 mod package;
