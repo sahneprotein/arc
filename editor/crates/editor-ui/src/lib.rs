@@ -28,4 +28,4 @@ pub use panels::menu::MenuOpen;
 pub use panels::unsaved::{Question, Unsaved};
 pub use session::{Editor, PackageCheck};
 pub use shell::{EditorUiPlugin, Modal, PanelChoice, ViewportSlot};
-pub use tool::{Brush, BrushAim, BrushMode, ChosenRule, PaintLayer, PlaceAt, Tool};
+pub use tool::{Brush, BrushAim, BrushMode, ChosenRule, PaintLayer, PlaceAt, Snap, Tool};

@@ -12,6 +12,7 @@ pub mod notice;
 pub mod paint;
 pub mod play;
 pub mod rules;
+pub mod snap;
 pub mod status;
 pub mod toolbar;
 pub mod unsaved;

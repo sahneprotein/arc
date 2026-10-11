@@ -2,7 +2,8 @@
 //!
 //! As the layout "Narrow window: one toolbar row with menus" has it: Level and Add are menus
 //! at every width. In a window narrower than the design's fold width the tools fold into one
-//! menu that names the chosen tool, and the two panel switches into another. A button or a row
+//! menu that names the chosen tool, the snap switch into a row of that menu, and the two panel
+//! switches into another. A button or a row
 //! is added when what it does exists.
 
 use bevy::{
@@ -25,6 +26,7 @@ use crate::{
         levels::LevelDialog,
         menu::{menu_item, menu_popup, menu_popup_end},
         play::play_control,
+        snap::{snap_button, snap_item},
     },
     session::Editor,
     shell::PanelChoice,
@@ -255,6 +257,8 @@ fn tool_menu() -> impl Scene {
                     tool_item(ToolChoice::Sculpt),
                     tool_item(ToolChoice::Paint),
                     tool_item(ToolChoice::Rules),
+                    @FeathersMenuDivider,
+                    snap_item(),
                 ]
             ),
         ]
@@ -340,6 +344,8 @@ pub fn toolbar() -> impl Scene {
                     tool_button(ToolChoice::Rules),
                 ]
             ),
+            // Snap is a toggle of its own beside the tools, not one of them.
+            (snap_button() Fold::Wide),
             tool_menu(),
             add_menu(),
             (

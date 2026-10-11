@@ -15,6 +15,7 @@
 //! |---|---|
 //! | `click-row=N` | a click on hierarchy row N |
 //! | `click-object=N` | a click in the 3D view on the object of hierarchy row N |
+//! | `shift-click-row=N`, `shift-click-object=N` | the same two with Shift held from before the click until after it |
 //! | `click-button=Caption` | a click on the button with that caption |
 //! | `choose=Menu>Caption` | a click on the button with that caption if one is on the window, as the tools and panel switches are in a wide window; otherwise a click on the button of that toolbar menu and then on its row with that caption |
 //! | `click-item=Caption` | a click on the row with that caption of the menu that is open |
@@ -432,8 +433,20 @@ fn scripted(
             .selection
             .first()
             .and_then(|id| snapshot.document.object(id));
+        // Where each selected object is, to the millimetre.
+        let places: Vec<[f32; 3]> = snapshot
+            .selection
+            .iter()
+            .filter_map(|id| snapshot.document.object(id))
+            .map(|object| {
+                object
+                    .local
+                    .translation_m
+                    .map(|v| (v * 1000.0).round() / 1000.0 + 0.0)
+            })
+            .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -560,8 +573,40 @@ fn scripted(
             *closing.7,
             play.game,
             closing.8.0.load(std::sync::atomic::Ordering::Relaxed),
+            // Several objects: how many are selected and where each is, what the inspector
+            // says first, which numbers of the position it shows as dashes, and whether
+            // snapping is on, read where it acts: the gizmo turns in steps.
+            snapshot.selection.len(),
+            places.clone(),
+            // Where each stands from the first: what a move or a turn of the group keeps.
+            places
+                .iter()
+                .map(|place| {
+                    std::array::from_fn::<f32, 3, _>(|axis| {
+                        ((place[axis] - places[0][axis]) * 1000.0).round() / 1000.0 + 0.0
+                    })
+                })
+                .collect::<Vec<_>>(),
+            editor_ui::panels::inspector::several(snapshot.selection.len()),
+            snapshot
+                .inspector
+                .iter()
+                .find(|field| field.id == "translation")
+                .map(|field| editor_ui::panels::inspector::mixed_axes(&snapshot, field)),
+            gizmo.snap_rotate.is_some(),
         );
         exit.write(AppExit::Success);
+    }
+}
+
+/// A click with the left button, with Shift held around it if `shift`.
+fn click(input: &mut InputScript, at: Vec2, shift: bool) {
+    if shift {
+        input.hold_key(KeyCode::ShiftLeft, Key::Shift, true);
+    }
+    input.click(at, MouseButton::Left);
+    if shift {
+        input.hold_key(KeyCode::ShiftLeft, Key::Shift, false);
     }
 }
 
@@ -601,11 +646,11 @@ fn play(
             .map_err(|_| "not a number".to_owned())
     };
     match name {
-        "click-row" => {
+        "click-row" | "shift-click-row" => {
             let at = screen
                 .row(&row_id(argument)?)
                 .ok_or("the row is not on screen")?;
-            input.click(at, MouseButton::Left);
+            click(input, at, name.starts_with("shift-"));
         }
         "click-toggle" => {
             let at = screen
@@ -613,11 +658,11 @@ fn play(
                 .ok_or("that row has no toggle on screen")?;
             input.click(at, MouseButton::Left);
         }
-        "click-object" => {
+        "click-object" | "shift-click-object" => {
             let at = screen
                 .object(&row_id(argument)?)
                 .ok_or("the object is not in the view")?;
-            input.click(at, MouseButton::Left);
+            click(input, at, name.starts_with("shift-"));
         }
         "click-button" => {
             let at = screen.button(argument).ok_or("no such button on screen")?;

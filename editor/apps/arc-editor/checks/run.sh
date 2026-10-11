@@ -226,6 +226,72 @@ check_sized "$narrow" narrow-panels 'inspector,choose=Panels>Hierarchy,choose=Pa
 check_sized "$narrow" narrow-add    'choose=Add>Landscape,choose=Level>Save' 'window=621x' 'toolbar_folded=true' 'objects=23' 'ground_tiles=4' 'dirty=false' 'problem=none'
 check_sized "$narrow" narrow-menu   'click-button=Panels' 'window=621x' 'menu_open=true' "$row" 'toolbar_fits=Some\(true\)'
 
+# Several objects. Shift with a click adds the object to the selection or takes it out, in the
+# hierarchy and in the 3D view; a plain click selects one again. The inspector says how many
+# are selected and shows a dash for each number they differ in: the Tall box and the Low box
+# differ in X and in height and share their depth.
+two='selection=2'
+apart='offsets=\[\[0\.0, 0\.0, 0\.0\], \[3\.0, -0\.35, 0\.0\]\]'
+both_home='places=\[\[0\.0, 0\.5, -8\.0\], \[3\.0, 0\.15, -8\.0\]\]'
+check multi-rows      'click-row=11,shift-click-row=12'   "$two" 'selected=Some\("Tall box"\)' 'several=Some\("2 objects"\)' 'dashes=Some\(\[true, true, false\]\)'
+check multi-row-off   'click-row=11,shift-click-row=12,shift-click-row=11' 'selection=1' 'selected=Some\("Low box"\)' 'several=None' 'dashes=Some\(\[false, false, false\]\)'
+# In the 3D view the two are the Wall and the Tall box, which stand clear of each other's
+# gizmo. The Low box and the Pillar are seen behind the X and Y handles of the gizmo on the
+# Tall box, and a click on a handle is a hold on the gizmo and no choice. The core gives a
+# selection in the order of the objects' IDs, so the Wall is its first whichever was clicked
+# first, and the gizmo is on the Wall. One more Shift-click on the Tall box takes it out.
+wall_and_box='places=\[\[-8\.5, 3\.0, 0\.0\], \[0\.0, 0\.5, -8\.0\]\]'
+check multi-objects   'click-object=11,shift-click-object=10' "$two" 'selected=Some\("Wall"\)' "$wall_and_box" 'several=Some\("2 objects"\)'
+check multi-objects-other 'click-object=10,shift-click-object=11' "$two" 'selected=Some\("Wall"\)' "$wall_and_box"
+check multi-object-off 'click-object=10,shift-click-object=11,shift-click-object=11' 'selection=1' 'selected=Some\("Wall"\)' 'several=None'
+check multi-plain     'click-row=11,shift-click-row=12,click-row=13' 'selection=1' 'selected=Some\("Pillar"\)' 'several=None'
+# The gizmo holds the first of them and the other goes with it: one move, so that they stand
+# to each other as before, and one undo step that takes both back.
+check multi-move      'click-row=11,shift-click-row=12,drag-gizmo=-60' "$two" "$moved" "$apart" 'undo=Some\("drag"\)' 'dragging=false'
+check multi-undo      'click-row=11,shift-click-row=12,drag-gizmo=-60,key=ctrl+z' "$two" "$both_home" 'undo=None' 'redo=Some\("drag"\)'
+check multi-cancel    'click-row=11,shift-click-row=12,hold-gizmo=-60,key=escape,release' "$both_home" 'undo=None' 'dragging=false'
+# A number typed into a field they share goes to both, as one undo step.
+check multi-type      'click-row=11,shift-click-row=12,inspector,type-field=translation.2:-6' \
+                      'places=\[\[0\.0, 0\.5, -6\.0\], \[3\.0, 0\.15, -6\.0\]\]' 'undo=Some\("edit"\)' 'problem=none'
+check multi-type-undo 'click-row=11,shift-click-row=12,inspector,type-field=translation.2:-6,key=ctrl+z' "$both_home" 'undo=None'
+# Remove takes all of them, and one undo step brings all of them back.
+check multi-remove    'click-row=11,shift-click-row=12,key=delete' 'objects=20' 'selection=0' 'undo=Some\("delete"\)'
+check multi-remove-undo 'click-row=11,shift-click-row=12,key=delete,key=ctrl+z' 'objects=22' 'undo=None'
+
+# Snapping. Off until its switch in the toolbar is pressed, and off again with the next press.
+check snap-off        'click-row=11,drag-gizmo=-60'       'snap=false' "$moved"
+check snap-on         'click-button=Snap'                 'snap=true' "$row" 'toolbar_fits=Some\(true\)'
+check snap-on-off     'click-button=Snap,click-button=Snap' 'snap=false'
+# A box that stands on no grid line is put on one along the axis it is dragged on, and stays
+# where it was along the others.
+on_grid='position=Some\(\[-[0-9]+\.[05], 0\.5, -8\.0\]\)'
+check snap-move       'click-row=11,inspector,type-field=translation.0:0.2,click-button=Snap,drag-gizmo=-60' \
+                      "$on_grid" 'undo=Some\("drag"\)' 'problem=none'
+check snap-move-undo  'click-row=11,inspector,type-field=translation.0:0.2,click-button=Snap,drag-gizmo=-60,key=ctrl+z' \
+                      'position=Some\(\[0\.2, 0\.5, -8\.0\]\)' 'redo=Some\("drag"\)'
+# With a second object selected, the held one goes to the grid and the other moves by exactly
+# as much. The Wall is put 8.3 m from the Tall box along X, on no grid line, and is the one
+# the gizmo holds: after the drag it is on the grid, and the Tall box is still 8.3 m from it,
+# so it has left the grid by as much as the Wall came onto it. One undo step puts both back.
+check snap-group      'click-row=10,inspector,type-field=translation.0:-8.3,shift-click-object=11,click-button=Snap,drag-gizmo=-60' \
+                      "$two" 'selected=Some\("Wall"\)' 'position=Some\(\[-[0-9]+\.[05], 3\.0, 0\.0\]\)' \
+                      'offsets=\[\[0\.0, 0\.0, 0\.0\], \[8\.3, -2\.5, -8\.0\]\]' 'undo=Some\("drag"\)'
+check snap-group-undo 'click-row=10,inspector,type-field=translation.0:-8.3,shift-click-object=11,click-button=Snap,drag-gizmo=-60,key=ctrl+z' \
+                      "$two" 'places=\[\[-8\.3, 3\.0, 0\.0\], \[0\.0, 0\.5, -8\.0\]\]' 'redo=Some\("drag"\)'
+# A turn goes in steps of fifteen degrees.
+check snap-rotate     'click-button=Snap,click-row=11,key=e,rotate-gizmo=60' 'tool=Rotate' "$home" \
+                      'rotation=Some\(\[0\.0, -?(15|30|45|60|75|90)\.0, 0\.0\]\)' 'undo=Some\("drag"\)'
+# A scaled box gets a width of whole half metres: its half size along X is a quarter metre or
+# a multiple of it.
+check snap-scale      'click-button=Snap,click-row=11,key=r,drag-gizmo=-30' 'tool=Scale' "$home" \
+                      'half_size=Some\(\[[0-9]+\.(0|25|5|75), 0\.5, 0\.5\]\)' 'undo=Some\("drag"\)'
+# At 1261 pixels the switch is a button beside the tools and the row still holds everything; at
+# 621 it is a row of the tool menu. Several objects are chosen and moved the same at both.
+check_sized "$wide" wide-snap     'click-button=Snap'     'window=1261x' 'toolbar_folded=false' 'snap=true' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$wide" wide-multi    'click-row=11,shift-click-row=12,drag-gizmo=-60' 'window=1261x' "$two" "$moved" "$apart" "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-snap 'choose=Tool>Snap'      'window=621x' 'toolbar_folded=true' 'snap=true' 'menu_open=false' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-multi 'click-row=11,shift-click-row=12,drag-gizmo=-60' 'window=621x' 'toolbar_folded=true' "$two" "$apart" 'undo=Some\("drag"\)' "$row" 'toolbar_fits=Some\(true\)'
+
 # The Play control. It is in the toolbar at every width. Its foot names the cooked level and
 # offers to cook; a cooked level can be checked on disk by the editor's core. Started without
 # a game, as in these cases, the ways to play are off and choosing one does nothing.

@@ -1,8 +1,8 @@
 //! The hierarchy panel: the level's objects as a tree, in a list indented by depth.
 //!
 //! The rows come from the core's snapshot and are rebuilt when its hierarchy region changes.
-//! Choosing a row asks the core to select that object; the highlight follows the snapshot,
-//! never the click.
+//! Choosing a row asks the core to select that object; with Shift held the object joins the
+//! selection or leaves it. The highlight follows the snapshot, never the click.
 //!
 //! An object with children has a toggle that folds them away. What is folded is the panel's
 //! own business: it is not part of the level and is forgotten with the session.
@@ -15,6 +15,7 @@ use bevy::{
         controls::{FeathersDisclosureToggle, FeathersListRow, FeathersListView},
         theme::ThemedText,
     },
+    picking::pointer::PointerButton,
     prelude::*,
     ui::{Checked, Selected},
     ui_widgets::ValueChange,
@@ -134,6 +135,7 @@ fn list(rows: Vec<impl Scene>) -> impl Scene {
     bsn! {
         @FeathersListView { @rows: {rows} }
         Node { flex_grow: 1.0, min_height: px(0) }
+        on(click_row)
         on(choose_row)
     }
 }
@@ -234,11 +236,57 @@ pub(crate) fn fold_rows(
     }
 }
 
+/// Whether a click adds to the selection instead of replacing it: with Shift held, or with
+/// Control or Command, which mean the same in a list on one desktop or another.
+pub fn adds_to_selection(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.any_pressed([
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+    ])
+}
+
+/// A click on a row picks its object: alone, or with Shift into or out of the selection.
+///
+/// The toolkit's list tells of a click only when it lands on another row than the one it holds
+/// as chosen, which it takes to be the first selected row. With several rows selected that is
+/// not enough: a Shift-click on that row must take it out, and a plain click on it must leave
+/// it alone in the selection. So the rows' clicks are read here, where the list is.
+fn click_row(
+    click: On<Pointer<Click>>,
+    rows: Query<&RowObject>,
+    parents: Query<&ChildOf>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut editor: NonSendMut<Editor>,
+) {
+    if click.button != PointerButton::Primary {
+        return;
+    }
+    let target = click.original_event_target();
+    let row = std::iter::once(target)
+        .chain(parents.iter_ancestors(target))
+        .find_map(|entity| rows.get(entity).ok());
+    if let Some(object) = row {
+        editor.pick(StableId(object.0.clone()), adds_to_selection(&keys));
+    }
+}
+
+/// The list's own word that a row was chosen: with the arrow keys, and after a click as well.
+/// It selects that row alone, which after a plain click is what `click_row` has asked for
+/// already. With Shift held it says nothing new: the click has been dealt with, and the
+/// selection is not thrown away for the row the keyboard is on.
 fn choose_row(
     change: On<ValueChange<Entity>>,
     rows: Query<&RowObject>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut editor: NonSendMut<Editor>,
 ) {
+    if adds_to_selection(&keys) {
+        return;
+    }
     if let Ok(object) = rows.get(change.value) {
         editor.select(vec![StableId(object.0.clone())]);
     }

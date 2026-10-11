@@ -36,6 +36,94 @@ impl Tool {
     }
 }
 
+/// Whether a drag on the gizmo keeps to a grid, and to which. A setting of the editor, not of
+/// the level: it is not saved and changes nothing until something is dragged.
+///
+/// Moving puts the dragged object on the grid's lines, on the axes it is moved along. Turning
+/// goes in steps of the angle from where the object was. Scaling a box gives it a size that is
+/// a whole number of grid steps, and never less than one.
+#[derive(Resource, Clone, Copy, PartialEq, Debug)]
+pub struct Snap {
+    pub on: bool,
+    /// The grid's step, in metres.
+    pub grid_m: f32,
+    /// The step of a turn, in degrees.
+    pub angle_degrees: f32,
+}
+
+impl Default for Snap {
+    /// Off, as the editor was before it could snap. Half a metre and fifteen degrees: the
+    /// steps a level blocked out of boxes is usually built on.
+    fn default() -> Self {
+        Self {
+            on: false,
+            grid_m: 0.5,
+            angle_degrees: 15.0,
+        }
+    }
+}
+
+/// How far an object must have moved along an axis to count as moved along it, in metres. A
+/// drag along one axis leaves the others where they were, and they are not put on the grid.
+const MOVED: f32 = 1e-4;
+
+impl Snap {
+    /// What the 3D view says about it.
+    pub fn words(&self) -> String {
+        if self.on {
+            format!("Snap {} m, {}\u{b0}", self.grid_m, self.angle_degrees)
+        } else {
+            "Snap off".into()
+        }
+    }
+
+    /// The step of a turn in radians, when snapping is on.
+    pub fn angle_step(&self) -> Option<f32> {
+        self.on.then(|| self.angle_degrees.to_radians())
+    }
+
+    fn on_grid(&self, value: f32) -> f32 {
+        // Adding zero turns a negative zero into zero.
+        (value / self.grid_m).round() * self.grid_m + 0.0
+    }
+
+    /// Where a dragged object goes that began at `start` and has been dragged to `now`: on the
+    /// grid along every axis it moved on, and where it was along the others.
+    pub fn position(&self, start: Vec3, now: Vec3) -> Vec3 {
+        if !self.on {
+            return now;
+        }
+        let axis = |start: f32, now: f32| {
+            if (now - start).abs() > MOVED {
+                self.on_grid(now)
+            } else {
+                start
+            }
+        };
+        Vec3::new(
+            axis(start.x, now.x),
+            axis(start.y, now.y),
+            axis(start.z, now.z),
+        )
+    }
+
+    /// The half size of a box of `half_extents` scaled by `scale`. With snapping on, the whole
+    /// size along every scaled axis is a whole number of grid steps, at least one.
+    pub fn half_extents(&self, half_extents: [f32; 3], scale: Vec3) -> [f32; 3] {
+        let scale = scale.to_array();
+        std::array::from_fn(|axis| {
+            if scale[axis] == 1.0 {
+                half_extents[axis]
+            } else if self.on {
+                let size = self.on_grid(half_extents[axis] * scale[axis] * 2.0);
+                size.max(self.grid_m) / 2.0
+            } else {
+                half_extents[axis] * scale[axis]
+            }
+        })
+    }
+}
+
 /// The rule whose settings the rules tool shows, by its stable ID.
 #[derive(Resource, Default, Clone, PartialEq, Eq, Debug)]
 pub struct ChosenRule(pub Option<String>);
@@ -193,6 +281,65 @@ pub struct BrushAim(pub Option<BrushHit>);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snapping() -> Snap {
+        Snap {
+            on: true,
+            ..default()
+        }
+    }
+
+    #[test]
+    fn snapping_is_off_until_it_is_switched_on_and_then_changes_nothing_by_itself() {
+        let snap = Snap::default();
+        assert!(!snap.on);
+        let (start, now) = (Vec3::new(0.2, 1.0, 0.0), Vec3::new(1.37, 1.0, 0.0));
+        assert_eq!(snap.position(start, now), now);
+        assert_eq!(
+            snap.half_extents([1.0, 1.0, 1.0], Vec3::new(1.3, 1.0, 1.0)),
+            [1.3, 1.0, 1.0]
+        );
+        assert_eq!(snap.angle_step(), None);
+        assert_eq!(snap.words(), "Snap off");
+    }
+
+    #[test]
+    fn a_moved_object_lands_on_the_grid_only_along_the_axes_it_moved_on() {
+        let snap = snapping();
+        // Dragged along X from a place that is on no grid line: X goes to the grid, the height
+        // and the depth stay exactly what they were.
+        let start = Vec3::new(0.2, 1.37, -4.11);
+        let moved = snap.position(start, Vec3::new(1.37, 1.37, -4.11));
+        assert_eq!(moved, Vec3::new(1.5, 1.37, -4.11));
+        // Every snapped value is a whole number of steps, exactly.
+        let far = snap.position(Vec3::ZERO, Vec3::new(-7.26, 3.74, 0.26));
+        assert_eq!(far, Vec3::new(-7.5, 3.5, 0.5));
+        assert!(snap
+            .position(Vec3::ZERO, Vec3::new(-0.1, 0.0, 0.0))
+            .x
+            .is_sign_positive());
+    }
+
+    #[test]
+    fn a_scaled_box_gets_a_size_of_whole_grid_steps_and_never_less_than_one() {
+        let snap = snapping();
+        // Two metres wide, pulled to 2.6 m: the nearest whole step is 2.5 m.
+        assert_eq!(
+            snap.half_extents([1.0, 0.3, 2.0], Vec3::new(1.3, 1.0, 1.0)),
+            [1.25, 0.3, 2.0]
+        );
+        // Squeezed to almost nothing: one step is left.
+        assert_eq!(
+            snap.half_extents([1.0, 1.0, 1.0], Vec3::new(1.0, 0.01, 1.0)),
+            [1.0, 0.25, 1.0]
+        );
+    }
+
+    #[test]
+    fn the_view_says_the_steps_while_snapping_is_on() {
+        assert_eq!(snapping().words(), "Snap 0.5 m, 15\u{b0}");
+        assert_eq!(snapping().angle_step(), Some(15.0_f32.to_radians()));
+    }
 
     #[test]
     fn the_falloff_begins_inside_the_radius() {

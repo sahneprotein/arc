@@ -244,6 +244,21 @@ pub fn play_end(code: &str, cause: Option<&str>) -> Option<Problem> {
                         .into()
                 }
                 Some("play.readiness_timeout") => "It did not become ready in time.".into(),
+                Some("play.terrain_unsupported") => {
+                    "The game cannot run what the landscape's rules make: grass, and layers \
+                     a rule fills. Remove the rules, cook the level again and play. Sculpted \
+                     ground and painted layers are run."
+                        .into()
+                }
+                Some("play.spawn_required") => {
+                    "The level has no spawn point. Add one, cook the level again and play.".into()
+                }
+                Some("play.runtime_limit") => {
+                    "The level has more boxes or spawn points than the game takes.".into()
+                }
+                Some("play.preflight_busy") => {
+                    "The editor was still checking the last start. Try again.".into()
+                }
                 Some(
                     "play.invalid_listening"
                     | "play.invalid_close"
@@ -429,6 +444,18 @@ mod tests {
             play_end_asked("play.window_closed"),
             Some("The game window was closed")
         );
+        // A level the game cannot run is refused before it starts, in words and not a code.
+        for cause in [
+            "play.terrain_unsupported",
+            "play.spawn_required",
+            "play.runtime_limit",
+            "play.preflight_busy",
+        ] {
+            let shown = play_end("play.start_failed", Some(cause)).unwrap();
+            assert_eq!(shown.title, "The game did not start");
+            assert!(!shown.remedy.is_empty(), "{cause}");
+            assert!(!shown.remedy.contains(cause), "{cause}: {}", shown.remedy);
+        }
         assert_eq!(play_end("play.stopped", None), None);
         assert_eq!(play_end("play.window_closed", None), None);
         for code in ["play.crashed", "play.start_failed"] {

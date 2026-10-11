@@ -1,8 +1,14 @@
-//! The inspector panel: the fields of the selected object.
+//! The inspector panel: the fields of the selected object, or of several.
 //!
-//! The core describes each field (kind, label key, unit, value); this panel draws them and
-//! never looks at the object itself. An edit is sent to the core as a command when the field
-//! is committed, and the shown value follows the core's next snapshot.
+//! The core describes each field (kind, label key, unit, value); this panel draws them. An
+//! edit is sent to the core as a command when the field is committed, and the shown value
+//! follows the core's next snapshot.
+//!
+//! With several objects selected the panel says how many, and the core says which fields
+//! differ between them. Of such a field the numbers the objects share are still fields, and
+//! each number that differs is a dash, as the design's PropertyRow has it. A number typed into
+//! a field goes to every selected object, as one undo step. The name is shown and cannot be
+//! changed for several at once.
 //!
 //! Position and half size are number fields. Rotation is three number fields in degrees
 //! (turns about X, then Y, then Z); the document keeps a quaternion. The name is shown and
@@ -25,7 +31,7 @@ use bevy::{
     ui_widgets::ValueChange,
 };
 use editor_core::{Command, FieldDescriptor, FieldKind, FieldValue, Mutation, ViewSnapshot};
-use scene_data::{ObjectData, RigidTransform};
+use scene_data::{ObjectData, ObjectRecord, RigidTransform};
 
 use crate::{
     session::Editor,
@@ -117,8 +123,92 @@ fn number_input(field: &str, axis: usize, value: f32) -> impl Scene {
     }
 }
 
-/// The scenes of one field: a label and its editor, or its value as text.
-fn field(descriptor: &FieldDescriptor) -> Box<dyn SceneList> {
+/// What stands in a number field's place when the selected objects differ in that number.
+const MIXED: &str = "\u{2014}";
+
+fn mixed_number() -> impl Scene {
+    bsn! {
+        Node {
+            flex_grow: 1.0,
+            flex_basis: px(0),
+            min_width: px(0),
+            justify_content: JustifyContent::Center,
+        }
+        Children [ label_dim(MIXED) ]
+    }
+}
+
+/// The three numbers of a field: a number field each, or a dash where the objects differ.
+fn numbers(field: &str, values: &[f32], mixed: [bool; 3]) -> Vec<Box<dyn SceneList>> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(axis, value)| -> Box<dyn SceneList> {
+            if mixed[axis % 3] {
+                Box::new(bsn_list![mixed_number()])
+            } else {
+                Box::new(bsn_list![number_input(field, axis, *value)])
+            }
+        })
+        .collect()
+}
+
+/// The three numbers of `field` as the panel shows them for one object: a position or a half
+/// size in metres, a rotation in degrees. `None` for an object that has no such field.
+fn numbers_of(object: &ObjectRecord, field: &str) -> Option<[f32; 3]> {
+    match (field, &object.data) {
+        ("translation", _) => Some(object.local.translation_m),
+        ("rotation", _) => Some(euler_degrees(&object.local.rotation_xyzw)),
+        ("half_extents", ObjectData::Box { half_extents_m }) => Some(*half_extents_m),
+        _ => None,
+    }
+}
+
+/// Which of a field's three numbers differ between the selected objects. The core says
+/// whether the field differs at all; which of its numbers do is read off the same objects, to
+/// the precision the panel shows them with.
+pub fn mixed_axes(snapshot: &ViewSnapshot, descriptor: &FieldDescriptor) -> [bool; 3] {
+    if !descriptor.mixed_selection {
+        return [false; 3];
+    }
+    let mut selected = snapshot
+        .selection
+        .iter()
+        .filter_map(|id| snapshot.document.object(id));
+    let Some(first) = selected
+        .next()
+        .and_then(|object| numbers_of(object, &descriptor.id))
+    else {
+        return [true; 3];
+    };
+    let mut mixed = [false; 3];
+    for object in selected {
+        match numbers_of(object, &descriptor.id) {
+            Some(numbers) => {
+                for axis in 0..3 {
+                    mixed[axis] |= shown_number(numbers[axis]) != shown_number(first[axis]);
+                }
+            }
+            // An object without the field, such as a spawn point beside a box: every number
+            // differs.
+            None => return [true; 3],
+        }
+    }
+    mixed
+}
+
+/// What the panel says first when several objects are selected.
+pub fn several(count: usize) -> Option<String> {
+    (count > 1).then(|| format!("{count} objects"))
+}
+
+/// The line under it.
+const SEVERAL_HINT: &str = "A change here goes to all of them. A dash is a value they differ in.";
+
+/// The scenes of one field: a label and its editor, or its value as text. `mixed` says which
+/// of its numbers differ between the selected objects, and `alone` whether one object is
+/// selected and not several.
+fn field(descriptor: &FieldDescriptor, mixed: [bool; 3], alone: bool) -> Box<dyn SceneList> {
     let name = wording::field_label(&descriptor.label_key).to_owned();
     let unit = descriptor
         .unit_key
@@ -132,7 +222,7 @@ fn field(descriptor: &FieldDescriptor) -> Box<dyn SceneList> {
     };
     match (&descriptor.kind, &descriptor.value) {
         (FieldKind::Text, FieldValue::Text(text))
-            if descriptor.id == "name" && !descriptor.read_only && !descriptor.mixed_selection =>
+            if descriptor.id == "name" && !descriptor.read_only && alone =>
         {
             let text = text.clone();
             Box::new(bsn_list![row(bsn_list![
@@ -149,25 +239,14 @@ fn field(descriptor: &FieldDescriptor) -> Box<dyn SceneList> {
             ])])
         }
         (FieldKind::Vector(4), FieldValue::Vector(values))
-            if descriptor.id == "rotation"
-                && !descriptor.read_only
-                && !descriptor.mixed_selection =>
+            if descriptor.id == "rotation" && !descriptor.read_only =>
         {
-            let degrees = euler_degrees(values);
-            let inputs: Vec<_> = degrees
-                .iter()
-                .enumerate()
-                .map(|(axis, value)| number_input(&descriptor.id, axis, *value))
-                .collect();
+            let inputs = numbers(&descriptor.id, &euler_degrees(values), mixed);
             let title = format!("{name} ({})", wording::unit("degrees"));
             Box::new(bsn_list![row(bsn_list![field_label(&title), { inputs }])])
         }
         (FieldKind::Vector(3), FieldValue::Vector(values)) if !descriptor.read_only => {
-            let inputs: Vec<_> = values
-                .iter()
-                .enumerate()
-                .map(|(axis, value)| number_input(&descriptor.id, axis, *value))
-                .collect();
+            let inputs = numbers(&descriptor.id, values, mixed);
             Box::new(bsn_list![row(bsn_list![field_label(&title), { inputs }])])
         }
         (_, value) => {
@@ -205,7 +284,7 @@ pub fn quaternion_of(degrees: [f32; 3]) -> [f32; 4] {
 /// A value that is shown and not edited here.
 fn shown_value(descriptor: &FieldDescriptor, value: &FieldValue) -> String {
     if descriptor.mixed_selection {
-        return "\u{2014}".into();
+        return MIXED.into();
     }
     match value {
         FieldValue::Text(text) => text.clone(),
@@ -235,6 +314,9 @@ pub struct InspectorShape {
     session: u64,
     selection: Vec<String>,
     fields: Vec<String>,
+    /// Which numbers are dashes: a number the objects come to share, or to differ in, changes
+    /// what is built and not only what a field shows.
+    mixed: Vec<[bool; 3]>,
 }
 
 fn shape(snapshot: &ViewSnapshot) -> InspectorShape {
@@ -245,6 +327,11 @@ fn shape(snapshot: &ViewSnapshot) -> InspectorShape {
             .inspector
             .iter()
             .map(|field| field.id.clone())
+            .collect(),
+        mixed: snapshot
+            .inspector
+            .iter()
+            .map(|field| mixed_axes(snapshot, field))
             .collect(),
     }
 }
@@ -302,7 +389,20 @@ pub(crate) fn show_inspector(
                     "Select something to see and change its properties here."
                 )]));
             }
-            scenes.extend(snapshot.inspector.iter().map(field));
+            if let Some(count) = several(snapshot.selection.len()) {
+                scenes.push(Box::new(bsn_list![
+                    row(bsn_list![label(count)]),
+                    label_dim(SEVERAL_HINT)
+                ]));
+            }
+            let alone = snapshot.selection.len() == 1;
+            scenes.extend(
+                snapshot
+                    .inspector
+                    .iter()
+                    .zip(&now.mixed)
+                    .map(|(descriptor, mixed)| field(descriptor, *mixed, alone)),
+            );
             commands
                 .entity(body)
                 .despawn_children()
@@ -381,7 +481,47 @@ fn component(snapshot: &ViewSnapshot, field: &str, axis: usize) -> Option<f32> {
     }
 }
 
-/// Sends a committed number to the core as an edit of the first selected object.
+/// What a number typed into component `axis` of `field` changes: that number of every selected
+/// object that has the field, and nothing else of it. An object keeps its other two numbers,
+/// which may differ from its neighbours'.
+pub fn edit_mutations(
+    snapshot: &ViewSnapshot,
+    field: &str,
+    axis: usize,
+    value: f32,
+) -> Vec<Mutation> {
+    snapshot
+        .selection
+        .iter()
+        .filter_map(|id| snapshot.document.object(id))
+        .filter_map(|object| {
+            let mut numbers = numbers_of(object, field)?;
+            numbers[axis % 3] = value;
+            Some(match field {
+                "translation" => Mutation::Transform {
+                    object: object.id.clone(),
+                    value: RigidTransform {
+                        translation_m: numbers,
+                        rotation_xyzw: object.local.rotation_xyzw,
+                    },
+                },
+                "rotation" => Mutation::Transform {
+                    object: object.id.clone(),
+                    value: RigidTransform {
+                        translation_m: object.local.translation_m,
+                        rotation_xyzw: quaternion_of(numbers),
+                    },
+                },
+                _ => Mutation::BoxExtents {
+                    object: object.id.clone(),
+                    value: numbers,
+                },
+            })
+        })
+        .collect()
+}
+
+/// Sends a committed number to the core as one edit of every selected object.
 fn commit_field(
     change: On<ValueChange<f32>>,
     inputs: Query<&FieldInput>,
@@ -396,50 +536,13 @@ fn commit_field(
     if input.value == change.value {
         return;
     }
-    let snapshot = editor.snapshot();
-    let Some(object) = snapshot
-        .selection
-        .first()
-        .and_then(|id| snapshot.document.object(id))
-    else {
+    let mutations = edit_mutations(&editor.snapshot(), &input.field, input.axis, change.value);
+    if mutations.is_empty() {
         return;
-    };
-    let mutation = match (input.field.as_str(), &object.data) {
-        ("translation", _) => {
-            let mut translation = object.local.translation_m;
-            translation[input.axis % 3] = change.value;
-            Mutation::Transform {
-                object: object.id.clone(),
-                value: RigidTransform {
-                    translation_m: translation,
-                    rotation_xyzw: object.local.rotation_xyzw,
-                },
-            }
-        }
-        ("rotation", _) => {
-            let mut degrees = euler_degrees(&object.local.rotation_xyzw);
-            degrees[input.axis % 3] = change.value;
-            Mutation::Transform {
-                object: object.id.clone(),
-                value: RigidTransform {
-                    translation_m: object.local.translation_m,
-                    rotation_xyzw: quaternion_of(degrees),
-                },
-            }
-        }
-        ("half_extents", ObjectData::Box { half_extents_m }) => {
-            let mut extents = *half_extents_m;
-            extents[input.axis % 3] = change.value;
-            Mutation::BoxExtents {
-                object: object.id.clone(),
-                value: extents,
-            }
-        }
-        _ => return,
-    };
+    }
     editor.submit_from_inspector(Command::Edit {
         label_key: "edit".into(),
-        mutations: vec![mutation],
+        mutations,
     });
 }
 
@@ -487,5 +590,84 @@ mod tests {
         assert!(shown.ends_with("20.0\u{b0}"), "{shown}");
         descriptor.mixed_selection = true;
         assert_eq!(shown_value(&descriptor, &descriptor.value), "\u{2014}");
+    }
+
+    /// The game's map with objects 1 and 2 selected, as the core shows it.
+    fn two_selected(change: impl FnOnce(&mut scene_data::SceneDocument)) -> ViewSnapshot {
+        let mut document = scene_data::current_map();
+        change(&mut document);
+        let selection = vec![
+            document.objects[1].id.clone(),
+            document.objects[2].id.clone(),
+        ];
+        let mut session = editor_core::EditorSession::new(document).unwrap();
+        let before = session.snapshot();
+        session
+            .submit(editor_core::CommandRequest {
+                request: 1,
+                session: before.session,
+                expected_revision: before.document_revision,
+                expected_inspector_revision: None,
+                command: Command::Select(selection),
+            })
+            .outcome
+            .unwrap();
+        (*session.snapshot()).clone()
+    }
+
+    fn descriptor<'a>(snapshot: &'a ViewSnapshot, field: &str) -> &'a FieldDescriptor {
+        snapshot
+            .inspector
+            .iter()
+            .find(|descriptor| descriptor.id == field)
+            .expect("the field is shown")
+    }
+
+    #[test]
+    fn only_the_numbers_the_selected_objects_differ_in_are_dashes() {
+        // Two boxes on the same height and depth, three metres apart along X.
+        let snapshot = two_selected(|document| {
+            document.objects[1].local.translation_m = [1.0, 2.0, -4.0];
+            document.objects[2].local.translation_m = [4.0, 2.0, -4.0];
+        });
+        let position = descriptor(&snapshot, "translation");
+        assert!(
+            position.mixed_selection,
+            "the core says the positions differ"
+        );
+        assert_eq!(mixed_axes(&snapshot, position), [true, false, false]);
+        assert_eq!(
+            several(snapshot.selection.len()).as_deref(),
+            Some("2 objects")
+        );
+        assert_eq!(several(1), None);
+    }
+
+    #[test]
+    fn a_field_the_core_calls_the_same_has_no_dash_whatever_the_objects_are() {
+        let snapshot = two_selected(|document| {
+            let place = document.objects[1].local.clone();
+            document.objects[2].local = place;
+        });
+        let position = descriptor(&snapshot, "translation");
+        assert!(!position.mixed_selection);
+        assert_eq!(mixed_axes(&snapshot, position), [false; 3]);
+    }
+
+    #[test]
+    fn a_typed_number_goes_to_every_selected_object_and_leaves_their_other_numbers() {
+        let snapshot = two_selected(|document| {
+            document.objects[1].local.translation_m = [1.0, 2.0, -4.0];
+            document.objects[2].local.translation_m = [4.0, 2.0, -4.0];
+        });
+        let mutations = edit_mutations(&snapshot, "translation", 1, 0.5);
+        let moved: Vec<[f32; 3]> = mutations
+            .iter()
+            .map(|mutation| match mutation {
+                Mutation::Transform { value, .. } => value.translation_m,
+                other => panic!("expected a transform, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(moved, [[1.0, 0.5, -4.0], [4.0, 0.5, -4.0]]);
     }
 }

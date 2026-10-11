@@ -891,6 +891,14 @@ impl Editor {
         self.submit(Command::Select(objects));
     }
 
+    /// A click on an object, in the hierarchy or in the 3D view. A plain click selects it
+    /// alone. With `additive`, as with Shift held, it joins the selection, or leaves it if it
+    /// was in it.
+    pub fn pick(&mut self, object: ObjectId, additive: bool) {
+        let selection = picked(&self.snapshot().selection, object, additive);
+        self.select(selection);
+    }
+
     pub fn undo(&mut self) {
         self.submit(Command::Undo);
     }
@@ -1439,6 +1447,26 @@ pub const LAYER_STARTS: [(&str, [f32; 4]); 5] = [
     ("Snow", [0.85, 0.87, 0.90, 1.0]),
 ];
 
+/// The selection after a click on `object`. A plain click leaves it alone in the selection. An
+/// additive one puts it in, or takes it out if it was there.
+///
+/// The order here is not kept: the core holds a selection as a set, in the order of the
+/// objects' IDs, and that is the order the snapshot gives it back in.
+pub fn picked(selection: &[ObjectId], object: ObjectId, additive: bool) -> Vec<ObjectId> {
+    if !additive {
+        return vec![object];
+    }
+    let mut picked: Vec<ObjectId> = selection
+        .iter()
+        .filter(|id| **id != object)
+        .cloned()
+        .collect();
+    if picked.len() == selection.len() {
+        picked.push(object);
+    }
+    picked
+}
+
 /// The landscape the landscape tools work on: the selected one, or else the level's first.
 pub fn landscape(snapshot: &ViewSnapshot) -> Option<(&ObjectRecord, &TerrainDocument)> {
     let terrain = |object: &'_ ObjectRecord| matches!(&object.data, ObjectData::Terrain(_));
@@ -1821,6 +1849,81 @@ mod tests {
         assert_eq!(PlayView::of(&editor).run_words(), "Stopped");
     }
 
+    /// The game's map with a landscape of two layers, the first covering the ground: sculpted
+    /// and painted ground as the game runs it. With `rule`, grass grows on it by a rule, which
+    /// the game does not run. Cooked, with a scripted game that would run.
+    fn with_landscape(folder: &std::path::Path, rule: bool) -> Editor {
+        let mut editor = Editor::new(
+            scene_data::current_map(),
+            folder.join("levels/map.level.json"),
+            folder.join("cooked"),
+        )
+        .unwrap();
+        editor.add_landscape(4, 1.0);
+        settle(&mut editor);
+        editor.add_layer();
+        settle(&mut editor);
+        editor.add_layer();
+        settle(&mut editor);
+        if rule {
+            editor.add_grass_rule().expect("the landscape takes a rule");
+            settle(&mut editor);
+        }
+        editor.cook();
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        editor.connect_play(Script::Runs.handle().unwrap());
+        editor
+    }
+
+    #[test]
+    fn a_level_with_ground_and_painted_layers_is_played() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_landscape(folder.path(), false);
+        editor.play_external();
+        until(&mut editor, "the game to run", |editor| {
+            run(editor) == RunView::Running
+        });
+        assert!(editor.last_end().is_none());
+        assert_eq!(editor.problem, None);
+    }
+
+    #[test]
+    fn a_level_whose_landscape_has_a_rule_is_refused_before_the_game_starts_and_says_why() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_landscape(folder.path(), true);
+        editor.play_external();
+        let mut ran = false;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while editor.last_end().is_none() {
+            editor.pump();
+            ran |= run(&editor) == RunView::Running;
+            assert!(std::time::Instant::now() < end, "the run never ended");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!ran, "a level the game cannot run was shown as running");
+        let ended = editor.last_end().unwrap();
+        assert_eq!(ended.primary.code, "play.start_failed");
+        let cause = ended.cause.as_ref().expect("the refusal keeps its cause");
+        assert_eq!(cause.code, "play.terrain_unsupported");
+        assert_eq!(
+            cause.parameters.get("reason").map(String::as_str),
+            Some("rules")
+        );
+        let notice = run_end_notice(&editor).expect("a refused start stays on screen");
+        assert_eq!(notice.title, "The game did not start");
+        assert!(
+            notice.remedy.contains("Remove the rules"),
+            "{}",
+            notice.remedy
+        );
+        // The cooked level itself is whole: it passed its check.
+        assert!(matches!(
+            editor.package_check(),
+            PackageCheck::Passed { .. }
+        ));
+    }
+
     #[test]
     fn a_game_that_cannot_be_launched_yet_is_said_so_and_never_shown_running() {
         let folder = tempfile::tempdir().unwrap();
@@ -2139,6 +2242,74 @@ mod tests {
         settle(&mut editor);
         assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
         assert_eq!(editor.problem, None);
+    }
+
+    #[test]
+    fn a_plain_click_selects_one_object_and_an_additive_one_adds_or_takes_out() {
+        let [a, b, c] = [1, 2, 3].map(ObjectId::from_u128);
+        assert_eq!(
+            picked(&[a.clone(), b.clone()], c.clone(), false),
+            std::slice::from_ref(&c)
+        );
+        assert_eq!(
+            picked(&[a.clone(), b.clone()], c.clone(), true),
+            [a.clone(), b.clone(), c.clone()]
+        );
+        // Picked again, it leaves.
+        assert_eq!(
+            picked(&[a.clone(), b.clone(), c.clone()], a.clone(), true),
+            [b.clone(), c.clone()]
+        );
+        assert_eq!(picked(&[], a.clone(), true), std::slice::from_ref(&a));
+        assert!(picked(std::slice::from_ref(&a), a.clone(), true).is_empty());
+    }
+
+    #[test]
+    fn picking_with_shift_gathers_a_selection_in_the_core_and_one_removal_takes_it_all() {
+        let mut editor = empty_level();
+        // Three boxes, each somewhere else: without a landscape a box goes to the fallback.
+        let mut ids: Vec<ObjectId> = Vec::new();
+        for number in 0..3 {
+            editor.add_box(&PlaceAt {
+                fallback: Vec3::new(number as f32 * 3.0, 0.0, 0.0),
+                ..down_at(0.0, 0.0)
+            });
+            settle(&mut editor);
+            let snapshot = editor.snapshot();
+            let new = snapshot
+                .document
+                .objects
+                .iter()
+                .find(|object| !ids.contains(&object.id))
+                .expect("the box was added");
+            ids.push(new.id.clone());
+        }
+        editor.pick(ids[0].clone(), false);
+        settle(&mut editor);
+        editor.pick(ids[2].clone(), true);
+        settle(&mut editor);
+        assert_eq!(
+            editor.snapshot().selection.to_vec(),
+            [ids[0].clone(), ids[2].clone()]
+        );
+        // The core says which fields differ between them: the position, not the size.
+        let mixed = |field: &str| {
+            editor
+                .snapshot()
+                .inspector
+                .iter()
+                .find(|descriptor| descriptor.id == field)
+                .is_some_and(|descriptor| descriptor.mixed_selection)
+        };
+        assert!(mixed("translation"));
+        assert!(!mixed("half_extents"));
+        editor.delete_selected();
+        settle(&mut editor);
+        assert_eq!(editor.snapshot().document.objects.len(), 1);
+        // One undo step brings both back.
+        editor.undo();
+        settle(&mut editor);
+        assert_eq!(editor.snapshot().document.objects.len(), 3);
     }
 
     #[test]

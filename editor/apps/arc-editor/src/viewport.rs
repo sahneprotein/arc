@@ -2,9 +2,16 @@
 //!
 //! The level is drawn from the core's snapshot: each box and spawn point of the document
 //! becomes a mesh here, found again by its stable ID. The view never changes the document.
-//! A click asks the core to select, and the highlight follows the core's answer. A drag on the
-//! gizmo is one transaction of the core: the view sends the values it has reached as a
-//! preview, and the release commits them as one undo step.
+//! A click asks the core to select, and the highlight follows the core's answer; with Shift
+//! held the clicked object joins the selection or leaves it. A drag on the gizmo is one
+//! transaction of the core: the view sends the values it has reached as a preview, and the
+//! release commits them as one undo step.
+//!
+//! The gizmo holds the first selected object that is drawn, in the core's order of the
+//! selection, which is by the objects' IDs and not by which was clicked last. With several
+//! selected, the others go with it as one rigid group: the same move, and the same turn about the held object.
+//! Snapping puts the held object on the grid and moves the others by exactly as much, so that
+//! what was built keeps its shape.
 //!
 //! The view is drawn straight to the window, in the rectangle the panels leave free. The
 //! engine's transform gizmo reads the window's cursor, so it needs the view's camera to draw
@@ -22,8 +29,8 @@ use bevy::{
     camera::{visibility::RenderLayers, NormalizedRenderTarget, Viewport},
     ecs::system::SystemParam,
     gizmos::transform_gizmo::{
-        TransformGizmoCamera, TransformGizmoFocus, TransformGizmoPlugin, TransformGizmoState,
-        TransformGizmoSystems,
+        TransformGizmoCamera, TransformGizmoFocus, TransformGizmoPlugin, TransformGizmoSettings,
+        TransformGizmoState, TransformGizmoSystems,
     },
     picking::pointer::PointerButton,
     platform::collections::HashMap,
@@ -38,8 +45,9 @@ use bevy::{
 };
 use editor_core::{Mutation, ObjectId, SceneDocument};
 use editor_ui::{
+    panels::hierarchy::adds_to_selection,
     theme::{color, feathers::to_color},
-    Editor, Modal, PlaceAt, Tool, ViewportSlot,
+    Editor, Modal, PlaceAt, Snap, Tool, ViewportSlot,
 };
 use landscape_render::{GrassRenderer, GroundRenderer, GroundTile};
 use scene_data::{ObjectData, ObjectRecord, RigidTransform};
@@ -65,6 +73,7 @@ impl Plugin for ViewportPlugin {
                     place_camera,
                     show_level,
                     show_ground,
+                    snap_turns,
                 ),
             )
             .add_systems(PostUpdate, drag_with_gizmo.after(TransformGizmoSystems))
@@ -637,8 +646,9 @@ fn show_level(
                 entity
             }
         };
-        // The gizmo holds the first selected object, unless the landscape tool is chosen.
-        if key.gizmo_allowed && snapshot.selection.first() == Some(&object.id) {
+        // The gizmo holds the first selected object that is drawn, unless the landscape tool
+        // is chosen.
+        if key.gizmo_allowed && held(document, &snapshot.selection) == Some(&object.id) {
             commands.entity(entity).insert(TransformGizmoFocus);
         } else {
             commands.entity(entity).remove::<TransformGizmoFocus>();
@@ -737,6 +747,7 @@ fn choose_landscape(
     tiles: Query<&GroundTile>,
     tool: Res<Tool>,
     gizmo: Res<TransformGizmoState>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut editor: NonSendMut<Editor>,
 ) {
     if click.button != PointerButton::Primary
@@ -747,7 +758,7 @@ fn choose_landscape(
         return;
     }
     if let Ok(tile) = tiles.get(click.entity) {
-        editor.select(vec![tile.object.clone()]);
+        editor.pick(tile.object.clone(), adds_to_selection(&keys));
     }
 }
 
@@ -770,7 +781,11 @@ fn choose(
     tiles: Query<&GroundTile>,
     camera: Single<(&Camera, &GlobalTransform), With<ViewCamera>>,
     mut ray_cast: MeshRayCast,
-    (gizmo, tool): (Res<TransformGizmoState>, Res<Tool>),
+    (gizmo, tool, keys): (
+        Res<TransformGizmoState>,
+        Res<Tool>,
+        Res<ButtonInput<KeyCode>>,
+    ),
     mut editor: NonSendMut<Editor>,
 ) {
     // A click that ends a drag on the gizmo, or lands on one of its handles, is not a choice;
@@ -798,16 +813,44 @@ fn choose(
                 .flatten()
                 .map(|tile| tile.object.clone())
         });
-    editor.select(vec![landscape_there.unwrap_or_else(|| object.0.clone())]);
+    editor.pick(
+        landscape_there.unwrap_or_else(|| object.0.clone()),
+        adds_to_selection(&keys),
+    );
 }
 
-/// What a drag on the gizmo means for the document: the object's new transform and, for a box
-/// that was scaled, its new size. The document has no scale; a scaled box is a bigger box.
-fn drag_mutations(
+/// The selected object the gizmo holds: the first that is drawn, in the order the core gives
+/// the selection in. A landscape and a group have nothing for the gizmo to hold on to.
+fn held<'a>(document: &SceneDocument, selection: &'a [ObjectId]) -> Option<&'a ObjectId> {
+    selection.iter().find(|id| {
+        document.object(id).is_some_and(|object| {
+            matches!(
+                object.data,
+                ObjectData::Box { .. } | ObjectData::Spawn { .. }
+            )
+        })
+    })
+}
+
+/// Whether an object above `object` in the hierarchy, however far up, is selected too. Such an
+/// object goes where that one goes and is not moved a second time.
+fn under_a_selected(
     document: &SceneDocument,
     object: &ObjectRecord,
-    world: &Transform,
-) -> Vec<Mutation> {
+    selection: &[ObjectId],
+) -> bool {
+    let mut above = parent_of(document, object);
+    while let Some(parent) = above {
+        if selection.contains(&parent.id) {
+            return true;
+        }
+        above = parent_of(document, parent);
+    }
+    false
+}
+
+/// The transform an object has under its parent when it is at `world` in the level.
+fn local_of(document: &SceneDocument, object: &ObjectRecord, world: &Transform) -> RigidTransform {
     let local = match parent_of(document, object) {
         Some(parent) => {
             let parent = world_transform(document, parent);
@@ -815,27 +858,113 @@ fn drag_mutations(
             Transform {
                 translation: inverse * (world.translation - parent.translation),
                 rotation: inverse * world.rotation,
-                scale: world.scale,
+                scale: Vec3::ONE,
             }
         }
         None => *world,
     };
-    let mut mutations = vec![Mutation::Transform {
-        object: object.id.clone(),
-        value: RigidTransform {
-            translation_m: local.translation.to_array(),
-            rotation_xyzw: local.rotation.normalize().to_array(),
-        },
-    }];
-    if let ObjectData::Box { half_extents_m } = &object.data
-        && world.scale != Vec3::ONE
+    RigidTransform {
+        translation_m: local.translation.to_array(),
+        rotation_xyzw: local.rotation.normalize().to_array(),
+    }
+}
+
+/// Where the gizmo's object is put when the gizmo has dragged it from `start` to `dragged`:
+/// there, or with snapping on the grid. `half_extents` is the size of a box, which a scale
+/// changes; the scale that comes back is the one that shows the size the box will have.
+///
+/// A turn is not changed here: the gizmo itself turns in steps (`snap_turns`).
+fn snapped(
+    snap: &Snap,
+    start: &Transform,
+    dragged: &Transform,
+    half_extents: Option<[f32; 3]>,
+) -> Transform {
+    let mut to = *dragged;
+    to.translation = snap.position(start.translation, dragged.translation);
+    if let Some(half) = half_extents
+        && snap.on
+        && dragged.scale != Vec3::ONE
     {
-        mutations.push(Mutation::BoxExtents {
+        let sized = snap.half_extents(half, dragged.scale);
+        to.scale = Vec3::from_array(sized) / Vec3::from_array(half);
+    }
+    to
+}
+
+/// What a drag on the gizmo means for the document. `held` is the object under the gizmo and
+/// `world` where the gizmo has put it; `document` is the level as it was when the drag began.
+///
+/// Every selected object goes with it as one rigid group: moved by as much as the held object
+/// was moved, and turned by as much about the held object's place. The distances between them
+/// stay what they were. An object under another selected one is left to follow that one. A
+/// landscape is not moved by the gizmo.
+///
+/// A scale makes every selected box bigger or smaller by the same factors, each about its own
+/// middle: the document has no scale, and a scaled box is a bigger box.
+fn drag_mutations(
+    document: &SceneDocument,
+    selection: &[ObjectId],
+    held: &ObjectRecord,
+    world: &Transform,
+    snap: &Snap,
+) -> Vec<Mutation> {
+    let start = world_transform(document, held);
+    // One move and one turn for the whole group. A drag that does not turn leaves every
+    // rotation exactly as it was.
+    let moved = world.translation - start.translation;
+    let turned = (world.rotation != start.rotation)
+        .then(|| (world.rotation * start.rotation.inverse()).normalize());
+    let mut mutations = Vec::new();
+    let selected = selection.iter().filter_map(|id| document.object(id));
+    for object in selected.clone() {
+        if matches!(object.data, ObjectData::Terrain(_))
+            || under_a_selected(document, object, selection)
+        {
+            continue;
+        }
+        let to = if object.id == held.id {
+            *world
+        } else {
+            let was = world_transform(document, object);
+            match turned {
+                Some(turn) => Transform {
+                    translation: world.translation + turn * (was.translation - start.translation),
+                    rotation: turn * was.rotation,
+                    scale: Vec3::ONE,
+                },
+                None => Transform {
+                    translation: was.translation + moved,
+                    ..was
+                },
+            }
+        };
+        mutations.push(Mutation::Transform {
             object: object.id.clone(),
-            value: (Vec3::from_array(*half_extents_m) * world.scale).to_array(),
+            value: local_of(document, object, &to),
         });
     }
+    if world.scale != Vec3::ONE {
+        for object in selected {
+            if let ObjectData::Box { half_extents_m } = &object.data {
+                mutations.push(Mutation::BoxExtents {
+                    object: object.id.clone(),
+                    value: snap.half_extents(*half_extents_m, world.scale),
+                });
+            }
+        }
+    }
     mutations
+}
+
+/// The gizmo turns in the steps of the snap setting while snapping is on. Moving and scaling
+/// are put on the grid by this view (`snapped`), which knows the level's grid and a box's size;
+/// the gizmo's own snapping of those counts steps from where the drag began.
+fn snap_turns(snap: Res<Snap>, mut gizmo: ResMut<TransformGizmoSettings>) {
+    let wanted = snap.angle_step();
+    if gizmo.snap_rotate != wanted {
+        gizmo.snap_rotate = wanted;
+    }
 }
 
 /// What the gizmo drag has done so far.
@@ -878,8 +1007,8 @@ fn cancel_reason(
 fn drag_with_gizmo(
     mut gizmo: ResMut<TransformGizmoState>,
     mut cancel: CancelInput,
-    mut objects: Query<(&Projected, &mut Transform)>,
-    mut editor: NonSendMut<Editor>,
+    mut objects: Query<(&Projected, &mut Transform, &mut GlobalTransform)>,
+    (snap, mut editor): (Res<Snap>, NonSendMut<Editor>),
     mut shown: ResMut<Shown>,
     mut drag: Local<GizmoDrag>,
     mut redraw: MessageWriter<RequestRedraw>,
@@ -888,7 +1017,7 @@ fn drag_with_gizmo(
     match (dragged, drag.held) {
         // The drag goes on.
         (Some(entity), _) => {
-            let Ok((projected, transform)) = objects.get(entity) else {
+            let Ok((projected, mut transform, mut global)) = objects.get_mut(entity) else {
                 return;
             };
             let reason = cancel_reason(
@@ -917,12 +1046,34 @@ fn drag_with_gizmo(
             if drag.held.is_none() {
                 editor.begin_drag();
             }
+            let snapshot = editor.snapshot();
+            let Some(object) = snapshot.document.object(&projected.0) else {
+                return;
+            };
+            // With snapping the object is put on the grid before it is drawn. The gizmo works
+            // each frame from where the drag began, so what is written here does not add up.
+            // The object has no parent in the view, and this runs after the engine has worked
+            // out where things are: what is drawn is set here as well.
+            if snap.on {
+                let half = match &object.data {
+                    ObjectData::Box { half_extents_m } => Some(*half_extents_m),
+                    _ => None,
+                };
+                let to = snapped(&snap, &gizmo.start_transform, &transform, half);
+                if *transform != to {
+                    *transform = to;
+                    *global = GlobalTransform::from(to);
+                }
+            }
             if drag.held.map(|(_, sent)| sent) != Some(*transform) {
                 drag.held = Some((entity, *transform));
-                let snapshot = editor.snapshot();
-                if let Some(object) = snapshot.document.object(&projected.0) {
-                    editor.preview_drag(drag_mutations(&snapshot.document, object, transform));
-                }
+                editor.preview_drag(drag_mutations(
+                    &snapshot.document,
+                    &snapshot.selection,
+                    object,
+                    &transform,
+                    &snap,
+                ));
             }
         }
         // The button was released.
@@ -930,7 +1081,7 @@ fn drag_with_gizmo(
             drag.held = None;
             editor.end_drag(true);
             // A scaled box becomes a bigger box: the mesh takes the size, the scale goes back.
-            if let Ok((_, mut transform)) = objects.get_mut(entity) {
+            if let Ok((_, mut transform, _)) = objects.get_mut(entity) {
                 transform.scale = Vec3::ONE;
             }
             shown.key = None;
@@ -961,12 +1112,190 @@ mod tests {
         scene_data::current_map()
     }
 
+    fn alone(object: &ObjectRecord) -> Vec<ObjectId> {
+        vec![object.id.clone()]
+    }
+
+    fn snapping() -> Snap {
+        Snap {
+            on: true,
+            ..default()
+        }
+    }
+
+    /// Three boxes of the map put where no grid line is, none under another, and their IDs.
+    fn off_grid() -> (SceneDocument, Vec<ObjectId>) {
+        let mut document = document();
+        let places = [[0.2, 1.37, -4.11], [3.33, 0.6, 2.05], [-5.71, 2.2, 0.49]];
+        let mut ids = Vec::new();
+        for (object, place) in document.objects.iter_mut().skip(1).zip(places) {
+            object.parent = None;
+            object.local.translation_m = place;
+            ids.push(object.id.clone());
+        }
+        (document, ids)
+    }
+
+    /// Where each of `ids` is after `mutations`, in the level.
+    fn places(
+        document: &SceneDocument,
+        ids: &[ObjectId],
+        mutations: &[Mutation],
+    ) -> Vec<Transform> {
+        let mut after = document.clone();
+        for mutation in mutations {
+            if let Mutation::Transform { object, value } = mutation {
+                let record = after
+                    .objects
+                    .iter_mut()
+                    .find(|record| record.id == *object)
+                    .expect("the object is in the level");
+                record.local = value.clone();
+            }
+        }
+        ids.iter()
+            .map(|id| world_transform(&after, after.object(id).unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn a_snapped_move_puts_the_held_object_on_the_grid_and_keeps_every_distance_in_the_group() {
+        let (document, ids) = off_grid();
+        let held = document.object(&ids[0]).unwrap();
+        let start = world_transform(&document, held);
+        // Dragged 1.17 m along X: the held object lands on the grid line at 1.5 m.
+        let dragged = Transform {
+            translation: start.translation + Vec3::new(1.17, 0.0, 0.0),
+            ..start
+        };
+        let to = snapped(&snapping(), &start, &dragged, None);
+        assert_eq!(to.translation, Vec3::new(1.5, 1.37, -4.11));
+        let mutations = drag_mutations(&document, &ids, held, &to, &snapping());
+        assert_eq!(mutations.len(), 3, "one transform an object, and no size");
+        let before = places(&document, &ids, &[]);
+        let after = places(&document, &ids, &mutations);
+        // One move for all of them, the held object's: where each stands from the held
+        // object is what it was.
+        for (was, is) in before.iter().zip(&after) {
+            let offset_was = was.translation - before[0].translation;
+            let offset_is = is.translation - after[0].translation;
+            assert!(
+                offset_was.distance(offset_is) < 1e-5,
+                "{offset_was} became {offset_is}"
+            );
+            // A rotation is written back as a unit quaternion, which the map's are only nearly.
+            assert!(
+                is.rotation.angle_between(was.rotation) < 1e-4,
+                "a move turns nothing"
+            );
+        }
+        // The others began off the grid and are not pulled onto it one by one.
+        assert_ne!(
+            after[1].translation.x,
+            snapping().position(Vec3::ZERO, after[1].translation).x
+        );
+    }
+
+    #[test]
+    fn a_turn_turns_the_group_as_one_about_the_held_object() {
+        let (document, ids) = off_grid();
+        let held = document.object(&ids[0]).unwrap();
+        let start = world_transform(&document, held);
+        let turn = Quat::from_rotation_y(15.0_f32.to_radians());
+        let to = Transform {
+            rotation: turn * start.rotation,
+            ..start
+        };
+        let mutations = drag_mutations(&document, &ids, held, &to, &snapping());
+        let before = places(&document, &ids, &[]);
+        let after = places(&document, &ids, &mutations);
+        assert_eq!(
+            after[0].translation, before[0].translation,
+            "the held object stays"
+        );
+        for (was, is) in before.iter().zip(&after) {
+            // Every object is turned by the same angle…
+            let by = (is.rotation * was.rotation.inverse()).normalize();
+            assert!(by.angle_between(turn) < 1e-4, "{by:?}");
+            // …and is as far from the held object, and from every other, as before.
+            for (other_was, other_is) in before.iter().zip(&after) {
+                let was = was.translation.distance(other_was.translation);
+                let is = is.translation.distance(other_is.translation);
+                assert!((was - is).abs() < 1e-4, "{was} became {is}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_object_under_a_selected_one_follows_it_and_is_not_moved_twice() {
+        let (mut document, ids) = off_grid();
+        document.objects[2].parent = Some(ids[0].clone());
+        let held = document.object(&ids[0]).unwrap();
+        let start = world_transform(&document, held);
+        let to = Transform {
+            translation: start.translation + Vec3::X,
+            ..start
+        };
+        let mutations = drag_mutations(&document, &ids, held, &to, &Snap::default());
+        let moved: Vec<&ObjectId> = mutations
+            .iter()
+            .map(|mutation| match mutation {
+                Mutation::Transform { object, .. } => object,
+                other => panic!("expected a transform, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            moved,
+            [&ids[0], &ids[2]],
+            "the child has no change of its own"
+        );
+        // In the level it has gone exactly as far as the others.
+        let before = places(&document, &ids, &[]);
+        let after = places(&document, &ids, &mutations);
+        for (was, is) in before.iter().zip(&after) {
+            assert!((is.translation - was.translation).distance(Vec3::X) < 1e-5);
+        }
+    }
+
+    #[test]
+    fn a_snapped_scale_shows_the_size_the_box_gets_and_sizes_every_selected_box() {
+        let (document, ids) = off_grid();
+        let held = document.object(&ids[0]).unwrap();
+        let ObjectData::Box { half_extents_m } = held.data else {
+            panic!("the map's objects are boxes");
+        };
+        let start = world_transform(&document, held);
+        let dragged = start.with_scale(Vec3::new(1.3, 1.0, 1.0));
+        let to = snapped(&snapping(), &start, &dragged, Some(half_extents_m));
+        let wide = snapping().half_extents(half_extents_m, dragged.scale)[0];
+        assert!((half_extents_m[0] * to.scale.x - wide).abs() < 1e-5);
+        assert_eq!(
+            (wide * 2.0 / 0.5).fract(),
+            0.0,
+            "a whole number of grid steps"
+        );
+        let mutations = drag_mutations(&document, &ids, held, &to, &snapping());
+        let sized = mutations
+            .iter()
+            .filter(|mutation| matches!(mutation, Mutation::BoxExtents { .. }))
+            .count();
+        assert_eq!(sized, 3);
+    }
+
+    #[test]
+    fn the_gizmo_holds_the_first_selected_object_that_is_drawn() {
+        let (document, ids) = off_grid();
+        assert_eq!(held(&document, &ids), Some(&ids[0]));
+        assert_eq!(held(&document, &[]), None);
+        assert_eq!(held(&document, &[ObjectId::from_u128(0xdead)]), None);
+    }
+
     #[test]
     fn a_moved_and_turned_object_becomes_one_transform_mutation() {
         let document = document();
         let ramp = &document.objects[1];
         let world = Transform::from_xyz(1.0, 2.0, 3.0).with_rotation(Quat::from_rotation_y(0.5));
-        let mutations = drag_mutations(&document, ramp, &world);
+        let mutations = drag_mutations(&document, &alone(ramp), ramp, &world, &Snap::default());
         assert_eq!(mutations.len(), 1);
         let Mutation::Transform { object, value } = &mutations[0] else {
             panic!("expected a transform");
@@ -988,7 +1317,7 @@ mod tests {
             panic!("the ramp is a box");
         };
         let world = world_transform(&document, ramp).with_scale(Vec3::new(2.0, 1.0, 0.5));
-        let mutations = drag_mutations(&document, ramp, &world);
+        let mutations = drag_mutations(&document, &alone(ramp), ramp, &world, &Snap::default());
         let Some(Mutation::BoxExtents { value, .. }) = mutations.get(1) else {
             panic!("expected new extents");
         };

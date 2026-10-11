@@ -33,6 +33,7 @@ use crate::{
         paint::{commit_layer_name, fill_layer_names, show_layers},
         play::show_play,
         rules::{fill_rule_fields, show_rules},
+        snap::{show_snap, snap_overlay},
         status::{show_status, status_bar},
         toolbar::{fold_toolbar, show_tool, toolbar},
         unsaved::{
@@ -41,7 +42,7 @@ use crate::{
     },
     session::{pump_editor, Editor, PumpEditor},
     theme::{feathers::ui_theme, size, spacing},
-    tool::{Brush, BrushAim, ChosenRule, PaintLayer, PlaceAt, Tool},
+    tool::{Brush, BrushAim, ChosenRule, PaintLayer, PlaceAt, Snap, Tool},
 };
 
 /// The node the application puts the 3D view in.
@@ -138,7 +139,7 @@ fn shell() -> impl Scene {
                         Node { flex_grow: 1.0, min_width: px(0) }
                         Pickable { should_block_lower: false, is_hoverable: true }
                         ViewportSlot
-                        Children [ empty_hint(), notice() ]
+                        Children [ empty_hint(), notice(), snap_overlay() ]
                     ),
                     inspector_panel(),
                     brush_panel(),
@@ -300,6 +301,7 @@ impl Plugin for EditorUiPlugin {
             .insert_resource(ui_theme())
             .init_resource::<PanelChoice>()
             .init_resource::<Tool>()
+            .init_resource::<Snap>()
             .init_resource::<Brush>()
             .init_resource::<BrushAim>()
             .init_resource::<PlaceAt>()
@@ -335,7 +337,7 @@ impl Plugin for EditorUiPlugin {
                     show_empty_hint,
                     (level_dialog_keys, forget_name_problem, show_level_dialog).chain(),
                     (mark_menu_open, mark_modal).chain(),
-                    (fold_toolbar, show_tool, show_play),
+                    (fold_toolbar, show_tool, show_snap, show_play),
                     (keys_show_row_focus, show_row_focus).chain(),
                     hide_idle_scrollbars,
                     (
