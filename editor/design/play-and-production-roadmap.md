@@ -1,16 +1,35 @@
 # Play and Stop, and how the editor's features are grouped
 
-A proposal, 2026-10-09, brought up to date on 2026-10-10 with what has been built since.
-Nothing proposed in it is decided. It has two parts: how starting and stopping the game should look and behave in the editor, and how
+A proposal, 2026-10-09, brought up to date on 2026-10-10 and 2026-10-11 with what has been
+built since. Nothing proposed in it is decided. It has two parts: how starting and stopping the game should look and behave in the editor, and how
 the editor's features should be grouped as it grows into the production tool for a zoned
 online game with real-time combat. Each part says first what exists today and then what is
 proposed, and the two are never mixed in one table.
 
+Progress, 2026-10-11. P1 of 1.11 is built: "Open Game Window" starts the game on the cooked
+level, in its own window, and Stop ends it.
+
+- The editor's side is on the branch `codex/play-backend`: the Play coordinator in the editor
+  core, and the control, status bar, notices and closing flow in the UI.
+- The game's side is on the branch `codex/play-readiness`: the game's server and client
+  report their readiness steps to the editor and take its Stop.
+- Both branches are local to the development machine and merged nowhere. Neither is pushed.
+- Checked: the editor's full scripted suite passes, 210 of 210 cases, with a scripted
+  stand-in in the game's place. The editor core's live smoke, with the real server and client
+  on a cooked level, reached Running with the client's steps "level drawn" and "first
+  controllable frame" measured, then stopped on request, and both processes ended by
+  themselves and were collected.
+- Not checked: the editor's own window has not been used to start the real game, and the new
+  states have not been looked at on screen.
+
+Sections 1.3 to 1.8 remain the design. What of them is built is said in 1.1 and 1.11; "Preview
+in Editor" (P2), the play settings of 1.9 and all of Part 2's groupings are proposals as before.
+
 Sources:
 
 - `crates/editor-services/docs/play-boundary.md`: the agreed contract between the UI and the
-  editor core for Play. Its first half is implemented (checking a cooked package); its second
-  half is a documented seam and not code.
+  editor core for Play. Both halves are implemented on `codex/play-backend`: checking a
+  cooked package, and the lifecycle of a run in the game's own window.
 - The Claude Design system "Arc Editor": the pages PlayControl, Menu, StatusBar, Notice and
   Dialog, and `layouts.md`; the canvas boards "Play: the control in each state", "Playing:
   preview in the editor", "Playing: the game in its own window", "Closing the editor during
@@ -18,10 +37,12 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-workflow`.
+- The editor as it is on the branch `codex/play-backend`, which continues
+  `codex/play-workflow`. Local, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
-  branch's own account in `docs/cooked-package-runtime.md`. It is not merged into the game's
-  `main`.
+  branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`,
+  which continues it. Neither is merged into the game's `main`; `codex/play-readiness` is
+  local.
 
 Words used here. The **open level** is the level as it is in the editor now, with every
 change made to it; the **saved file** is what the last Save wrote, and the two differ while
@@ -41,22 +62,28 @@ editor, from the request to the end of its cleanup.
 |---|---|---|
 | Cook | editor | Built. Level menu and the Play menu's foot; the status bar names the cooked level |
 | Checking a cooked package (`VerifyPackage`, `VerifiedPackageReceipt`) | editor core and UI | Built. Asked for from the Play menu's row "Check cooked level"; a refusal is a notice in words, and Stop cancels a check that is running |
-| The Play control (P0 of 1.11) | editor UI | Built. At the right end of the toolbar at every width. Its menu holds the two ways to play, switched off, with the reason in its foot; the foot names the cooked level, says when the level has moved on from it, and offers "Cook" or "Cook first". It never shows a game as starting or running |
+| The Play control (P0 of 1.11) | editor UI | Built. At the right end of the toolbar at every width. Its menu holds the two ways to play; the foot names the cooked level, says when the level has moved on from it, and offers "Cook" or "Cook first" |
 | The game running a cooked level | game, branch `codex/cooked-level-play` | Built for levels of boxes and spawn points. Server, client and `cargo xtask run-local` take `--cooked-package <folder> --cooked-package-hash <manifest hash>`. Each process verifies the package itself before it opens a port or a window, and builds collision, spawn points and the client's boxes from it |
 | The same level on both sides | game, the same branch | Built. The client's hello carries the hash of the package's manifest, the server accepts only its own, and the client checks the hash the server answers with. A cooked level against the built-in one, or against another cooked level, is refused before a character exists |
 | Landscape in the game | game | Not built. A cooked level that has a landscape is refused when the game starts, in words; nothing is dropped silently |
-| Starting the game from the editor | editor core | Not built: no Play coordinator (`StartPlay`, `StopPlay`, `play_snapshot`, the waker), no process launch or supervision, no readiness reported back. This is P1 |
-| Running the game inside the editor's view | editor and game | Not built. P2 |
+| Starting the game from the editor (P1) | editor core, branch `codex/play-backend` (local, not merged) | Built for the game's own window. A Play coordinator starts one server and one client on the checked cooked level, reports each step they reach, stops them on request, and says how the run ended and whether each process was seen to end. A level with a landscape, or without a spawn point, is refused before anything is started |
+| Open Game Window in the UI (P1) | editor UI, the same branch | Built. The control reads "Starting", "Game window open" and "Stopping"; Stop is beside it and also cancels a check or a start. The status bar names the steps reached and an end the person asked for; an end nobody asked for is a notice that stays, and a process that was started and never seen to end is a second notice. Closing the editor during a run stops the game first. The editor does not redraw while a game runs; the coordinator wakes it. The game's folder is named with `--game <folder>`; without it the control says no game is set up |
+| The game reporting readiness and taking Stop | game, branch `codex/play-readiness` (local, not merged) | Built. Server and client, started by the editor, report their steps over a local connection and stop when told; the client says when its window was closed by the player |
+| Of the design below, not built in P1 | editor UI | "Open log" and "Play again" on a notice; "Cook and play again" when the level moves on during a run; the box in the 3D view saying a game window is open; the keys of 1.12 |
+| Running the game inside the editor's view | editor and game | Not built. P2. "Preview in Editor" is in the menu, switched off, with the reason |
 | Design | Claude Design | Drawn: five boards and the PlayControl page. P0 follows them where it can; the Play menu is as wide as any menu, because the design has no token for the wider menu it draws |
 
-So the two ends exist and the link between them does not. A person can cook in the editor
-and have the cooked level checked; the game's `run-local` takes a cooked level's folder and
-hash on its command line. Nothing in the editor starts the game yet, and the two have not
-been run together.
+So the two ends are joined for the game's own window. A person can cook in the editor, have
+the cooked level checked, and start and stop the game on it from the Play control.
 
-What the game branch says of itself, and this note does not claim more: its loader and
-handshake tests pass; it has not been run live against a package cooked by the editor, has
-not been looked at on screen, and has not been through the game's full checks.
+What has been run, and this note does not claim more. The editor's scripted suite, 210 of
+210 cases, plays the whole of this through the built editor with a scripted stand-in for the
+game's processes. The editor core's live smoke ran the real server and client on a package
+cooked by the editor: the run reached Running with "level drawn" and "first controllable
+frame" measured, was stopped on request, and both processes ended with status 0 and were
+collected. The two have not been put together: nobody has yet started the real game from the
+editor's window, and the new states have not been looked at on screen. Neither repository has
+been through its full checks with these branches, and the process launch works on Unix only.
 
 ### 1.2 What the contract fixes, in the UI's terms
 
@@ -211,7 +238,10 @@ not change its hashes. Each is a separate piece of work and none is needed for t
 Already in the contract: the two control requests with one answer each, `play_snapshot()`,
 the waker, the outcome codes with exit facts and the log's path, and the receipt.
 
-Asked for in addition, for the core's writer to accept or change:
+Asked for in addition. As of 2026-10-11 the core on `codex/play-backend` delivers 1, 4, 5 and
+6, and 3 for one server and one client. For 2 it holds the run's own package identity; the UI
+still makes the comparison with the open level. Bots and several clients (the rest of 3)
+belong to 1.9 and are not built.
 
 1. The readiness steps of 1.6 as facts in the play status, each with the process it belongs
    to and absent until measured.
@@ -240,7 +270,7 @@ editor did not cook it, does the editor show the simulation data's hash instead.
 | Step | The person gets | Needs |
 |---|---|---|
 | P0, built | The Play control with its menu and foot; "Cook first"; "Checking" against the real `VerifyPackage`; the two ways to play shown as not available yet, with the reason | nothing new from the core |
-| P1 | Open Game Window: Starting, Running, Stop, every end of 1.7, closing during a run | in the editor core: the coordinator, process launch and supervision, readiness (1.10). In the game: nothing more for levels of boxes and spawn points, once its branch is merged; landscape for levels that have one |
+| P1, built on `codex/play-backend` and `codex/play-readiness` (both local, not merged) | Open Game Window: Starting, Running, Stop, every end of 1.7, closing during a run. Left for later: "Open log", "Play again", "Cook and play again", the box in the 3D view | merging the two branches; in the game, landscape for levels that have one |
 | P2 | Preview in Editor: the game in the 3D view, the pointer handed over and back | the game's client able to run inside the editor's window |
 | P3 | Play settings of 1.9, one at a time | per setting, see its row |
 
@@ -267,17 +297,19 @@ otherwise.
 | Hierarchy | A foldable tree. Nesting exists in the level and the core; the UI has no gesture for it |
 | Landscape | Add a landscape of four tiles; sculpt (raise, lower, smooth, flatten); layers and painting; rules: grass scattered on a layer, a layer that fills on steep ground |
 | Window | One toolbar row with menus, side panels that give way in a narrow window, status bar, notices |
-| Play | The control with its menu: cook, the cooked level named and checked on disk. It cannot start the game (Part 1) |
-| Checks | Scripted cases that play input into the built editor, and start-up timings in the log |
+| Play | The control with its menu: cook, the cooked level named and checked on disk, and the game started in its own window and stopped (Part 1). On `codex/play-backend`, local and not merged |
+| Checks | Scripted cases that play input into the built editor, with a scripted stand-in for the game where a case needs one, and start-up timings in the log |
 
-Outside the editor, on the game's branch `codex/cooked-level-play`: the game runs a cooked
-level of boxes and spawn points, and server and client refuse each other unless they hold
-the same one. A level with a landscape is refused there.
+Outside the editor, on the game's branches `codex/cooked-level-play` and, continuing it,
+`codex/play-readiness` (local, not merged): the game runs a cooked level of boxes and spawn
+points, server and client refuse each other unless they hold the same one, and both report
+their readiness to an editor that started them. A level with a landscape cannot be played:
+the editor refuses to start it.
 
 Not there at all: assets of any kind, materials and textures, prefabs, several selected
 objects, snapping, groups from the UI, anything about gameplay beyond a spawn point. Play
-is there in part: its controls in the editor and the game's side of it exist, and starting
-the game from the editor, which joins them, does not.
+is there in part: the game in its own window is; the game inside the editor's view and the
+play settings of 1.9 are not.
 
 ### 2.2 The grouping (proposed)
 
@@ -295,7 +327,7 @@ its own right-hand panel. The hierarchy, the view, the status bar and Play are s
 | **Gameplay** | what the server acts on | spawn point (as an object) | volumes and markers with a meaning: zone exit to another zone, safe area, trigger, spawner for non-player characters, resource node, patrol path; walkable-area preview |
 | **Combat** | whether a place fights well | nothing | cover and sightline overlays from chosen points; distance rings for weapon ranges; spawn-to-spawn sight check; height advantage tint |
 | **Assets** | what the level is made from | nothing | browser, import and reimport, a model placed as an object, materials |
-| **Play** (the Play control, not a tool) | running the level | cook, the cooked level named and checked; the game, started by hand, runs a cooked level of boxes and spawn points | starting and stopping the game from the editor, then the rest of Part 1 |
+| **Play** (the Play control, not a tool) | running the level | cook, the cooked level named and checked; the game started in its own window and stopped, for a level of boxes and spawn points | the rest of Part 1: the game in the editor's view, play settings |
 | **Review** | whether the level is fit to ship | status bar, notices | a problems list from the core's validation; what a change did to the simulation hash; cost readouts for grass and tiles; a summary of changes since the last save for a commit message |
 
 Why these and not a list by technology: a person building a zone thinks "place things",
@@ -341,7 +373,7 @@ workspace's "what did this change do" is this table applied to the last edit.
 
 | Order | Step | Waits for |
 |---|---|---|
-| 1 | Play P1 (P0 is built) | the editor core's coordinator and process launch; the game's branch merged |
+| 1 | Play P1: built, on local branches (see the progress note) | merging `codex/play-backend` and the game's `codex/play-readiness` |
 | 2 | Objects: several selected, snapping, reparent by drag, turn to slope | nothing outside the editor; the core has reparenting |
 | 3 | Review: problems list, change summary | the core's validation codes, which exist |
 | 4 | Gameplay: zone exit, safe area, trigger as cooked volumes | the game's multi-zone and gateway work giving them a meaning; the format can come first |
@@ -351,7 +383,7 @@ workspace's "what did this change do" is this table applied to the last edit.
 | 8 | Prefabs with overrides | the core's reference and override model |
 
 Steps 2, 3 and 6 need nothing from the game and little from the core, so they are what the
-UI side can do while the game integration is being built.
+UI side can do next.
 
 ### 2.6 Not proposed
 
