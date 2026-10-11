@@ -207,7 +207,11 @@ Metrics also bind loopback port 0. The development key is explicitly local and
 inherited `ARC_PRIVATE_KEY` is removed for this pair.
 
 Revalidation compares every pinned identity field and consumes decoded payloads
-from those same reads. Ground or visual terrain, no spawns, or runtime limits fail
+from those same reads. Cooked ground and authored terrain paint (blend weights and
+masks) are inside the runtime subset. Procedural terrain is not: a package whose
+visual terrain carries rules, decoration or derived layers fails with
+`play.terrain_unsupported { reason, count }` naming the first such kind. No spawns
+(`play.spawn_required`) and runtime limits (`play.runtime_limit`) fail likewise, all
 before spawning. Children independently verify the expected manifest/payload
 hashes at consumption, then their existing gameplay handshake compares package
 identity and game fingerprint. The receipt remains an attestation, not a lock.

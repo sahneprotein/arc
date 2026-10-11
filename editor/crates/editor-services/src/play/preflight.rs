@@ -1,5 +1,5 @@
 use crate::{package::verify_package_payloads, VerifiedPackageReceipt};
-use scene_data::Diagnostic;
+use scene_data::{Diagnostic, SimulationPayload, VisualPayload};
 use std::sync::atomic::AtomicBool;
 pub(crate) fn verify(
     receipt: &VerifiedPackageReceipt,
@@ -7,26 +7,53 @@ pub(crate) fn verify(
 ) -> Result<(), Diagnostic> {
     let (_, simulation, visual) =
         verify_package_payloads(receipt.path(), Some(receipt.identity()), cancel)?;
-    capabilities(
-        simulation.ground.len(),
-        visual.terrain.len(),
-        simulation.spawns.len(),
-        simulation.boxes.len(),
-    )
+    capabilities(&Subset::of(&simulation, &visual))
 }
-fn capabilities(
-    ground: usize,
-    terrain: usize,
+/// What of a verified package decides whether the game runtime can run it. The
+/// payloads themselves were validated by the same read that produced them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Subset {
     spawns: usize,
     boxes: usize,
-) -> Result<(), Diagnostic> {
-    if ground != 0 || terrain != 0 {
-        return Err(Diagnostic::new("play.terrain_unsupported"));
+    /// Procedural terrain content across all visual terrain: rule definitions,
+    /// scattered decoration instances and rule-derived layers.
+    rules: usize,
+    decoration: usize,
+    derived_layers: usize,
+}
+impl Subset {
+    fn of(simulation: &SimulationPayload, visual: &VisualPayload) -> Self {
+        let sum = |count: fn(&scene_data::VisualTerrain) -> usize| -> usize {
+            visual.terrain.iter().map(count).sum()
+        };
+        Self {
+            spawns: simulation.spawns.len(),
+            boxes: simulation.boxes.len(),
+            rules: sum(|terrain| terrain.rules.len()),
+            decoration: sum(|terrain| terrain.decoration.len()),
+            derived_layers: sum(|terrain| terrain.derived_layers.len()),
+        }
     }
-    if spawns == 0 {
+}
+/// The runtime runs cooked ground collision and authored terrain paint (blend
+/// weights and masks). It does not run procedural terrain: a package carrying
+/// rules, decoration or derived layers is refused before any child is spawned,
+/// with the first unsupported kind as `reason`.
+fn capabilities(subset: &Subset) -> Result<(), Diagnostic> {
+    let unsupported = [
+        ("rules", subset.rules),
+        ("decoration", subset.decoration),
+        ("derived_layers", subset.derived_layers),
+    ];
+    if let Some((reason, count)) = unsupported.into_iter().find(|(_, count)| *count != 0) {
+        return Err(Diagnostic::new("play.terrain_unsupported")
+            .with("reason", reason)
+            .with("count", count));
+    }
+    if subset.spawns == 0 {
         return Err(Diagnostic::new("play.spawn_required"));
     }
-    if boxes > 100_000 || spawns > 100_000 {
+    if subset.boxes > 100_000 || subset.spawns > 100_000 {
         return Err(Diagnostic::new("play.runtime_limit"));
     }
     Ok(())
@@ -80,22 +107,137 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn runtime_subset_rejects_ground_visual_terrain_missing_spawns_and_limits() {
-        assert!(capabilities(0, 0, 1, 1).is_ok());
-        for (ground, terrain) in [(1, 0), (0, 1), (1, 1)] {
-            assert_eq!(
-                capabilities(ground, terrain, 1, 1).unwrap_err().code,
-                "play.terrain_unsupported"
-            );
+    use scene_data::{DerivedTerrainLayer, StableId, VisualTerrain, COOK_SCHEMA};
+
+    fn playable() -> Subset {
+        Subset {
+            spawns: 1,
+            boxes: 1,
+            ..Subset::default()
         }
+    }
+    fn terrain(derived_layers: Vec<DerivedTerrainLayer>) -> VisualTerrain {
+        VisualTerrain {
+            rules: Vec::new(),
+            decoration: Vec::new(),
+            derived_layers,
+            surface_group: None,
+            object: StableId::from_u128(1),
+            layers: Vec::new(),
+            tiles: Vec::new(),
+        }
+    }
+    fn payloads(terrain: Vec<VisualTerrain>) -> (SimulationPayload, VisualPayload) {
+        (
+            SimulationPayload {
+                schema: COOK_SCHEMA,
+                profile: String::new(),
+                boxes: Vec::new(),
+                spawns: Vec::new(),
+                ground: Vec::new(),
+            },
+            VisualPayload {
+                schema: COOK_SCHEMA,
+                terrain,
+            },
+        )
+    }
+
+    #[test]
+    fn runtime_subset_rejects_missing_spawns_and_limits() {
+        assert!(capabilities(&playable()).is_ok());
         assert_eq!(
-            capabilities(0, 0, 0, 1).unwrap_err().code,
+            capabilities(&Subset {
+                spawns: 0,
+                ..playable()
+            })
+            .unwrap_err()
+            .code,
             "play.spawn_required"
         );
         assert_eq!(
-            capabilities(0, 0, 1, 100_001).unwrap_err().code,
+            capabilities(&Subset {
+                boxes: 100_001,
+                ..playable()
+            })
+            .unwrap_err()
+            .code,
             "play.runtime_limit"
         );
+    }
+
+    #[test]
+    fn runtime_subset_rejects_each_procedural_terrain_kind_with_its_reason() {
+        for (reason, subset) in [
+            (
+                "rules",
+                Subset {
+                    rules: 1,
+                    ..playable()
+                },
+            ),
+            (
+                "decoration",
+                Subset {
+                    decoration: 3,
+                    ..playable()
+                },
+            ),
+            (
+                "derived_layers",
+                Subset {
+                    derived_layers: 2,
+                    ..playable()
+                },
+            ),
+        ] {
+            let refused = capabilities(&subset).unwrap_err();
+            assert_eq!(refused.code, "play.terrain_unsupported", "{reason}");
+            assert_eq!(
+                refused.parameters.get("reason").map(String::as_str),
+                Some(reason)
+            );
+        }
+        // Unsupported terrain is reported before a missing spawn: it names what
+        // must change in the level's landscape first.
+        let refused = capabilities(&Subset {
+            rules: 1,
+            spawns: 0,
+            ..playable()
+        })
+        .unwrap_err();
+        assert_eq!(refused.code, "play.terrain_unsupported");
+    }
+
+    #[test]
+    fn cooked_ground_and_authored_paint_are_inside_the_runtime_subset() {
+        // Terrain with layers/tiles but nothing procedural counts as nothing
+        // unsupported: only spawns and limits remain to be judged.
+        let (simulation, visual) = payloads(vec![terrain(Vec::new()), terrain(Vec::new())]);
+        let subset = Subset::of(&simulation, &visual);
+        assert_eq!(subset, Subset::default());
+        assert!(capabilities(&Subset {
+            spawns: 1,
+            ..subset
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn procedural_content_is_counted_across_every_visual_terrain() {
+        let derived = |tile: u128| DerivedTerrainLayer {
+            rule: StableId::from_u128(10),
+            layer: StableId::from_u128(11),
+            tile: StableId::from_u128(tile),
+            side_samples: 2,
+            weights: vec![0.0; 4],
+        };
+        let (simulation, visual) = payloads(vec![
+            terrain(Vec::new()),
+            terrain(vec![derived(1), derived(2)]),
+        ]);
+        let subset = Subset::of(&simulation, &visual);
+        assert_eq!(subset.derived_layers, 2);
+        assert_eq!((subset.rules, subset.decoration), (0, 0));
     }
 }
