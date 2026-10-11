@@ -234,7 +234,12 @@ two='selection=2'
 apart='offsets=\[\[0\.0, 0\.0, 0\.0\], \[3\.0, -0\.35, 0\.0\]\]'
 both_home='places=\[\[0\.0, 0\.5, -8\.0\], \[3\.0, 0\.15, -8\.0\]\]'
 check multi-rows      'click-row=11,shift-click-row=12'   "$two" 'selected=Some\("Tall box"\)' 'several=Some\("2 objects"\)' 'dashes=Some\(\[true, true, false\]\)'
-check multi-row-off   'click-row=11,shift-click-row=12,shift-click-row=11' 'selection=1' 'selected=Some\("Low box"\)' 'several=None' 'dashes=Some\(\[false, false, false\]\)'
+# A Shift-click on a selected row does the next thing: on the row the gizmo is on, which is
+# the one clicked last, it takes that object out; on another selected row it moves the gizmo
+# there and both stay selected.
+check multi-row-off   'click-row=11,shift-click-row=12,shift-click-row=12' 'selection=1' 'selected=Some\("Tall box"\)' 'several=None' 'dashes=Some\(\[false, false, false\]\)'
+check multi-row-active 'click-row=11,shift-click-row=12,shift-click-row=11' "$two" 'several=Some\("2 objects"\)' 'dashes=Some\(\[true, true, false\]\)'
+check multi-row-active-off 'click-row=11,shift-click-row=12,shift-click-row=11,shift-click-row=11' 'selection=1' 'selected=Some\("Low box"\)' 'several=None'
 # In the 3D view the two are the Wall and the Tall box, which stand clear of each other's
 # gizmo. The Low box and the Pillar are seen behind the X and Y handles of the gizmo on the
 # Tall box, and a click on a handle is a hold on the gizmo and no choice. The core gives a

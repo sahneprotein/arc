@@ -50,7 +50,12 @@ pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
         ),
         "duplicate.terrain_unsupported" => (
             "A landscape cannot be duplicated",
-            "Take the landscape out of the selection and duplicate the rest.",
+            "The selection includes one. Change the selection and duplicate again.",
+        ),
+        "duplicate.order_limit" => (
+            "The level has no number left for a copy",
+            "The last place under that parent, or the last spawn point number, is taken. \
+             Remove an object there and duplicate again.",
         ),
         "duplicate.incomplete"
         | "duplicate.sources"

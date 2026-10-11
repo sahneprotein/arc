@@ -279,7 +279,10 @@ pub fn duplicate_reason(offer: DuplicateOffer) -> &'static str {
         DuplicateOffer::Offered => "",
         DuplicateOffer::NothingSelected => "Select what to duplicate.",
         DuplicateOffer::Landscape => {
-            "A landscape cannot be duplicated. Take it out of the selection."
+            "The selection includes a landscape. Change the selection before duplicating."
+        }
+        DuplicateOffer::NoNumberLeft => {
+            "The level has no number left for a copy. Remove an object first."
         }
     }
 }
@@ -531,6 +534,7 @@ mod tests {
         assert_eq!(duplicate_reason(DuplicateOffer::Offered), "");
         assert!(duplicate_reason(DuplicateOffer::NothingSelected).contains("Select"));
         assert!(duplicate_reason(DuplicateOffer::Landscape).contains("landscape"));
+        assert!(duplicate_reason(DuplicateOffer::NoNumberLeft).contains("no number left"));
     }
 
     #[test]

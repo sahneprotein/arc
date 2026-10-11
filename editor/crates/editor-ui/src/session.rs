@@ -976,17 +976,17 @@ impl Editor {
     pub fn duplicate_selected(&mut self) {
         let snapshot = self.snapshot();
         match duplicate_specs(&snapshot, || self.fresh_id()) {
-            Some(copies) => self.submit(Command::DuplicateObjects {
+            Ok(copies) => self.submit(Command::DuplicateObjects {
                 copies,
                 label_key: "duplicate".into(),
             }),
-            None if snapshot.selection.is_empty() => {}
-            // Asked for with the key, where no row of a menu is off to say why: said as the
-            // core would say it. Nothing was asked of the core.
-            None => self.report(
-                Source::Command,
-                Err(Diagnostic::new("duplicate.terrain_unsupported")),
-            ),
+            // Asked for with the key, where no row of a menu is off to say why: said as a
+            // problem, each by its own code. Nothing was asked of the core.
+            Err(refused) => {
+                if let Some(code) = refused.code() {
+                    self.report(Source::Command, Err(Diagnostic::new(code)));
+                }
+            }
         }
     }
 
@@ -1731,13 +1731,17 @@ pub fn picked(
     if selection.len() > 1 && active != Some(&object) {
         return Picked::Active(object);
     }
-    Picked::Selection(
-        selection
-            .iter()
-            .filter(|id| **id != object)
-            .cloned()
-            .collect(),
-    )
+    // The object the gizmo is on leaves. The gizmo goes to the first that stays, in the
+    // snapshot's order; the core puts it on the last it is given, so that one is given last.
+    let mut left: Vec<ObjectId> = selection
+        .iter()
+        .filter(|id| **id != object)
+        .cloned()
+        .collect();
+    if !left.is_empty() {
+        left.rotate_left(1);
+    }
+    Picked::Selection(left)
 }
 
 /// Whether the selection can be duplicated, and if not, why not.
@@ -1747,16 +1751,37 @@ pub enum DuplicateOffer {
     NothingSelected,
     /// A landscape is selected, or is under something selected.
     Landscape,
+    /// The level has no number left for a copy: the last place under a parent, or the last
+    /// order of a spawn point, is taken.
+    NoNumberLeft,
+}
+
+impl DuplicateOffer {
+    /// The code a refusal is reported by when it was asked for all the same, with the key.
+    /// With nothing selected there is nothing to report.
+    pub fn code(self) -> Option<&'static str> {
+        match self {
+            Self::Offered | Self::NothingSelected => None,
+            Self::Landscape => Some("duplicate.terrain_unsupported"),
+            Self::NoNumberLeft => Some("duplicate.order_limit"),
+        }
+    }
 }
 
 /// Whether "Duplicate" can be chosen for this selection.
 pub fn duplicate_offer(snapshot: &ViewSnapshot) -> DuplicateOffer {
-    if snapshot.selection.is_empty() {
-        DuplicateOffer::NothingSelected
-    } else if duplicate_specs(snapshot, || ObjectId::from_u128(1)).is_some() {
-        DuplicateOffer::Offered
-    } else {
-        DuplicateOffer::Landscape
+    match duplicate_specs(snapshot, || ObjectId::from_u128(1)) {
+        Ok(_) => DuplicateOffer::Offered,
+        Err(refused) => refused,
+    }
+}
+
+/// The number after the highest of `taken`, or zero when none is taken. `None` when the
+/// highest is the last there is.
+fn number_after(taken: impl Iterator<Item = u32>) -> Option<u32> {
+    match taken.max() {
+        Some(highest) => highest.checked_add(1),
+        None => Some(0),
     }
 }
 
@@ -1786,24 +1811,24 @@ fn copy_name(name: &str) -> String {
 /// last child, and is called after it. What is under a root is copied as it is, under the
 /// copy. A spawn point's copy gets the next order no spawn point has.
 ///
-/// `None` when nothing is selected, and when a landscape is among what would be copied: the
-/// core copies none, and a copy of everything but the landscape is not what was asked for.
+/// Refused, with the reason, when nothing is selected; when a landscape is among what would
+/// be copied, because the core copies none and a copy of everything but the landscape is not
+/// what was asked for; and when the level has no number left for a copy. The reason is never
+/// [`DuplicateOffer::Offered`].
 pub fn duplicate_specs(
     snapshot: &ViewSnapshot,
     mut fresh: impl FnMut() -> ObjectId,
-) -> Option<Vec<DuplicateObject>> {
+) -> Result<Vec<DuplicateObject>, DuplicateOffer> {
     let document = &snapshot.document;
-    let mut next_spawn = document
-        .objects
-        .iter()
-        .filter_map(|object| match object.data {
-            ObjectData::Spawn { order } => Some(order + 1),
+    // The order the next copied spawn point gets, while there is one to give.
+    let mut next_spawn = number_after(document.objects.iter().filter_map(
+        |object| match object.data {
+            ObjectData::Spawn { order } => Some(order),
             _ => None,
-        })
-        .max()
-        .unwrap_or(0);
-    // The place after the last child of each parent a root's copy goes under.
-    let mut next_order: BTreeMap<Option<ObjectId>, u32> = BTreeMap::new();
+        },
+    ));
+    // The place after the last child of each parent a root's copy goes under, likewise.
+    let mut next_order: BTreeMap<Option<ObjectId>, Option<u32>> = BTreeMap::new();
     let mut copies = Vec::new();
     // The rows are in the core's order: each is followed by everything under it. Rows before
     // this one are under a root that is being copied.
@@ -1816,29 +1841,33 @@ pub fn duplicate_specs(
         if index >= copied_until {
             continue;
         }
-        let source = document.object(&row.id)?;
+        let Some(source) = document.object(&row.id) else {
+            continue;
+        };
         let spawn_order = match source.data {
-            ObjectData::Terrain(_) => return None,
+            ObjectData::Terrain(_) => return Err(DuplicateOffer::Landscape),
             ObjectData::Spawn { .. } => {
-                next_spawn += 1;
-                Some(next_spawn - 1)
+                let order = next_spawn.ok_or(DuplicateOffer::NoNumberLeft)?;
+                next_spawn = order.checked_add(1);
+                Some(order)
             }
             _ => None,
         };
         let (name, sibling_order, local) = if root {
-            let order = next_order.entry(source.parent.clone()).or_insert_with(|| {
-                document
-                    .objects
-                    .iter()
-                    .filter(|other| other.parent == source.parent)
-                    .map(|other| other.sibling_order + 1)
-                    .max()
-                    .unwrap_or(0)
+            let next = next_order.entry(source.parent.clone()).or_insert_with(|| {
+                number_after(
+                    document
+                        .objects
+                        .iter()
+                        .filter(|other| other.parent == source.parent)
+                        .map(|other| other.sibling_order),
+                )
             });
-            *order += 1;
+            let order = next.ok_or(DuplicateOffer::NoNumberLeft)?;
+            *next = order.checked_add(1);
             let mut local = source.local.clone();
             local.translation_m[0] += DUPLICATE_OFFSET_M;
-            (copy_name(&source.name), *order - 1, local)
+            (copy_name(&source.name), order, local)
         } else {
             (
                 source.name.clone(),
@@ -1855,7 +1884,10 @@ pub fn duplicate_specs(
             local,
         });
     }
-    (!copies.is_empty()).then_some(copies)
+    if copies.is_empty() {
+        return Err(DuplicateOffer::NothingSelected);
+    }
+    Ok(copies)
 }
 
 /// The landscape the landscape tools work on: the selected one, or else the level's first.
@@ -2915,10 +2947,16 @@ mod tests {
             picked(&three, Some(&c), a.clone(), true),
             Picked::Active(a.clone())
         );
-        // The gizmo is on a now: the same click takes a out.
+        // The gizmo is on a now: the same click takes a out. The gizmo goes to the first
+        // that stays, b, which is therefore given to the core last.
         assert_eq!(
             picked(&three, Some(&a), a.clone(), true),
-            Picked::Selection(vec![b.clone(), c.clone()])
+            Picked::Selection(vec![c.clone(), b.clone()])
+        );
+        // And when the last in order leaves, it is still the first that stays.
+        assert_eq!(
+            picked(&three, Some(&c), c.clone(), true),
+            Picked::Selection(vec![b.clone(), a.clone()])
         );
         // The only selected object has the gizmo, whatever the core says: it leaves.
         assert_eq!(
@@ -2963,6 +3001,28 @@ mod tests {
         assert_eq!(editor.snapshot().active.as_ref(), Some(&ids[0]));
         assert_eq!(editor.snapshot().selection.len(), 2);
         assert_eq!(editor.problem, None);
+        // With all three selected and the gizmo on the first in order, taking that one out
+        // puts the gizmo on the first that stays, not on the last.
+        let mut sorted = ids.clone();
+        sorted.sort();
+        editor.select(vec![
+            sorted[2].clone(),
+            sorted[1].clone(),
+            sorted[0].clone(),
+        ]);
+        settle(&mut editor);
+        assert_eq!(editor.snapshot().active.as_ref(), Some(&sorted[0]));
+        editor.pick(sorted[0].clone(), true);
+        settle(&mut editor);
+        let snapshot = editor.snapshot();
+        assert_eq!(
+            snapshot.selection.to_vec(),
+            [sorted[1].clone(), sorted[2].clone()]
+        );
+        assert_eq!(snapshot.active.as_ref(), Some(&sorted[1]));
+        assert_eq!(editor.problem, None);
+        editor.select(vec![ids[0].clone(), ids[2].clone()]);
+        settle(&mut editor);
         // The core says which fields differ between them: the position, not the size.
         let mixed = |field: &str| {
             editor
@@ -3081,6 +3141,7 @@ mod tests {
             id(next)
         })
         .expect("boxes can be copied");
+        assert_eq!(duplicate_offer(&editor.snapshot()), DuplicateOffer::Offered);
         // Each parent before what is under it; the two roots go after the last top object.
         let shape: Vec<(ObjectId, u32, [f32; 3])> = copies
             .iter()
@@ -3127,7 +3188,10 @@ mod tests {
         );
         editor.select(vec![id(1), id(2)]);
         settle(&mut editor);
-        assert_eq!(duplicate_specs(&editor.snapshot(), || id(77)), None);
+        assert_eq!(
+            duplicate_specs(&editor.snapshot(), || id(77)),
+            Err(DuplicateOffer::Landscape)
+        );
         assert_eq!(
             duplicate_offer(&editor.snapshot()),
             DuplicateOffer::Landscape
@@ -3154,6 +3218,7 @@ mod tests {
         assert_eq!(editor.problem, None);
 
         // With nothing selected nothing is copied, and there is nothing to say.
+        assert_eq!(DuplicateOffer::NothingSelected.code(), None);
         editor.select(Vec::new());
         settle(&mut editor);
         assert_eq!(
@@ -3163,6 +3228,73 @@ mod tests {
         editor.duplicate_selected();
         assert!(!editor.busy());
         assert_eq!(editor.problem, None);
+    }
+
+    /// Adds an object with this place among its parent's children, through the core.
+    fn create_at_order(editor: &mut Editor, number: u128, sibling_order: u32, data: ObjectData) {
+        editor.submit(Command::Edit {
+            label_key: "create".into(),
+            mutations: vec![Mutation::Create(ObjectRecord {
+                id: id(number),
+                parent: None,
+                sibling_order,
+                name: format!("Object {number}"),
+                local: at([0.0; 3], Quat::IDENTITY),
+                data,
+            })],
+        });
+        settle(editor);
+        assert_eq!(editor.problem, None);
+    }
+
+    #[test]
+    fn a_level_with_its_last_place_taken_has_no_number_for_a_copy_and_says_so() {
+        // The last place among the top objects is taken.
+        let mut editor = empty_level();
+        create_at_order(&mut editor, 1, u32::MAX, UNIT_BOX);
+        editor.select(vec![id(1)]);
+        settle(&mut editor);
+        assert_eq!(
+            duplicate_specs(&editor.snapshot(), || id(77)),
+            Err(DuplicateOffer::NoNumberLeft)
+        );
+        assert_eq!(
+            duplicate_offer(&editor.snapshot()),
+            DuplicateOffer::NoNumberLeft
+        );
+        editor.duplicate_selected();
+        assert!(!editor.busy(), "nothing was asked of the core");
+        let problem = editor.problem.clone().expect("the key says why");
+        assert_eq!(problem.code, "duplicate.order_limit");
+        let shown = crate::wording::problem(&problem.code, |_| None);
+        assert!(!shown.title.contains("duplicate."), "{}", shown.title);
+        assert!(!shown.title.contains("landscape"), "{}", shown.title);
+        assert_eq!(editor.snapshot().document.objects.len(), 1);
+
+        // The last order of a spawn point is taken: the same, and no panic on the way.
+        let mut editor = empty_level();
+        create_at_order(&mut editor, 1, 0, ObjectData::Spawn { order: u32::MAX });
+        editor.select(vec![id(1)]);
+        settle(&mut editor);
+        assert_eq!(
+            duplicate_offer(&editor.snapshot()),
+            DuplicateOffer::NoNumberLeft
+        );
+
+        // One place before the last is room for one copy and not for two.
+        let mut editor = empty_level();
+        create_at_order(&mut editor, 1, 0, UNIT_BOX);
+        create_at_order(&mut editor, 2, u32::MAX - 1, UNIT_BOX);
+        editor.select(vec![id(1)]);
+        settle(&mut editor);
+        let copies = duplicate_specs(&editor.snapshot(), || id(77)).expect("room for one");
+        assert_eq!(copies[0].sibling_order, u32::MAX);
+        editor.select(vec![id(1), id(2)]);
+        settle(&mut editor);
+        assert_eq!(
+            duplicate_offer(&editor.snapshot()),
+            DuplicateOffer::NoNumberLeft
+        );
     }
 
     #[test]
