@@ -15,6 +15,7 @@ editor-core = { path = "crates/editor-core" }
 editor-cook = { path = "crates/editor-cook" }
 editor-services = { path = "crates/editor-services" }
 particle-spec = { path = "crates/particle-spec" }
+particle-runtime = { path = "crates/particle-runtime", default-features = false }
 landscape-render = { path = "crates/landscape-render" }
 serde = { version = "=1.0.229", features = ["derive", "rc"] }
 serde_json = "=1.0.151"

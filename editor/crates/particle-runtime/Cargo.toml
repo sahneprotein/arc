@@ -1,0 +1,16 @@
+[package]
+name = "particle-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+hanabi-3d = ["dep:bevy", "dep:bevy_hanabi", "bevy/3d"]
+
+[dependencies]
+particle-spec.workspace = true
+bevy = { workspace = true, optional = true }
+bevy_hanabi = { version = "=0.19.0", default-features = false, features = ["3d"], optional = true }
