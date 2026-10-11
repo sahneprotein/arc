@@ -982,6 +982,51 @@ if wanted project-settings-again; then
     cmp -s "$work/project-settings/project/arc-project.json" "$work/project-settings.saved" \
         || { echo "project-settings-again: FAILED, looking at the settings changed the project file"; failed=1; }
 fi
+# Closing the editor with project settings that were changed and not saved asks first, as
+# it does for a level: the Project settings are closed with the change in them, and then the
+# window. "Keep editing" leaves the editor open, the change still held and the project file
+# as it was. Started again on the folder and changed again, "Discard changes" closes the
+# editor without writing the file, and "Save and close" writes it and closes.
+CHANGE_KEY='scroll-project=300,click-button=W,key=t,click-button=Close settings,close'
+check project-close "click-button=Set up project,$CHANGE_KEY,click-button=Keep editing" \
+    'project=Ready' 'project_dialog=false' 'question=No' 'shutdown=No' 'project_draft=Changed' \
+    'project_keys=T,S,A,D,Space,V,Escape'
+if wanted project-close; then
+    grep -q '"move_forward": "W"' "$work/project-close/project/arc-project.json" \
+        || { echo "project-close: FAILED, the project file was written though nothing was saved"; failed=1; }
+    cp "$work/project-close/project/arc-project.json" "$work/project-close.before"
+fi
+# project_exits <name> <steps> <written: yes|no>: the editor, started on the folder of
+# project-close, must end by itself with status 0 before the check's own end, and the
+# project file must be as it was, or hold the key that was changed.
+project_exits() {
+    name="$1"; steps="$2"; written="$3"
+    wanted "$name" || return 0
+    folder="$work/${name%%-again*}"
+    manifest="$folder/project/arc-project.json"
+    output="$(cd "$folder" && ARC_EDITOR_CHECK="$folder/$name.png" ARC_EDITOR_CHECK_STEPS="$steps" \
+        limit 120 "$editor" 2>&1)"
+    status=$?
+    verdict=ok
+    [ "$status" -eq 0 ] || verdict="FAILED, exit status $status"
+    if printf '%s\n' "$output" | grep -q '^ARC_EDITOR_CHECK_RESULT'; then
+        verdict="FAILED, the editor did not close"
+    fi
+    if [ "$written" = no ] && ! cmp -s "$manifest" "$work/project-close.before"; then
+        verdict="FAILED, the project file was changed"
+    fi
+    if [ "$written" = yes ] && ! { grep -q '"move_forward": "T"' "$manifest" && grep -q '"jump": "Space"' "$manifest"; }; then
+        verdict="FAILED, the project settings were not saved"
+    fi
+    echo "$name: $verdict"
+    if [ "$verdict" != ok ]; then
+        echo "  steps:  $steps"
+        printf '%s\n' "$output" | grep 'check step\|^ARC_EDITOR_CHECK_RESULT' | cut -c1-240 | sed 's/^/  /'
+        failed=1
+    fi
+}
+project_exits project-close-again-discard "choose=Level>Project settings,$CHANGE_KEY,click-button=Discard changes" no
+project_exits project-close-again-save "choose=Level>Project settings,$CHANGE_KEY,click-button=Save and close" yes
 unset ARC_EDITOR_CHECK_PROJECT
 
 # check_exit <name> <steps> <saved: yes|no>: the editor must end by itself before the check's

@@ -10,6 +10,12 @@
 //! asked about in the same dialog, and saving first saves them too. Opening another level or
 //! beginning a new one does not leave them; they are the game's, not the level's.
 //!
+//! The same holds for the project's settings that were changed in the Project settings and
+//! not saved. Saving first saves them as the dialog's own button does, with what protects
+//! that save: a project file another program changed is not written over, and settings that
+//! cannot be saved are not. The editor then stays open on the Project settings, which say
+//! why.
+//!
 //! The window does not close by itself: the application turns that off, and a request to
 //! close arrives here. Closing while a game the editor started runs goes on in
 //! `closing.rs`: the game is stopped first.
@@ -29,8 +35,12 @@ use bevy::{
 };
 
 use crate::{
-    panels::closing::{self, Shutdown},
+    panels::{
+        closing::{self, Shutdown},
+        project::ProjectDialog,
+    },
     particles::Particles,
+    project::Project,
     session::Editor,
     theme::{
         feathers::{BORDER, SCRIM},
@@ -93,30 +103,48 @@ pub enum UnsavedLine {
     Consequence,
 }
 
-/// What the dialog asks and what it says is at stake: the level, emitters of the game, or
-/// both. `emitters` is how many emitters have changes that leaving would lose.
-pub fn unsaved_words(level: bool, emitters: usize) -> (&'static str, String) {
+/// What the dialog asks and what it says is at stake: the level, emitters of the game, the
+/// project's settings, or several of them. `emitters` is how many emitters have changes that
+/// leaving would lose, `project` whether the project's settings have.
+pub fn unsaved_words(level: bool, emitters: usize, project: bool) -> (String, String) {
     let count = match emitters {
         1 => "1 emitter has".to_owned(),
         emitters => format!("{emitters} emitters have"),
     };
-    match (level, emitters) {
+    // What has changes, as the question names it and as the line under it says it.
+    let (mut named, mut said): (Vec<&str>, String) = match (level, emitters) {
+        (false, 0) if project => (Vec::new(), String::new()),
         (_, 0) => (
-            "Save changes to the level?",
-            "The level has changes that are not saved. Discarding them cannot be undone.".into(),
+            vec!["the level"],
+            "The level has changes that are not saved".into(),
         ),
         (false, _) => (
-            "Save changes to the emitters?",
-            format!("{count} changes that are not saved. Discarding them cannot be undone."),
+            vec!["the emitters"],
+            format!("{count} changes that are not saved"),
         ),
         (true, _) => (
-            "Save changes to the level and the emitters?",
-            format!(
-                "The level has changes that are not saved, and {count}. Discarding them \
-                 cannot be undone."
-            ),
+            vec!["the level", "the emitters"],
+            format!("The level has changes that are not saved, and {count}"),
         ),
+    };
+    if project {
+        said = if named.is_empty() {
+            "The project settings have changes that are not saved".into()
+        } else {
+            format!("{said}, and so have the project settings")
+        };
+        named.push("the project settings");
     }
+    let named = match named.as_slice() {
+        [one] => (*one).to_owned(),
+        [first, second] => format!("{first} and {second}"),
+        [first, second, third] => format!("{first}, {second} and {third}"),
+        _ => "the level".to_owned(),
+    };
+    (
+        format!("Save changes to {named}?"),
+        format!("{said}. Discarding them cannot be undone."),
+    )
 }
 
 /// How many emitters leaving would lose the changes of: those of the game when the editor
@@ -126,6 +154,24 @@ fn emitters_left(then: &Leave, particles: &Particles) -> usize {
         Leave::Close => particles.unsaved_count(),
         Leave::Open(_) | Leave::New(_) => 0,
     }
+}
+
+/// Whether leaving would lose changes to the project's settings: when the editor closes and
+/// they were changed and not saved. Opening another level or beginning one leaves them.
+fn project_left(then: &Leave, project: &Project) -> bool {
+    *then == Leave::Close && project.settings_unsaved()
+}
+
+/// Saves the project's settings before the editor closes, if leaving would lose them.
+/// Whether closing can go on. If they are not saved, because another program changed the
+/// project file or because they are settings that cannot be saved, nothing is written and
+/// the Project settings are opened, which say why.
+fn save_project_first(then: &Leave, project: &mut Project, dialog: &mut ProjectDialog) -> bool {
+    if !project_left(then, project) || project.save_settings() {
+        return true;
+    }
+    dialog.open = true;
+    false
 }
 
 /// The caption of the button that saves first; it names what happens afterwards.
@@ -188,9 +234,15 @@ pub fn unsaved_dialog() -> impl Scene {
                             on(|_: On<Activate>,
                                 mut unsaved: ResMut<Unsaved>,
                                 mut shutdown: ResMut<Shutdown>,
+                                mut project: ResMut<Project>,
                                 mut editor: NonSendMut<Editor>,
                                 mut exit: MessageWriter<AppExit>| {
                                 unsaved.question = Question::No;
+                                // The project's settings are given up with the rest, also
+                                // if a game that will not stop keeps the editor open.
+                                if project_left(&unsaved.then, &project) {
+                                    project.discard_settings();
+                                }
                                 leave(&unsaved.then, &mut editor, &mut shutdown, &mut exit, true);
                             })
                         ),
@@ -209,6 +261,10 @@ pub fn unsaved_dialog() -> impl Scene {
                                 mut unsaved: ResMut<Unsaved>,
                                 mut particles: ResMut<Particles>,
                                 mut tool: ResMut<Tool>,
+                                (mut project, mut project_dialog): (
+                                    ResMut<Project>,
+                                    ResMut<ProjectDialog>,
+                                ),
                                 mut editor: NonSendMut<Editor>| {
                                 // The emitters first: they are written at once. One that
                                 // cannot be written keeps the editor where it is, on the
@@ -216,6 +272,17 @@ pub fn unsaved_dialog() -> impl Scene {
                                 if emitters_left(&unsaved.then, &particles) > 0 && !particles.save_all() {
                                     unsaved.question = Question::No;
                                     *tool = Tool::Particles;
+                                    return;
+                                }
+                                // Then the project's settings, with what protects their
+                                // save. Settings that are not saved keep the editor open
+                                // on the Project settings.
+                                if !save_project_first(
+                                    &unsaved.then,
+                                    &mut project,
+                                    &mut project_dialog,
+                                ) {
+                                    unsaved.question = Question::No;
                                     return;
                                 }
                                 if editor.snapshot().status.dirty {
@@ -254,7 +321,7 @@ pub(crate) fn leave_or_ask(
     request: On<Leave>,
     mut unsaved: ResMut<Unsaved>,
     mut shutdown: ResMut<Shutdown>,
-    particles: Res<Particles>,
+    (particles, project): (Res<Particles>, Res<Project>),
     mut editor: NonSendMut<Editor>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -262,7 +329,10 @@ pub(crate) fn leave_or_ask(
     if unsaved.question != Question::No || *shutdown != Shutdown::No {
         return;
     }
-    if editor.snapshot().status.dirty || emitters_left(request.event(), &particles) > 0 {
+    if editor.snapshot().status.dirty
+        || emitters_left(request.event(), &particles) > 0
+        || project_left(request.event(), &project)
+    {
         unsaved.then = request.event().clone();
         unsaved.question = Question::Asking;
     } else {
@@ -292,6 +362,7 @@ type DialogWords<'w, 's> = (
     Query<'w, 's, &'static mut Text, (With<SaveFirstCaption>, Without<UnsavedLine>)>,
     Query<'w, 's, (&'static UnsavedLine, &'static mut Text), Without<SaveFirstCaption>>,
     Res<'w, Particles>,
+    Res<'w, Project>,
 );
 
 /// Finishes a save that was chosen in the dialog, shows or hides the dialog, and has it say
@@ -302,7 +373,7 @@ pub(crate) fn answer_unsaved(
     mut editor: NonSendMut<Editor>,
     mut dialog: Query<&mut Node, (With<UnsavedDialog>, Without<GameRunsLine>)>,
     mut game_runs: Query<&mut Node, With<GameRunsLine>>,
-    (mut caption, mut lines, particles): DialogWords,
+    (mut caption, mut lines, particles, project): DialogWords,
     mut exit: MessageWriter<AppExit>,
 ) {
     if unsaved.question == Question::Saving && !editor.busy() {
@@ -346,10 +417,11 @@ pub(crate) fn answer_unsaved(
         let (question, consequence) = unsaved_words(
             editor.snapshot().status.dirty,
             emitters_left(&unsaved.then, &particles),
+            project_left(&unsaved.then, &project),
         );
         for (line, mut text) in &mut lines {
             let words = match line {
-                UnsavedLine::Question => question,
+                UnsavedLine::Question => question.as_str(),
                 UnsavedLine::Consequence => consequence.as_str(),
             };
             if text.0 != words {
@@ -366,18 +438,155 @@ mod tests {
     #[test]
     fn the_question_says_what_has_changes_the_level_the_emitters_or_both() {
         // The level alone: as the dialog always was.
-        let (question, consequence) = unsaved_words(true, 0);
+        let (question, consequence) = unsaved_words(true, 0, false);
         assert_eq!(question, "Save changes to the level?");
-        assert!(consequence.starts_with("The level has changes"));
-        let (question, consequence) = unsaved_words(false, 1);
+        assert_eq!(
+            consequence,
+            "The level has changes that are not saved. Discarding them cannot be undone."
+        );
+        let (question, consequence) = unsaved_words(false, 1, false);
         assert_eq!(question, "Save changes to the emitters?");
         assert_eq!(
             consequence,
             "1 emitter has changes that are not saved. Discarding them cannot be undone."
         );
-        let (question, consequence) = unsaved_words(true, 3);
+        let (question, consequence) = unsaved_words(true, 3, false);
         assert_eq!(question, "Save changes to the level and the emitters?");
-        assert!(consequence.contains("3 emitters have"), "{consequence}");
+        assert_eq!(
+            consequence,
+            "The level has changes that are not saved, and 3 emitters have. Discarding them \
+             cannot be undone."
+        );
+    }
+
+    #[test]
+    fn the_question_names_the_project_settings_alone_and_with_the_rest() {
+        let (question, consequence) = unsaved_words(false, 0, true);
+        assert_eq!(question, "Save changes to the project settings?");
+        assert_eq!(
+            consequence,
+            "The project settings have changes that are not saved. Discarding them cannot be \
+             undone."
+        );
+        let (question, consequence) = unsaved_words(true, 0, true);
+        assert_eq!(
+            question,
+            "Save changes to the level and the project settings?"
+        );
+        assert_eq!(
+            consequence,
+            "The level has changes that are not saved, and so have the project settings. \
+             Discarding them cannot be undone."
+        );
+        let (question, consequence) = unsaved_words(false, 2, true);
+        assert_eq!(
+            question,
+            "Save changes to the emitters and the project settings?"
+        );
+        assert!(consequence.starts_with("2 emitters have changes that are not saved, and so"));
+        let (question, consequence) = unsaved_words(true, 1, true);
+        assert_eq!(
+            question,
+            "Save changes to the level, the emitters and the project settings?"
+        );
+        assert!(consequence.contains("and 1 emitter has, and so have the project settings."));
+    }
+
+    /// A folder set up as a project, with moving forward put on another key and not saved.
+    fn project_with_a_change() -> (tempfile::TempDir, Project) {
+        let folder = tempfile::tempdir().unwrap();
+        let mut project = Project::of_folder(Some(folder.path().into()));
+        project.set_up("Game", false).unwrap();
+        project.ask_key(crate::project::KeyAction::MoveForward);
+        assert!(project.press_key(KeyCode::KeyT));
+        (folder, project)
+    }
+
+    #[test]
+    fn only_closing_the_editor_leaves_the_project_settings_and_only_changed_ones() {
+        let (folder, mut project) = project_with_a_change();
+        assert!(project_left(&Leave::Close, &project));
+        assert!(!project_left(&Leave::Open("a".into()), &project));
+        assert!(!project_left(&Leave::New("a".into()), &project));
+        // Given up, or saved, there is nothing of them to ask about.
+        project.discard_settings();
+        assert!(!project_left(&Leave::Close, &project));
+        let untouched = Project::of_folder(Some(folder.path().into()));
+        assert!(!project_left(&Leave::Close, &untouched));
+        assert!(!project_left(&Leave::Close, &Project::of_folder(None)));
+    }
+
+    #[test]
+    fn saving_first_saves_the_project_settings_and_closing_goes_on() {
+        let (_folder, mut project) = project_with_a_change();
+        let mut dialog = ProjectDialog::default();
+        // Opening another level leaves them alone: nothing is written.
+        let before = std::fs::read(project.manifest_path().unwrap()).unwrap();
+        assert!(save_project_first(
+            &Leave::Open("a".into()),
+            &mut project,
+            &mut dialog
+        ));
+        assert_eq!(
+            std::fs::read(project.manifest_path().unwrap()).unwrap(),
+            before
+        );
+        assert!(project.settings_unsaved());
+
+        assert!(save_project_first(&Leave::Close, &mut project, &mut dialog));
+        assert!(!dialog.open && !project.settings_unsaved());
+        assert_eq!(project.config().unwrap().controls.move_forward, "T");
+        // With nothing of them to save, closing goes on and nothing is written.
+        let saved = std::fs::read(project.manifest_path().unwrap()).unwrap();
+        assert!(save_project_first(&Leave::Close, &mut project, &mut dialog));
+        assert_eq!(
+            std::fs::read(project.manifest_path().unwrap()).unwrap(),
+            saved
+        );
+    }
+
+    #[test]
+    fn settings_that_cannot_be_saved_keep_the_editor_open_on_the_project_settings() {
+        // Another program changed the project file: it is not written over.
+        let (_folder, mut project) = project_with_a_change();
+        let mut theirs = project.config().unwrap().clone();
+        theirs.project.name = "Renamed".into();
+        let their_bytes = editor_services::project_spec::canonical_bytes(&theirs).unwrap();
+        std::fs::write(project.manifest_path().unwrap(), &their_bytes).unwrap();
+        let mut dialog = ProjectDialog::default();
+        assert!(!save_project_first(
+            &Leave::Close,
+            &mut project,
+            &mut dialog
+        ));
+        assert!(dialog.open);
+        assert_eq!(
+            project.problem().unwrap().code,
+            "project.changed_since_read"
+        );
+        assert_eq!(
+            std::fs::read(project.manifest_path().unwrap()).unwrap(),
+            their_bytes
+        );
+        assert!(project.settings_unsaved());
+
+        // Two actions on one key: nothing is written, and the dialog is opened to say so.
+        let (_folder, mut project) = project_with_a_change();
+        let before = std::fs::read(project.manifest_path().unwrap()).unwrap();
+        project.ask_key(crate::project::KeyAction::Jump);
+        project.press_key(KeyCode::KeyT);
+        let mut dialog = ProjectDialog::default();
+        assert!(!save_project_first(
+            &Leave::Close,
+            &mut project,
+            &mut dialog
+        ));
+        assert!(dialog.open);
+        assert_eq!(
+            std::fs::read(project.manifest_path().unwrap()).unwrap(),
+            before
+        );
+        assert!(project_left(&Leave::Close, &project));
     }
 
     #[test]
