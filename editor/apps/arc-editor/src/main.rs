@@ -114,6 +114,10 @@ fn main() -> AppExit {
         eprintln!("error: the part of the editor that starts the game did not start: {problem}");
         return AppExit::from_code(2);
     }
+    // A scripted check has no desktop to show a log in: it notes what would have been shown.
+    if let Some(opener) = check::scripted_opener() {
+        editor.set_opener(opener);
+    }
 
     // A scripted check may ask for another window size, to see the layout at that width.
     let (width, height) = check::wanted_window().unwrap_or((1440, 900));

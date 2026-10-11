@@ -3,8 +3,10 @@
 //! Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes, Ctrl+S saves, Ctrl+Shift+S saves under
 //! another name, Ctrl+O opens a level and Ctrl+N begins a new one. On macOS the Command key
 //! works as well as Control. W, E and R choose the move, rotate and scale tool and T the
-//! landscape tool, and Delete removes the selection, unless a field has the keyboard. While a
-//! dialog or a menu is open none of them act.
+//! landscape tool, and Delete removes the selection, unless a field has the keyboard. F5
+//! cooks the level if it has changed, checks the cooked level and plays it in the game's
+//! window; Shift+F5 stops what F5 began, at whatever step it is. While a dialog or a menu is
+//! open none of them act.
 
 use bevy::{
     gizmos::transform_gizmo::{TransformGizmoMode, TransformGizmoSettings},
@@ -40,6 +42,16 @@ fn shortcuts(
         KeyCode::SuperLeft,
         KeyCode::SuperRight,
     ]);
+    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    // A function key is no letter: it acts while a field has the keyboard too.
+    if keys.just_pressed(KeyCode::F5) && !command {
+        if shift {
+            editor.stop_play();
+        } else {
+            editor.play_now();
+        }
+        return;
+    }
     if !command {
         // Letters belong to a text or number field while one has the keyboard.
         let typing = focus.get().is_some_and(|entity| fields.contains(entity));
@@ -63,7 +75,6 @@ fn shortcuts(
         }
         return;
     }
-    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     if keys.just_pressed(KeyCode::KeyZ) {
         if shift {
             editor.redo();

@@ -29,7 +29,7 @@
 //! | `hold-stroke=…` | the same without the release; `release` ends it |
 //! | `erase-stroke=…` | the same as `stroke` with Shift held throughout |
 //! | `aim-ground=X:Z` | the cursor moves to the point of the ground plane at world X, Z and rests |
-//! | `key=K` | `ctrl+z`, `ctrl+shift+z`, `ctrl+y`, `ctrl+s`, `ctrl+shift+s`, `ctrl+o`, `ctrl+n`, `escape`, `enter`, `delete`, `down`, `w`, `e`, `r`, `t` |
+//! | `key=K` | `ctrl+z`, `ctrl+shift+z`, `ctrl+y`, `ctrl+s`, `ctrl+shift+s`, `ctrl+o`, `ctrl+n`, `escape`, `enter`, `delete`, `down`, `w`, `e`, `r`, `t`, `f5`, `shift+f5` |
 //! | `type=TEXT` | TEXT typed into whatever has the keyboard |
 //! | `type-field=F.A:TEXT` | a click into component A of field F, select all, TEXT, Enter |
 //! | `unfocus` | the window loses the keyboard focus |
@@ -52,8 +52,14 @@
 //! `wait-run=STATE` plays nothing: the script waits until the game the editor started is in
 //! that state (`none`, `starting`, `running`, `stopping`). A game runs on its own time, and
 //! the editor does not count it as work it waits for, so a step that follows a start or a
-//! stop says what it waits for. `ARC_EDITOR_CHECK_GAME` puts a scripted stand-in in the game's
+//! stop says what it waits for. A run that is being stopped to be cooked and played again is
+//! in none of them (`restarting`), so that `wait-run=running` after "Cook and play again"
+//! waits for the second run. `ARC_EDITOR_CHECK_GAME` puts a scripted stand-in in the game's
 //! place (`editor_ui::play_script`).
+//!
+//! A check opens no file on the desktop: "Open log" only notes which file it would have shown
+//! (`opened=` in the result). With `ARC_EDITOR_CHECK_OPEN=missing` it fails as it does for a
+//! log that is gone.
 //!
 //! `ARC_EDITOR_CHECK_WINDOW=WIDTHxHEIGHT` asks the desktop for a window of that size in
 //! logical pixels, for the cases that check the layout at a given width. The desktop may give
@@ -103,6 +109,23 @@ pub fn scripted_game() -> Option<editor_ui::play_script::Script> {
         return None;
     }
     editor_ui::play_script::Script::named(&std::env::var("ARC_EDITOR_CHECK_GAME").ok()?)
+}
+
+/// What stands in for the desktop's way to show a file in a scripted check: nothing is
+/// opened. It succeeds, or with `ARC_EDITOR_CHECK_OPEN=missing` fails as for a file that is
+/// gone.
+pub fn scripted_opener() -> Option<editor_ui::session::Opener> {
+    if !is_scripted() {
+        return None;
+    }
+    let missing = std::env::var("ARC_EDITOR_CHECK_OPEN").is_ok_and(|how| how == "missing");
+    Some(Box::new(move |_| {
+        if missing {
+            Err(editor_core::Diagnostic::new("path.missing"))
+        } else {
+            Ok(())
+        }
+    }))
 }
 
 /// The window size a scripted check asks for, if it names one.
@@ -357,7 +380,11 @@ fn scripted(
         }
     }
     if let Some((wanted, give_up_at)) = script.waiting_for.clone() {
-        let now = format!("{:?}", editor_ui::panels::play::PlayView::of(&editor).run);
+        let now = if editor.restarting() {
+            "Restarting".to_owned()
+        } else {
+            format!("{:?}", editor_ui::panels::play::PlayView::of(&editor).run)
+        };
         if now.eq_ignore_ascii_case(&wanted) {
             script.waiting_for = None;
             script.next_step_at = script.frame + BETWEEN_STEPS;
@@ -446,7 +473,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -594,6 +621,19 @@ fn scripted(
                 .find(|field| field.id == "translation")
                 .map(|field| editor_ui::panels::inspector::mixed_axes(&snapshot, field)),
             gizmo.snap_rotate.is_some(),
+            // What the game's notices offer and what "Open log" would have shown; and the
+            // word the Play control shows in its button's place.
+            run_notices[3].is_some(),
+            run_notices[1]
+                .iter()
+                .chain(&run_notices[3])
+                .flat_map(|notice| notice.actions.iter().map(|action| action.caption()))
+                .collect::<Vec<_>>(),
+            editor
+                .opened()
+                .and_then(|path| path.file_name())
+                .map_or("none".into(), |name| name.to_string_lossy().into_owned()),
+            play.word(),
         );
         exit.write(AppExit::Success);
     }
@@ -832,6 +872,8 @@ fn play(
                 "e" => input.key(&[], KeyCode::KeyE, letter("e")),
                 "r" => input.key(&[], KeyCode::KeyR, letter("r")),
                 "t" => input.key(&[], KeyCode::KeyT, letter("t")),
+                "f5" => input.key(&[], KeyCode::F5, Key::F5),
+                "shift+f5" => input.key(&[KeyCode::ShiftLeft], KeyCode::F5, Key::F5),
                 _ => return Err("unknown key".into()),
             }
         }

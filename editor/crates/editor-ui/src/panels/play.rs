@@ -5,7 +5,9 @@
 //! to cook, lets the person ask the editor's core whether the cooked level on disk is still
 //! the one this editor cooked, and holds the two ways to play. "Open Game Window" asks the
 //! core's Play coordinator to start the game in a window of its own, from the receipt of a
-//! check made just before. "Preview in Editor" is off: it is not built.
+//! check made just before. "Preview in Editor" is off: it is not built. "Cook and Play", which
+//! F5 does too, cooks the level first if it has changed, and then does the same; Shift+F5 is
+//! Stop.
 //!
 //! While something is under way the control is a word and one Stop: checking, starting, the
 //! game window open, stopping. The words follow what the coordinator reports and nothing
@@ -40,7 +42,7 @@ use crate::{
         menu::{menu_item, menu_popup_end},
         toolbar::toolbar_folds,
     },
-    session::{Editor, PackageCheck},
+    session::{play_blockers, Editor, PackageCheck},
     theme::{
         feathers::{BORDER, SIGNAL_ERROR, SIGNAL_PLAY, SIGNAL_WARN},
         size, spacing, text,
@@ -53,6 +55,8 @@ pub const PREVIEW_IN_EDITOR: &str = "Preview in Editor";
 pub const OPEN_GAME_WINDOW: &str = "Open Game Window";
 /// The row that asks the core about the cooked level on disk.
 pub const CHECK_COOKED_LEVEL: &str = "Check cooked level";
+/// The row that does everything a change needs to be played: cook, check, play.
+pub const COOK_AND_PLAY: &str = "Cook and Play";
 
 /// Why nothing can be played, when this editor was started without a game.
 pub const NO_GAME: &str = "No game is set up for this editor: start the editor with --game \
@@ -100,6 +104,12 @@ pub struct PlayView {
     pub refusal: Option<String>,
     /// The code of how the last run ended, once no run is under way.
     pub ended: Option<String>,
+    /// Whether the level is being cooked because playing it was asked for.
+    pub cooking: bool,
+    /// Whether the run is being stopped to cook the level and play it again.
+    pub restarting: bool,
+    /// How many things in the open level stop the game from running it, by the core's review.
+    pub blockers: usize,
 }
 
 /// A step a process reports while it starts, in words.
@@ -157,6 +167,7 @@ impl PlayView {
         let cooked = simulation
             .as_deref()
             .and_then(|simulation| package_id(manifest.as_deref(), Some(simulation)));
+        let blockers = play_blockers(&snapshot);
         let play = editor.play_status();
         let active = play
             .as_ref()
@@ -186,11 +197,18 @@ impl PlayView {
                     || editor.cooked().map(|receipt| receipt.identity()) != Some(&run.identity)
             }),
             steps: active.map(steps_of).unwrap_or_default(),
-            refusal: editor.play_refusal().map(|problem| problem.code.clone()),
+            refusal: editor
+                .play_refusal()
+                .map(|problem| problem.code.clone())
+                // Said only as long as it is true: the level may have been mended since.
+                .filter(|code| code != "play.blocked" || blockers > 0),
             ended: match active {
                 Some(_) => None,
                 None => editor.last_end().map(|end| end.primary.code.clone()),
             },
+            cooking: editor.cooking_to_play(),
+            restarting: editor.restarting(),
+            blockers,
         }
     }
 
@@ -210,6 +228,8 @@ impl PlayView {
         }
         match self.run {
             RunView::None => None,
+            // The cook that comes before the start that was asked for.
+            RunView::Starting if self.cooking => Some("Cooking".into()),
             RunView::Starting => Some("Starting".into()),
             RunView::Running => Some("Game window open".into()),
             RunView::Stopping => Some("Stopping".into()),
@@ -250,6 +270,13 @@ impl PlayView {
         self.game && self.check_offered()
     }
 
+    /// Whether "Cook and Play" can be chosen: there is a game and nothing under way. It needs
+    /// no cooked level, it makes one; and with something in the level that the game cannot
+    /// run it is still offered, and says so when chosen.
+    pub fn cook_and_play_offered(&self) -> bool {
+        self.game && !self.checking() && self.run == RunView::None
+    }
+
     /// Why a way to play is off: in the menu's foot as long as one is.
     pub fn reason_line(&self) -> &'static str {
         if self.game {
@@ -267,6 +294,7 @@ impl PlayView {
         }
         let package = self.run_package.as_deref().unwrap_or_default();
         match self.run {
+            RunView::Starting if self.cooking => "cooking the level to play it".into(),
             RunView::Starting if package.is_empty() => "starting the game".into(),
             RunView::Starting if self.steps.is_empty() => format!("starting cooked {package}"),
             RunView::Starting => format!("starting cooked {package}: {}", self.steps),
@@ -274,6 +302,9 @@ impl PlayView {
                 format!("playing cooked {package}, older than the level")
             }
             RunView::Running => format!("playing cooked {package}"),
+            RunView::Stopping if self.restarting => {
+                "stopping the game to cook the level and play it again".into()
+            }
             RunView::Stopping => "stopping the game".into(),
             RunView::None => self
                 .ended
@@ -373,6 +404,8 @@ pub enum PlayPiece {
     GameWindowRow,
     /// The row that checks the cooked level.
     CheckRow,
+    /// The row that cooks, checks and plays.
+    CookAndPlayRow,
     /// Why a way to play is off.
     ReasonLine,
     /// The foot's lines, and its button with that button's caption.
@@ -483,6 +516,12 @@ pub fn play_control() -> impl Scene {
                                 PlayPiece::GameWindowRow
                                 InteractionDisabled
                                 on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.play_external())
+                            ),
+                            (
+                                menu_item(COOK_AND_PLAY, "F5")
+                                PlayPiece::CookAndPlayRow
+                                InteractionDisabled
+                                on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.play_now())
                             ),
                             @FeathersMenuDivider,
                             (
@@ -609,6 +648,10 @@ pub(crate) fn show_play(
                 set_offered(&mut commands, entity, view.check_offered(), off);
                 (None, true)
             }
+            PlayPiece::CookAndPlayRow => {
+                set_offered(&mut commands, entity, view.cook_and_play_offered(), off);
+                (None, true)
+            }
             PlayPiece::ReasonLine => (Some(view.reason_line().to_owned()), true),
             PlayPiece::CookedLine => (Some(view.cooked_line()), true),
             PlayPiece::StandingLine => {
@@ -664,6 +707,9 @@ mod tests {
             steps: String::new(),
             refusal: None,
             ended: None,
+            cooking: false,
+            restarting: false,
+            blockers: 0,
         }
     }
 
@@ -914,6 +960,66 @@ mod tests {
         );
         assert!(refused.run_words_warn());
         assert!(!running(RunView::Running).run_words_warn());
+    }
+
+    #[test]
+    fn cook_and_play_needs_a_game_and_nothing_under_way_but_no_cooked_level() {
+        assert!(view(None, false, PackageCheck::NotAsked).cook_and_play_offered());
+        assert!(view(Some("6105ad50"), true, PackageCheck::NotAsked).cook_and_play_offered());
+        let blocked = PlayView {
+            blockers: 2,
+            ..view(None, false, PackageCheck::NotAsked)
+        };
+        assert!(
+            blocked.cook_and_play_offered(),
+            "it is offered, and says what stops it when chosen"
+        );
+        let no_game = PlayView {
+            game: false,
+            ..view(Some("6105ad50"), false, PackageCheck::NotAsked)
+        };
+        assert!(!no_game.cook_and_play_offered());
+        assert!(!view(Some("6105ad50"), false, PackageCheck::Checking).cook_and_play_offered());
+        assert!(!running(RunView::Running).cook_and_play_offered());
+    }
+
+    #[test]
+    fn the_cook_before_a_start_is_a_word_of_its_own_with_stop() {
+        let cooking = PlayView {
+            cooking: true,
+            run: RunView::Starting,
+            ..view(None, false, PackageCheck::NotAsked)
+        };
+        assert_eq!(cooking.word().as_deref(), Some("Cooking"));
+        assert!(cooking.stop_shown() && cooking.stop_offered());
+        assert_eq!(cooking.run_words(), "cooking the level to play it");
+        assert!(!cooking.word_is_running());
+    }
+
+    #[test]
+    fn a_run_stopped_to_be_played_again_says_what_follows() {
+        let restarting = PlayView {
+            restarting: true,
+            ..running(RunView::Stopping)
+        };
+        assert_eq!(restarting.word().as_deref(), Some("Stopping"));
+        assert_eq!(
+            restarting.run_words(),
+            "stopping the game to cook the level and play it again"
+        );
+        assert!(!restarting.stop_offered(), "Stop cannot be pressed twice");
+    }
+
+    #[test]
+    fn the_refusals_of_the_one_key_are_sentences_and_never_codes() {
+        for code in ["play.no_game", "play.blocked", "play.already_active"] {
+            let refused = PlayView {
+                refusal: Some(code.into()),
+                ..view(None, false, PackageCheck::NotAsked)
+            };
+            assert!(refused.run_words_warn());
+            assert!(!refused.run_words().contains(code), "{code}");
+        }
     }
 
     #[test]

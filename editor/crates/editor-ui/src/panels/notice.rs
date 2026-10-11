@@ -1,16 +1,19 @@
 //! The notices: what stays on screen until it is dealt with.
 //!
 //! They sit in a corner of the 3D view, one under the other, and the level stays as it was
-//! behind them. There are three, each with its own place, so that none takes another's:
+//! behind them. There are four, each with its own place, so that none takes another's:
 //!
 //! - a problem with the level: a save, a cook or an edit the core refused;
 //! - how a run of the game ended, when the person did not ask for that end: it stopped
 //!   unexpectedly, or it did not start;
 //! - what a run left behind: a server, or the game, that did not shut down. It stands beside
-//!   the notice of how the run ended and never in its place.
+//!   the notice of how the run ended and never in its place;
+//! - that the level has moved on from the cooked level a run plays, with the offer to cook
+//!   and play again.
 //!
-//! Each says what happened and what to do, and is put away by its own button. The words come
-//! from `wording.rs`.
+//! Each says what happened and what to do, and is put away by its own button. A notice offers
+//! what mends it where something does: saving again, the log of a game that stopped, playing
+//! again. The words come from `wording.rs`.
 
 use bevy::{
     feathers::{
@@ -22,9 +25,12 @@ use bevy::{
     prelude::*,
     ui_widgets::Activate,
 };
+use std::path::PathBuf;
+
 use editor_services::{PlayEnd, PlayProcess, PlayRole, PlayStatus};
 
 use crate::{
+    panels::play::{PlayView, RunView},
     session::Editor,
     theme::{
         feathers::{SIGNAL_ERROR, SIGNAL_WARN},
@@ -43,10 +49,53 @@ pub enum NoticeSlot {
     RunEnd,
     /// What a run of the game left behind.
     LeftBehind,
+    /// The level has moved on from the cooked level the run plays.
+    MovedOn,
 }
 
 impl NoticeSlot {
-    pub const ALL: [NoticeSlot; 3] = [Self::Problem, Self::RunEnd, Self::LeftBehind];
+    pub const ALL: [NoticeSlot; 4] = [Self::Problem, Self::RunEnd, Self::LeftBehind, Self::MovedOn];
+
+    /// What a notice in this place can offer, in the order of its buttons.
+    fn actions(self) -> &'static [NoticeAction] {
+        match self {
+            Self::Problem => &[NoticeAction::RetrySave],
+            Self::RunEnd => &[NoticeAction::PlayAgain, NoticeAction::OpenLog],
+            Self::LeftBehind => &[],
+            Self::MovedOn => &[NoticeAction::CookAndPlayAgain],
+        }
+    }
+}
+
+/// What a notice offers besides being put away.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum NoticeAction {
+    /// Save again where the failed save was meant to go.
+    #[default]
+    RetrySave,
+    /// Show the log of the game that stopped.
+    OpenLog,
+    /// Play the cooked level again.
+    PlayAgain,
+    /// Stop the run, cook the level as it is now, and play that.
+    CookAndPlayAgain,
+}
+
+impl NoticeAction {
+    pub fn caption(self) -> &'static str {
+        match self {
+            Self::RetrySave => "Try again",
+            Self::OpenLog => "Open log",
+            Self::PlayAgain => "Play again",
+            Self::CookAndPlayAgain => "Cook and play again",
+        }
+    }
+
+    /// Whether its button is the notice's primary one: the action that mends, not the one
+    /// that only shows something.
+    fn primary(self) -> bool {
+        self != Self::OpenLog
+    }
 }
 
 /// The box of one notice.
@@ -66,9 +115,9 @@ pub enum NoticePart {
 #[derive(Component, Default, Clone)]
 pub struct NoticeText(pub NoticeSlot, pub NoticePart);
 
-/// The button that tries the failed save again. Shown only for a failed save.
+/// A button of a notice that does what the notice offers. Shown only while it is offered.
 #[derive(Component, Default, Clone)]
-pub struct RetryButton;
+pub struct ActionButton(pub NoticeSlot, pub NoticeAction);
 
 /// The button that puts a notice away.
 #[derive(Component, Default, Clone)]
@@ -79,23 +128,58 @@ fn dismiss(activate: On<Activate>, buttons: Query<&DismissButton>, mut editor: N
         Ok(NoticeSlot::Problem) => editor.dismiss_problem(),
         Ok(NoticeSlot::RunEnd) => editor.dismiss_run_end(),
         Ok(NoticeSlot::LeftBehind) => editor.dismiss_cleanup(),
+        Ok(NoticeSlot::MovedOn) => editor.dismiss_moved_on(),
         Err(_) => {}
     }
 }
 
+fn act(activate: On<Activate>, buttons: Query<&ActionButton>, mut editor: NonSendMut<Editor>) {
+    match buttons.get(activate.entity).map(|button| button.1) {
+        Ok(NoticeAction::RetrySave) => editor.retry_save(),
+        Ok(NoticeAction::OpenLog) => {
+            if let Some(log) = run_log(editor.play_status().as_deref()) {
+                editor.open_file(&log);
+            }
+        }
+        Ok(NoticeAction::PlayAgain) => editor.play_again(),
+        Ok(NoticeAction::CookAndPlayAgain) => editor.cook_and_play_again(),
+        Err(_) => {}
+    }
+}
+
+/// The button of one action of a notice, hidden until the notice offers it.
+fn action_button(slot: NoticeSlot, action: NoticeAction) -> impl Scene {
+    let caption = action.caption();
+    let variant = if action.primary() {
+        ButtonVariant::Primary
+    } else {
+        ButtonVariant::Normal
+    };
+    bsn! {
+        @FeathersButton {
+            @caption: bsn! { Text(caption) ThemedText },
+            @variant: {variant},
+        }
+        ActionButton({slot}, {action})
+        Node { display: Display::None }
+        on(act)
+    }
+}
+
 /// The box of one notice. A problem's and a failed run's are edged in the error colour; what
-/// a run left behind is a warning.
+/// a run left behind, and a level that has moved on, are warnings.
 fn notice_box(slot: NoticeSlot) -> impl Scene {
-    let edge = if slot == NoticeSlot::LeftBehind {
+    let edge = if matches!(slot, NoticeSlot::LeftBehind | NoticeSlot::MovedOn) {
         SIGNAL_WARN
     } else {
         SIGNAL_ERROR
     };
-    let retry = if slot == NoticeSlot::Problem {
-        Display::Flex
-    } else {
-        Display::None
-    };
+    let actions: Vec<_> = slot
+        .actions()
+        .iter()
+        .map(|action| action_button(slot, *action))
+        .collect();
+    let actions: Box<dyn SceneList> = Box::new(actions);
     bsn! {
         pane_body()
         Notice({slot})
@@ -113,15 +197,7 @@ fn notice_box(slot: NoticeSlot) -> impl Scene {
             (
                 Node { flex_direction: FlexDirection::Row, column_gap: px(spacing::SPACE_4) }
                 Children [
-                    (
-                        @FeathersButton {
-                            @caption: bsn! { Text("Try again") ThemedText },
-                            @variant: ButtonVariant::Primary,
-                        }
-                        RetryButton
-                        Node { display: {retry} }
-                        on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.retry_save())
-                    ),
+                    {actions},
                     (
                         @FeathersButton { @caption: bsn! { Text("Dismiss") ThemedText } }
                         DismissButton({slot})
@@ -150,6 +226,7 @@ pub fn notice() -> impl Scene {
             notice_box(NoticeSlot::Problem),
             notice_box(NoticeSlot::RunEnd),
             notice_box(NoticeSlot::LeftBehind),
+            notice_box(NoticeSlot::MovedOn),
         ]
     }
 }
@@ -160,8 +237,8 @@ pub struct NoticeWords {
     pub title: String,
     pub remedy: String,
     pub facts: String,
-    /// Whether the notice offers to try a failed save again.
-    pub retry: bool,
+    /// What the notice offers besides being put away.
+    pub actions: Vec<NoticeAction>,
 }
 
 /// The process of the last run that played this part.
@@ -192,21 +269,54 @@ fn facts(process: Option<&PlayProcess>, with_pid: bool) -> String {
     facts.join("   ")
 }
 
-/// The notice of how the last run ended, if it is an end the person did not ask for.
+/// The process a notice of the run's end speaks of. The game is the client; when no client
+/// was started, a server that died is what there is to speak of.
+fn shown_process(status: Option<&PlayStatus>) -> Option<&PlayProcess> {
+    let client = process(status, PlayRole::Client);
+    match client {
+        Some(process) if process.pid.is_some() => client,
+        _ => process(status, PlayRole::Server),
+    }
+}
+
+/// The log of the process the notice of the last run's end speaks of, if it wrote one.
+pub fn run_log(status: Option<&PlayStatus>) -> Option<PathBuf> {
+    shown_process(status)?.log_path.clone()
+}
+
+/// The notice of how the last run ended, if it is an end the person did not ask for. It
+/// offers the log where there is one, and to play again unless the level itself is what the
+/// game refused: the same cooked level would be refused again.
 pub fn run_end_words(end: &PlayEnd, status: Option<&PlayStatus>) -> Option<NoticeWords> {
     let cause = end.cause.as_ref().map(|cause| cause.code.as_str());
     let shown = wording::play_end(&end.primary.code, cause)?;
-    // The game is the client; a server that died is named by the cause.
-    let client = process(status, PlayRole::Client);
-    let which = match client {
-        Some(process) if process.pid.is_some() => client,
-        _ => process(status, PlayRole::Server),
-    };
+    let mut actions = Vec::new();
+    if !wording::play_end_is_of_the_level(cause) {
+        actions.push(NoticeAction::PlayAgain);
+    }
+    if run_log(status).is_some() {
+        actions.push(NoticeAction::OpenLog);
+    }
     Some(NoticeWords {
         title: shown.title,
         remedy: shown.remedy,
-        facts: facts(which, false),
-        retry: false,
+        facts: facts(shown_process(status), false),
+        actions,
+    })
+}
+
+/// The notice that the level has moved on from the cooked level the game runs: while the game
+/// is running, and not once the offer has been taken.
+pub fn moved_on_words(view: &PlayView) -> Option<NoticeWords> {
+    if view.run != RunView::Running || !view.run_older || view.restarting {
+        return None;
+    }
+    let shown = wording::play_moved_on(view.run_package.as_deref().unwrap_or_default());
+    Some(NoticeWords {
+        title: shown.title,
+        remedy: shown.remedy,
+        facts: String::new(),
+        actions: vec![NoticeAction::CookAndPlayAgain],
     })
 }
 
@@ -237,12 +347,12 @@ pub fn left_behind_words(end: &PlayEnd, status: Option<&PlayStatus>) -> Option<N
         title: shown.title,
         remedy: shown.remedy,
         facts: facts(process(status, role), true),
-        retry: false,
+        actions: Vec::new(),
     })
 }
 
 /// What each notice says now, by slot.
-pub fn notices(editor: &Editor) -> [Option<NoticeWords>; 3] {
+pub fn notices(editor: &Editor) -> [Option<NoticeWords>; 4] {
     let problem = editor.problem.as_ref().map(|diagnostic| {
         let words = wording::problem(&diagnostic.code, |key| {
             diagnostic.parameters.get(key).map(String::as_str)
@@ -251,7 +361,11 @@ pub fn notices(editor: &Editor) -> [Option<NoticeWords>; 3] {
             title: words.title,
             remedy: words.remedy,
             facts: String::new(),
-            retry: editor.problem_is_from_save(),
+            actions: if editor.problem_is_from_save() {
+                vec![NoticeAction::RetrySave]
+            } else {
+                Vec::new()
+            },
         }
     });
     let status = editor.play_status();
@@ -260,24 +374,37 @@ pub fn notices(editor: &Editor) -> [Option<NoticeWords>; 3] {
     let end = editor.last_end().filter(|_| editor.active_run().is_none());
     let run_end = end
         .filter(|_| !end_dismissed)
-        .and_then(|end| run_end_words(end, status.as_deref()));
+        .and_then(|end| run_end_words(end, status.as_deref()))
+        .map(|mut words| {
+            // Nothing is played again without a game, or without a cooked level this editor
+            // holds: another level may have been opened since.
+            if !editor.play_connected() || editor.cooked().is_none() {
+                words
+                    .actions
+                    .retain(|action| *action != NoticeAction::PlayAgain);
+            }
+            words
+        });
     let left_behind = end
         .filter(|_| !left_dismissed)
         .and_then(|end| left_behind_words(end, status.as_deref()));
-    [problem, run_end, left_behind]
+    let moved_on = (!editor.moved_on_dismissed())
+        .then(|| moved_on_words(&PlayView::of(editor)))
+        .flatten();
+    [problem, run_end, left_behind, moved_on]
 }
 
 /// Shows the notices that have something to say and hides the others.
 #[expect(
     clippy::type_complexity,
-    reason = "a notice's texts are told from its box and its button by what they are not"
+    reason = "a notice's texts are told from its box and its buttons by what they are not"
 )]
 pub(crate) fn show_notice(
     editor: NonSend<Editor>,
-    mut boxes: Query<(&Notice, &mut Node), Without<RetryButton>>,
-    mut texts: Query<(&NoticeText, &mut Text, &mut Node), (Without<Notice>, Without<RetryButton>)>,
-    mut retry: Query<&mut Node, (With<RetryButton>, Without<Notice>)>,
-    mut shown: Local<Option<[Option<NoticeWords>; 3]>>,
+    mut boxes: Query<(&Notice, &mut Node), Without<ActionButton>>,
+    mut texts: Query<(&NoticeText, &mut Text, &mut Node), (Without<Notice>, Without<ActionButton>)>,
+    mut buttons: Query<(&ActionButton, &mut Node), Without<Notice>>,
+    mut shown: Local<Option<[Option<NoticeWords>; 4]>>,
 ) {
     if boxes.is_empty() {
         return;
@@ -324,10 +451,10 @@ pub(crate) fn show_notice(
             node.display = wanted;
         }
     }
-    let retry_wanted = display(words(NoticeSlot::Problem).is_some_and(|words| words.retry));
-    for mut node in &mut retry {
-        if node.display != retry_wanted {
-            node.display = retry_wanted;
+    for (button, mut node) in &mut buttons {
+        let offered = words(button.0).is_some_and(|words| words.actions.contains(&button.1));
+        if node.display != display(offered) {
+            node.display = display(offered);
         }
     }
     *shown = Some(now);

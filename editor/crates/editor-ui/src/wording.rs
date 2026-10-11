@@ -43,6 +43,19 @@ pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
             "That is not a place a level can be saved",
             "Choose a file inside the project folder.",
         ),
+        // Showing a file, the game's log for instance, in the desktop's program for it.
+        "path.missing" => (
+            "That file is no longer there",
+            "It may have been removed since the game ended. Play again for a new log.",
+        ),
+        "path.launch_failed" => (
+            "The file could not be opened from here",
+            "Open it yourself: its path is in the notice of the run.",
+        ),
+        "path.platform_unsupported" => (
+            "This desktop gives the editor no way to open a file",
+            "Open it yourself: its path is in the notice of the run.",
+        ),
         "source.decode" => (
             "This file is not a level the editor can read",
             "Open a level file saved by this editor.",
@@ -277,6 +290,24 @@ pub fn play_end(code: &str, cause: Option<&str>) -> Option<Problem> {
     })
 }
 
+/// Whether a start failed for something in the level itself, which the same cooked level
+/// would fail for again: what Review lists, not what "Play again" mends.
+pub fn play_end_is_of_the_level(cause: Option<&str>) -> bool {
+    matches!(
+        cause,
+        Some("play.terrain_unsupported" | "play.spawn_required" | "play.runtime_limit")
+    )
+}
+
+/// The notice that the level has moved on from the cooked level a run plays. `package` is
+/// that cooked level's short name.
+pub fn play_moved_on(package: &str) -> Problem {
+    Problem {
+        title: "The level has changed since the game started".into(),
+        remedy: format!("The game runs cooked {package}, without those changes."),
+    }
+}
+
 /// How a run ended, in the status bar's words, when the person asked for that end.
 pub fn play_end_asked(code: &str) -> Option<&'static str> {
     match code {
@@ -304,6 +335,12 @@ pub fn play_refusal(code: &str) -> String {
     match code {
         "play.already_active" => "A game is already running. Stop it first.".into(),
         "play.package_required" => "Cook the level before playing.".into(),
+        "play.no_game" => {
+            "No game is set up for this editor. Start it with --game and the game's folder.".into()
+        }
+        "play.blocked" => {
+            "The game cannot run this level as it is. Nothing was cooked or started.".into()
+        }
         "play.mode_unsupported" => "The game cannot be played inside the editor yet.".into(),
         "play.queue_full" => "The editor is still dealing with the last request. Try again.".into(),
         "play.coordinator_closed" | "play.supervisor_start_failed" => {

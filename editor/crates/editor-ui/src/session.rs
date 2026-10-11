@@ -4,13 +4,17 @@
 //! immutable snapshots from it and sends commands, each checked against the revision the UI
 //! last saw. Nothing here waits for the worker.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use bevy::{prelude::*, window::RequestRedraw};
 use editor_core::GeometryBinding;
 use editor_core::{
-    Command, CommandOutcome, CommandRequest, Diagnostic, Mutation, ObjectId, SceneDocument,
-    TerrainPaintRequest, TerrainSculptRequest, TerrainSurfaceRay, TransactionId, ViewSnapshot,
+    Command, CommandOutcome, CommandRequest, Diagnostic, Mutation, ObjectId, ReviewScope,
+    SceneDocument, TerrainPaintRequest, TerrainSculptRequest, TerrainSurfaceRay, TransactionId,
+    ViewSnapshot,
 };
 use editor_services::{
     DiskVersion, EditorHandle, JobKind, JobOperation, JobOutput, JobTicket, PlayConfig,
@@ -87,6 +91,27 @@ pub struct Editor {
     last_end: Option<PlayEnd>,
     end_dismissed: bool,
     cleanup_dismissed: bool,
+    /// What the editor does by itself next for "cook and play": see [`PlayPlan`].
+    play_plan: Option<PlayPlan>,
+    /// The run whose notice that the level has moved on was put away.
+    moved_on_dismissed: Option<RunId>,
+    /// What shows a file to the person, a log for instance, in the desktop's own program.
+    opener: Opener,
+    /// The file last shown that way.
+    opened: Option<PathBuf>,
+}
+
+/// Shows a file in the desktop's own program for it.
+pub type Opener = Box<dyn Fn(&Path) -> Result<(), Diagnostic>>;
+
+/// The steps the editor takes by itself after "cook and play", one when the one before has
+/// happened. Stop gives the plan up, and so does anything in it that fails.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PlayPlan {
+    /// The run is being stopped. When it has ended as asked, the level is cooked.
+    AfterEnd,
+    /// The level is being cooked. When it is, the cooked level is checked and played.
+    AfterCook,
 }
 
 /// Whether the cooked level on disk is still the one this editor cooked. Asked for by the
@@ -173,6 +198,10 @@ impl Editor {
             last_end: None,
             end_dismissed: false,
             cleanup_dismissed: false,
+            play_plan: None,
+            moved_on_dismissed: None,
+            opener: Box::new(|path: &Path| editor_services::open_path(path)),
+            opened: None,
         })
     }
 
@@ -930,6 +959,9 @@ impl Editor {
                 fresh.last_end = self.last_end.take();
                 fresh.end_dismissed = self.end_dismissed;
                 fresh.cleanup_dismissed = self.cleanup_dismissed;
+                fresh.moved_on_dismissed = self.moved_on_dismissed;
+                fresh.opener = std::mem::replace(&mut self.opener, Box::new(|_| Ok(())));
+                fresh.opened = self.opened.take();
                 *self = fresh;
             }
             Err(problem) => {
@@ -1011,10 +1043,15 @@ impl Editor {
 
     /// Cooks the level into [`Editor::package_root`].
     pub fn cook(&mut self) {
+        self.start_cook();
+    }
+
+    /// Asks for the cook, and says whether the core took the request.
+    fn start_cook(&mut self) -> bool {
         let operation = JobOperation::Cook {
             package_root: self.package_root.clone(),
         };
-        self.start_job(JobKind::Cook, operation);
+        self.start_job(JobKind::Cook, operation)
     }
 
     /// The cooked level of the last finished cook, if there was one in this session.
@@ -1163,7 +1200,19 @@ impl Editor {
     /// Whether a start was asked for and the coordinator has not yet said what became of
     /// it: the check of the cooked level is under way for it, or the start itself is.
     pub fn play_requested(&self) -> bool {
-        self.play_when_checked.is_some() || self.start_unanswered
+        self.play_when_checked.is_some()
+            || self.start_unanswered
+            || self.play_plan == Some(PlayPlan::AfterCook)
+    }
+
+    /// Whether the level is being cooked because playing it was asked for.
+    pub fn cooking_to_play(&self) -> bool {
+        self.play_plan == Some(PlayPlan::AfterCook)
+    }
+
+    /// Whether the run is being stopped to cook the level and play it again.
+    pub fn restarting(&self) -> bool {
+        self.play_plan == Some(PlayPlan::AfterEnd)
     }
 
     /// What the coordinator last refused, until the next request.
@@ -1188,6 +1237,91 @@ impl Editor {
 
     pub fn dismiss_cleanup(&mut self) {
         self.cleanup_dismissed = true;
+    }
+
+    /// Whether the notice that the level has moved on from the run's cooked level was put
+    /// away for the run that is under way.
+    pub fn moved_on_dismissed(&self) -> bool {
+        self.moved_on_dismissed.is_some() && self.moved_on_dismissed == self.active_run()
+    }
+
+    /// Puts that notice away for this run. Another run that the level moves on from has its
+    /// own.
+    pub fn dismiss_moved_on(&mut self) {
+        self.moved_on_dismissed = self.active_run();
+    }
+
+    /// Cooks, checks and plays in one go, in the game's own window: the one key's action.
+    ///
+    /// The level is cooked first if it has no cooked level or has changed since the cook;
+    /// then the cooked level on disk is checked and the game started from it, as "Open Game
+    /// Window" does. Nothing is cooked or started when the answer is known beforehand: a run
+    /// is under way, there is no game, or the level has something the game cannot run. Each
+    /// of those is said as a refusal, in one sentence.
+    pub fn play_now(&mut self) {
+        if self.play_requested() || self.restarting() {
+            return;
+        }
+        let refusal = if self.active_run().is_some() {
+            Some("play.already_active")
+        } else if self.play.is_none() {
+            Some("play.no_game")
+        } else if play_blockers(&self.snapshot()) > 0 {
+            Some("play.blocked")
+        } else {
+            None
+        };
+        if let Some(code) = refusal {
+            self.play_refusal = Some(Diagnostic::new(code));
+            return;
+        }
+        self.play_refusal = None;
+        if self.cooked.is_none() || self.snapshot().status.cook_needed {
+            self.play_plan = self.start_cook().then_some(PlayPlan::AfterCook);
+        } else {
+            self.play_external();
+        }
+    }
+
+    /// Stops the run, cooks the level as it is now and plays it again: what the notice offers
+    /// when the level has moved on from the cooked level a run plays. Without a run it is
+    /// [`Editor::play_now`].
+    pub fn cook_and_play_again(&mut self) {
+        let Some(run) = self.active_run() else {
+            self.play_now();
+            return;
+        };
+        if self.restarting() {
+            return;
+        }
+        self.play_plan = Some(PlayPlan::AfterEnd);
+        self.submit_play(PlayControl::Stop { run });
+    }
+
+    /// Plays the cooked level again after a run that ended: checked first, as every start.
+    pub fn play_again(&mut self) {
+        self.play_external();
+    }
+
+    /// Gives the editor another way to show a file to the person. A scripted check has no
+    /// desktop to open a log in.
+    pub fn set_opener(&mut self, opener: Opener) {
+        self.opener = opener;
+    }
+
+    /// Shows a file in the desktop's own program for it: the log of a game that stopped. A
+    /// file that is gone, or a desktop that has no way to show it, is a problem like any other.
+    pub fn open_file(&mut self, path: &Path) {
+        let outcome = (self.opener)(path);
+        if outcome.is_ok() {
+            self.opened = Some(path.to_path_buf());
+        }
+        self.report(Source::Open, outcome);
+    }
+
+    /// The file last shown with [`Editor::open_file`].
+    pub fn opened(&self) -> Option<&Path> {
+        self.opened.as_deref()
     }
 
     /// Plays the cooked level in the game's own window. The cooked level on disk is checked
@@ -1217,6 +1351,8 @@ impl Editor {
     /// with the start that waited for it, or the run. A run that is still starting is
     /// stopped the same way.
     pub fn stop_play(&mut self) {
+        // A cook that was begun for the sake of playing finishes; nothing is played after it.
+        self.play_plan = None;
         self.play_when_checked = None;
         if self.package_check == PackageCheck::Checking {
             self.cancel_check();
@@ -1236,6 +1372,7 @@ impl Editor {
         self.next_play_request += 1;
         if let Err(problem) = play.submit(request) {
             self.start_unanswered = false;
+            self.play_plan = None;
             self.play_refusal = Some(problem);
         }
     }
@@ -1245,6 +1382,7 @@ impl Editor {
         let Some(play) = &mut self.play else {
             return;
         };
+        let mut cook_again = false;
         for event in play.poll(EVENTS_PER_FRAME) {
             match event {
                 PlayEvent::Answer(answer) => {
@@ -1256,23 +1394,45 @@ impl Editor {
                                 problem.code.as_str(),
                                 "play.no_active_run" | "play.stale_run"
                             ) => {}
-                        Err(problem) => self.play_refusal = Some(problem),
+                        Err(problem) => {
+                            // Whatever was to follow the refused request does not.
+                            self.play_plan = None;
+                            self.play_refusal = Some(problem);
+                        }
                         Ok(()) => self.play_refusal = None,
                     }
                 }
                 PlayEvent::Ended { end, .. } => {
+                    // The run was stopped to be played again: only an end the person asked
+                    // for goes on to the cook. A crash on the way stays what is shown.
+                    let waited_for = self.play_plan == Some(PlayPlan::AfterEnd);
+                    if waited_for {
+                        self.play_plan = None;
+                        cook_again = ended_as_asked(&end.primary.code);
+                    }
                     self.last_end = Some(end);
                     self.end_dismissed = false;
                     self.cleanup_dismissed = false;
                 }
             }
         }
+        if cook_again {
+            self.play_plan = self.start_cook().then_some(PlayPlan::AfterCook);
+        }
     }
 
-    fn start_job(&mut self, kind: JobKind, operation: JobOperation) {
+    /// Starts a job, and says whether the core took it. A request it did not take is reported
+    /// as that kind of job's problem.
+    fn start_job(&mut self, kind: JobKind, operation: JobOperation) -> bool {
         match self.handle.job(operation) {
-            Ok(_ticket) => self.running_jobs += 1,
-            Err(problem) => self.report(Source::Job(kind), Err(problem)),
+            Ok(_ticket) => {
+                self.running_jobs += 1;
+                true
+            }
+            Err(problem) => {
+                self.report(Source::Job(kind), Err(problem));
+                false
+            }
         }
     }
 
@@ -1387,6 +1547,12 @@ impl Editor {
                             self.check_ticket = None;
                             self.cooked = Some(receipt);
                             self.package_check = PackageCheck::NotAsked;
+                            // The cook was for the sake of playing: the new cooked level is
+                            // checked and the game started from it.
+                            if self.play_plan == Some(PlayPlan::AfterCook) {
+                                self.play_plan = None;
+                                self.play_external();
+                            }
                             Ok(())
                         }
                         // A kind of result the core added that needs nothing done here.
@@ -1400,6 +1566,10 @@ impl Editor {
                             if fact.kind == JobKind::Geometry {
                                 self.pending_path = pending_path;
                                 // Ask again when the level changes, not every frame.
+                            }
+                            // A cook that failed is not played.
+                            if fact.kind == JobKind::Cook {
+                                self.play_plan = None;
                             }
                             if superseded(fact.kind, &problem.code) {
                                 // Not a failure and not a success: the newer request stays
@@ -1539,6 +1709,25 @@ fn superseded(kind: JobKind, code: &str) -> bool {
 enum Source {
     Command,
     Job(JobKind),
+    /// Showing a file in the desktop's program for it.
+    Open,
+}
+
+/// Whether a run that ended with this code ended as the person asked: stopped, or its window
+/// closed.
+pub fn ended_as_asked(code: &str) -> bool {
+    matches!(code, "play.stopped" | "play.window_closed")
+}
+
+/// How many things in the level as it is open stop the game from running it, by the core's
+/// review: a level without a spawn point, a landscape with rules. The core's check before a
+/// start judges the cooked level by the same list.
+pub fn play_blockers(snapshot: &ViewSnapshot) -> usize {
+    snapshot
+        .review
+        .iter()
+        .filter(|problem| problem.scope == ReviewScope::Play)
+        .count()
 }
 
 /// Takes the core's results every frame, and keeps frames coming while the core still owes
@@ -1631,7 +1820,7 @@ mod tests {
 
     use crate::{
         panels::{
-            notice::{notices, NoticeWords},
+            notice::{notices, run_log, NoticeAction, NoticeWords},
             play::{PlayView, RunView},
         },
         play_script::{Script, SERVER_PID},
@@ -1849,6 +2038,231 @@ mod tests {
         assert_eq!(PlayView::of(&editor).run_words(), "Stopped");
     }
 
+    fn moved_on_notice(editor: &Editor) -> Option<NoticeWords> {
+        notices(editor)[3].clone()
+    }
+
+    #[test]
+    fn one_key_cooks_a_level_that_has_changed_then_checks_it_and_plays_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_game(folder.path(), Script::Runs);
+        let first_cook = editor.cooked().unwrap().identity().clone();
+        change_the_level(&mut editor);
+        assert!(editor.snapshot().status.cook_needed);
+
+        editor.play_now();
+        // The cook comes first, and it can be stopped like any other step.
+        let view = PlayView::of(&editor);
+        assert!(view.cooking);
+        assert_eq!(view.run, RunView::Starting);
+        assert_eq!(view.word().as_deref(), Some("Cooking"));
+        assert!(view.stop_offered());
+        assert!(editor.active_run().is_none());
+
+        until(&mut editor, "the game running", |editor| {
+            run(editor) == RunView::Running
+        });
+        let view = PlayView::of(&editor);
+        assert!(!view.cooking);
+        assert!(
+            editor.cooked().unwrap().identity() != &first_cook,
+            "the game runs a new cooked level"
+        );
+        assert!(
+            !view.older && !view.run_older,
+            "and it is the level as it is"
+        );
+        assert!(matches!(view.check, PackageCheck::Passed { .. }));
+        assert_eq!(editor.problem, None);
+        assert_eq!(moved_on_notice(&editor), None);
+    }
+
+    #[test]
+    fn one_key_plays_a_current_cooked_level_without_cooking_it_again() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_game(folder.path(), Script::Runs);
+        let cooked = editor.cooked().unwrap().identity().clone();
+        editor.play_now();
+        assert!(!editor.cooking_to_play());
+        assert_eq!(editor.package_check(), &PackageCheck::Checking);
+        until(&mut editor, "the game running", |editor| {
+            run(editor) == RunView::Running
+        });
+        assert!(editor.cooked().unwrap().identity() == &cooked);
+    }
+
+    #[test]
+    fn stop_during_the_cook_before_a_start_starts_nothing() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_game(folder.path(), Script::Runs);
+        change_the_level(&mut editor);
+        editor.play_now();
+        assert!(editor.cooking_to_play());
+        editor.stop_play();
+        assert_eq!(run(&editor), RunView::None);
+        settle(&mut editor);
+        // The cook itself finished; nothing was checked or started after it.
+        assert!(!editor.snapshot().status.cook_needed);
+        assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
+        assert!(editor.active_run().is_none() && editor.last_end().is_none());
+        assert_eq!(editor.problem, None);
+    }
+
+    #[test]
+    fn one_key_says_why_it_starts_nothing_and_cooks_nothing_then() {
+        // Without a game.
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = cooked_in(folder.path());
+        change_the_level(&mut editor);
+        editor.play_now();
+        assert_eq!(
+            PlayView::of(&editor).refusal.as_deref(),
+            Some("play.no_game")
+        );
+        assert!(!editor.busy(), "nothing was cooked");
+
+        // With a level the game cannot run: it has no spawn point.
+        let mut editor = empty_level();
+        editor.connect_play(Script::Runs.handle().unwrap());
+        editor.play_now();
+        let view = PlayView::of(&editor);
+        assert_eq!(view.refusal.as_deref(), Some("play.blocked"));
+        assert_eq!(view.blockers, 1);
+        assert!(
+            !editor.busy() && editor.cooked().is_none(),
+            "nothing was cooked"
+        );
+        // The sentence goes when the level is mended, without another try.
+        editor.add_spawn(&down_at(0.0, 0.0));
+        settle(&mut editor);
+        let view = PlayView::of(&editor);
+        assert_eq!((view.blockers, view.refusal), (0, None));
+
+        // With a game that runs already.
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_game(folder.path(), Script::Runs);
+        editor.play_external();
+        until(&mut editor, "the game running", |editor| {
+            run(editor) == RunView::Running
+        });
+        editor.play_now();
+        let view = PlayView::of(&editor);
+        assert_eq!(view.refusal.as_deref(), Some("play.already_active"));
+        assert_eq!(view.run, RunView::Running, "the game keeps running");
+    }
+
+    #[test]
+    fn a_level_that_moves_on_during_a_run_offers_to_cook_and_play_again_and_does_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_game(folder.path(), Script::Runs);
+        editor.play_external();
+        until(&mut editor, "the game running", |editor| {
+            run(editor) == RunView::Running
+        });
+        let first = editor.active_run().unwrap();
+        assert_eq!(
+            moved_on_notice(&editor),
+            None,
+            "the level is as it was cooked"
+        );
+
+        change_the_level(&mut editor);
+        let notice = moved_on_notice(&editor).expect("the level has moved on");
+        assert_eq!(notice.actions, [NoticeAction::CookAndPlayAgain]);
+        assert!(notice.remedy.contains("without those changes"));
+
+        editor.cook_and_play_again();
+        assert!(editor.restarting());
+        assert_eq!(moved_on_notice(&editor), None, "the offer was taken");
+        until(&mut editor, "the second run", |editor| {
+            run(editor) == RunView::Running && editor.active_run() != Some(first)
+        });
+        let view = PlayView::of(&editor);
+        assert!(!view.run_older && !view.older && !view.restarting);
+        assert_eq!(moved_on_notice(&editor), None);
+        // The stop in between was asked for: it is nowhere a notice.
+        assert_eq!(run_end_notice(&editor), None);
+        assert_eq!(editor.problem, None);
+    }
+
+    #[test]
+    fn the_notice_of_a_level_that_moved_on_is_put_away_for_that_run_only() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_game(folder.path(), Script::Runs);
+        editor.play_external();
+        until(&mut editor, "the game running", |editor| {
+            run(editor) == RunView::Running
+        });
+        change_the_level(&mut editor);
+        assert!(moved_on_notice(&editor).is_some());
+        editor.dismiss_moved_on();
+        assert_eq!(moved_on_notice(&editor), None);
+        // The status bar goes on saying it.
+        assert!(PlayView::of(&editor)
+            .run_words()
+            .ends_with("older than the level"));
+
+        // The next run of the same older cooked level says it again.
+        editor.stop_play();
+        until(&mut editor, "the run's end", |editor| {
+            editor.last_end().is_some()
+        });
+        editor.play_external();
+        until(&mut editor, "the game running again", |editor| {
+            run(editor) == RunView::Running
+        });
+        assert!(moved_on_notice(&editor).is_some());
+    }
+
+    #[test]
+    fn a_game_that_stopped_by_itself_offers_its_log_and_to_play_again() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_game(folder.path(), Script::Crashes);
+        play_to_the_end(&mut editor);
+        let notice = run_end_notice(&editor).expect("a crash stays on screen");
+        assert_eq!(
+            notice.actions,
+            [NoticeAction::PlayAgain, NoticeAction::OpenLog]
+        );
+
+        // The log is the one the notice names, shown by whatever the editor was given.
+        let log = run_log(editor.play_status().as_deref()).expect("the game wrote a log");
+        assert!(notice.facts.contains(&log.display().to_string()));
+        editor.set_opener(Box::new(|_| Ok(())));
+        editor.open_file(&log);
+        assert_eq!(editor.opened(), Some(log.as_path()));
+        assert_eq!(editor.problem, None);
+
+        // A log that cannot be shown is a problem in words, and the notice stays.
+        editor.set_opener(Box::new(|_| Err(Diagnostic::new("path.missing"))));
+        editor.open_file(&log);
+        let problem = editor.problem.clone().expect("the failure is reported");
+        let shown = crate::wording::problem(&problem.code, |_| None);
+        assert!(!shown.title.contains("path."), "{}", shown.title);
+        assert!(run_end_notice(&editor).is_some());
+
+        // Playing again checks the cooked level and starts from it, as every start.
+        editor.play_again();
+        assert_eq!(run(&editor), RunView::Starting);
+        assert_eq!(editor.package_check(), &PackageCheck::Checking);
+        until(&mut editor, "the new run", |editor| {
+            editor.active_run().is_some()
+        });
+        assert_eq!(run_end_notice(&editor), None, "the old end is put away");
+    }
+
+    #[test]
+    fn a_notice_offers_no_second_play_without_a_game_or_a_cooked_level() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_game(folder.path(), Script::Crashes);
+        play_to_the_end(&mut editor);
+        // Another level is begun: the editor holds no cooked level of it.
+        editor.new_level(folder.path().join("levels/other.level.json"));
+        let notice = run_end_notice(&editor).expect("the crash is still to be read");
+        assert!(!notice.actions.contains(&NoticeAction::PlayAgain));
+        assert!(notice.actions.contains(&NoticeAction::OpenLog));
+    }
+
     /// The game's map with a landscape of two layers, the first covering the ground: sculpted
     /// and painted ground as the game runs it. With `rule`, grass grows on it by a rule, which
     /// the game does not run. Cooked, with a scripted game that would run.
@@ -1912,6 +2326,8 @@ mod tests {
         );
         let notice = run_end_notice(&editor).expect("a refused start stays on screen");
         assert_eq!(notice.title, "The game did not start");
+        // The same cooked level would be refused again: playing it again is not offered.
+        assert!(!notice.actions.contains(&NoticeAction::PlayAgain));
         assert!(
             notice.remedy.contains("Remove the rules"),
             "{}",

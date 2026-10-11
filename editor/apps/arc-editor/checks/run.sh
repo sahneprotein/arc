@@ -327,6 +327,50 @@ with_game runs check game-stops "$PLAY,wait-run=running,click-button=Stop,wait-r
 # A game that never becomes ready stays "starting", and Stop cancels the start.
 with_game hangs check game-starting "$PLAY,wait-run=starting" 'play_run=Starting' 'play_stop=true' 'play_end=none'
 with_game hangs check game-start-stopped "$PLAY,wait-run=starting,click-button=Stop,wait-run=none" 'play_run=None' 'play_end=play\.stopped' 'run_notice=false'
+# One key does all a change needs to be played. F5 on a level that was never cooked cooks it,
+# checks the cooked level and plays it; the Play menu's row "Cook and Play" is the same. With
+# a current cooked level nothing is cooked again: the cook's source hash stays.
+with_game runs check key-play       'key=f5,wait-run=running' 'play_run=Running' 'play_cooked=[0-9a-f]{8}' 'play_older=false' 'play_check=passed' 'cook_needed=false' 'play_stop=true' 'problem=none' 'play_refusal=none'
+with_game runs check key-play-menu  'click-button=Play,click-item=Cook and Play,wait-run=running' 'play_run=Running' 'play_check=passed' 'menu_open=false' 'problem=none'
+with_game runs check key-play-current 'cook,key=f5,wait-run=running' 'play_run=Running' 'play_older=false' 'problem=none'
+same key-play key-play-current cooked cooked_source
+# A level that has changed since its cook is cooked again first, and that is what runs.
+with_game runs check key-play-changed 'cook,click-row=11,drag-gizmo=-60,key=f5,wait-run=running' 'play_run=Running' 'play_older=false' 'cook_needed=false' 'moved_notice=false' 'problem=none'
+differ key-play key-play-changed cooked_source
+# Shift+F5 is Stop: of a game that runs, and of one that is still starting.
+with_game runs check key-stop       'key=f5,wait-run=running,key=shift+f5,wait-run=none' 'play_run=None' 'play_end=play\.stopped' 'play_stop=false' 'run_notice=false'
+with_game hangs check key-stop-start 'key=f5,wait-run=starting,key=shift+f5,wait-run=none' 'play_run=None' 'play_end=play\.stopped' 'run_notice=false'
+# The key says why it does nothing, in the status bar, and cooks nothing then: without a
+# game, with a game that runs already, and with a level that has no spawn point.
+check key-no-game     'key=f5'                              'game=false' 'play_run=None' 'play_refusal=play\.no_game' 'play_cooked=none' 'problem=none'
+with_game runs check key-twice      'key=f5,wait-run=running,key=f5' 'play_run=Running' 'play_refusal=play\.already_active' 'problem=none'
+with_game runs check key-blocked    'key=ctrl+n,type=7,key=enter,click-button=Discard changes,key=f5' 'objects=0' 'play_run=None' 'play_refusal=play\.blocked' 'play_cooked=none' 'problem=none'
+# The keys act while a field has the keyboard, and not behind a menu.
+with_game runs check key-in-field   'click-row=11,inspector,type-field=translation.0:2,key=f5,wait-run=running' 'play_run=Running' 'position=Some\(\[2\.0, 0\.5, -8\.0\]\)'
+with_game runs check key-behind-menu 'click-button=Play,key=f5' 'menu_open=true' 'play_run=None' 'play_cooked=none'
+
+# The level moves on while the game runs: one notice offers to cook and play again, and that
+# stops the run, cooks the level as it is now and plays it. The run that was stopped for it
+# is no notice.
+MOVED="$PLAY,wait-run=running,click-row=11,drag-gizmo=-60"
+with_game runs check game-moved-on  "$MOVED" 'play_run=Running' 'cook_needed=true' 'moved_notice=true' 'notice_actions=\["Cook and play again"\]' 'run_notice=false'
+with_game runs check game-moved-dismissed "$MOVED,click-button=Dismiss" 'play_run=Running' 'moved_notice=false' 'cook_needed=true'
+with_game runs check game-replayed  "$MOVED,click-button=Cook and play again,wait-run=running" 'play_run=Running' 'play_older=false' 'cook_needed=false' 'moved_notice=false' 'run_notice=false' 'problem=none'
+differ game-moved-on game-replayed cooked_source
+# A game that stopped by itself offers its log and to play again.
+with_game crashes check game-crash-offers "$PLAY,wait-run=none" 'play_end=play\.crashed' 'run_notice=true' 'notice_actions=\["Play again", "Open log"\]' 'opened=none'
+with_game crashes check game-open-log "$PLAY,wait-run=none,click-button=Open log" 'run_notice=true' 'opened=client\.log' 'problem=none'
+ARC_EDITOR_CHECK_OPEN=missing; export ARC_EDITOR_CHECK_OPEN
+with_game crashes check game-log-gone "$PLAY,wait-run=none,click-button=Open log" 'run_notice=true' 'opened=none' 'problem=path\.missing' 'notice=true'
+unset ARC_EDITOR_CHECK_OPEN
+# A run that ended as asked offers nothing: there is no notice.
+with_game hangs check game-asked-offers-nothing "$PLAY,wait-run=starting,click-button=Stop,wait-run=none" 'play_end=play\.stopped' 'notice_actions=\[\]'
+with_game unavailable check game-again-offered "$PLAY,wait-run=none" 'play_end=play\.start_failed' 'run_notice=true' 'notice_actions=\["Play again"\]'
+with_game unavailable check game-again "$PLAY,wait-run=none,click-button=Play again,wait-run=none" 'play_end=play\.start_failed' 'run_notice=true' 'play_check=passed' 'problem=none'
+# The same at the two widths the toolbar is accepted at: the word and Stop keep the one row.
+with_game runs check_sized "$wide" wide-key-play     'key=f5,wait-run=running' 'window=1261x' 'play_run=Running' "$row" 'toolbar_fits=Some\(true\)'
+with_game runs check_sized "$narrow" narrow-key-play 'key=f5,wait-run=running' 'window=621x' 'play_run=Running' 'toolbar_folded=true' "$row" 'toolbar_fits=Some\(true\)'
+with_game runs check_sized "$narrow" narrow-moved-on "$MOVED" 'window=621x' 'moved_notice=true' "$row" 'toolbar_fits=Some\(true\)'
 # The game ends by itself: a notice that stays until it is dismissed.
 with_game crashes check game-crashes "$PLAY,wait-run=running,wait-run=none" 'play_run=None' 'play_end=play\.crashed' 'run_notice=true' 'left_notice=false' 'notice=false'
 with_game crashes check game-crash-dismissed "$PLAY,wait-run=running,wait-run=none,click-button=Dismiss" 'play_end=play\.crashed' 'run_notice=false'
