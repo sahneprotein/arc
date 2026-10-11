@@ -16,6 +16,63 @@ pub const FILE_NAME: &str = "arc-project.json";
 pub const SCHEMA: u32 = 2;
 pub const MAX_FILE_BYTES: usize = 32 * 1024;
 
+/// Every name a key binding may have, as the game reads it: case matters, and nothing else
+/// is a key. The game's client turns exactly these into keys and refuses to start on any
+/// other, so a manifest that passes [`validate`] is one the client can play with.
+pub const KEY_NAMES: [&str; 46] = [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "Space",
+    "Escape",
+    "Enter",
+    "Tab",
+    "Backspace",
+    "Delete",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+];
+
+/// Whether `name` is a key a binding may name.
+pub fn is_key_name(name: &str) -> bool {
+    KEY_NAMES.contains(&name)
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
@@ -74,6 +131,22 @@ pub struct ControlSettings {
     pub toggle_view: String,
     pub release_cursor: String,
     pub look: LookBinding,
+}
+
+impl ControlSettings {
+    /// The seven key bindings in the manifest's order, each with the field it is, as a
+    /// refusal names it.
+    pub fn keys(&self) -> [(&'static str, &str); 7] {
+        [
+            ("controls.move_forward", &self.move_forward),
+            ("controls.move_backward", &self.move_backward),
+            ("controls.move_left", &self.move_left),
+            ("controls.move_right", &self.move_right),
+            ("controls.jump", &self.jump),
+            ("controls.toggle_view", &self.toggle_view),
+            ("controls.release_cursor", &self.release_cursor),
+        ]
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -160,8 +233,16 @@ impl ProjectConfig {
 pub enum ProjectError {
     TooLarge,
     Decode(String),
-    Schema { expected: u32, found: u32 },
+    Schema {
+        expected: u32,
+        found: u32,
+    },
     Value(&'static str),
+    /// Two actions are bound to one key: the two fields, in the manifest's order.
+    SharedKey {
+        first: &'static str,
+        second: &'static str,
+    },
     NoConverter(u32),
 }
 
@@ -174,6 +255,9 @@ impl std::fmt::Display for ProjectError {
                 write!(f, "project schema {found} needs conversion to {expected}")
             }
             Self::Value(field) => write!(f, "invalid project field {field}"),
+            Self::SharedKey { first, second } => {
+                write!(f, "project fields {first} and {second} name the same key")
+            }
             Self::NoConverter(schema) => write!(f, "no converter from project schema {schema}"),
         }
     }
@@ -229,21 +313,7 @@ pub fn validate(config: &ProjectConfig) -> Result<(), ProjectError> {
     if !safe_relative_path(&config.rendering.profile) {
         return Err(ProjectError::Value("rendering.profile"));
     }
-    let keys = [
-        config.controls.move_forward.as_str(),
-        config.controls.move_backward.as_str(),
-        config.controls.move_left.as_str(),
-        config.controls.move_right.as_str(),
-        config.controls.jump.as_str(),
-        config.controls.toggle_view.as_str(),
-        config.controls.release_cursor.as_str(),
-    ];
-    if keys
-        .iter()
-        .any(|key| key.trim().is_empty() || key.len() > 24)
-    {
-        return Err(ProjectError::Value("controls"));
-    }
+    validate_controls(&config.controls)?;
     if let Some(clients) = config.planned.multiplayer.clients
         && !(1..=4).contains(&clients)
     {
@@ -253,6 +323,22 @@ pub fn validate(config: &ProjectConfig) -> Result<(), ProjectError> {
         && (!seconds.is_finite() || seconds < 0.0 || seconds > 3600.0)
     {
         return Err(ProjectError::Value("planned.gameplay.respawn_seconds"));
+    }
+    Ok(())
+}
+
+/// Refuses bindings the game could not play with: a key that is not one of [`KEY_NAMES`],
+/// named by its field, and two actions on one key, named by both fields. The game cannot
+/// do two things on one key in an order anyone could rely on.
+pub fn validate_controls(controls: &ControlSettings) -> Result<(), ProjectError> {
+    let keys = controls.keys();
+    if let Some(&(field, _)) = keys.iter().find(|(_, key)| !is_key_name(key)) {
+        return Err(ProjectError::Value(field));
+    }
+    for (at, &(second, key)) in keys.iter().enumerate() {
+        if let Some(&(first, _)) = keys[..at].iter().find(|(_, earlier)| *earlier == key) {
+            return Err(ProjectError::SharedKey { first, second });
+        }
     }
     Ok(())
 }
@@ -415,5 +501,75 @@ mod tests {
             validate(&config),
             Err(ProjectError::Value("planned.multiplayer.clients"))
         );
+    }
+
+    #[test]
+    fn a_binding_is_one_of_the_keys_the_game_reads_and_no_two_actions_share_one() {
+        // The vocabulary: 26 letters, 10 digits and ten named keys, each once.
+        assert_eq!(KEY_NAMES.len(), 46);
+        let mut names = KEY_NAMES.to_vec();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 46);
+        assert!(is_key_name("W") && is_key_name("7") && is_key_name("ArrowLeft"));
+        // Case and spelling matter, as they do to the game.
+        for other in ["w", "space", "Esc", "Shift", "F1", "Left", " W", ""] {
+            assert!(!is_key_name(other), "{other:?}");
+        }
+
+        // The defaults are playable, and so is every key in any one place.
+        let defaults = ProjectConfig::new("Arc Game");
+        assert_eq!(validate(&defaults), Ok(()));
+        let mut config = defaults.clone();
+        config.controls.jump = "Enter".into();
+        assert_eq!(validate(&config), Ok(()));
+
+        // A key the game does not read is refused with its field, in every place.
+        let fields = defaults.controls.keys().map(|(field, _)| field);
+        for (at, field) in fields.into_iter().enumerate() {
+            let mut config = defaults.clone();
+            let controls = &mut config.controls;
+            let places = [
+                &mut controls.move_forward,
+                &mut controls.move_backward,
+                &mut controls.move_left,
+                &mut controls.move_right,
+                &mut controls.jump,
+                &mut controls.toggle_view,
+                &mut controls.release_cursor,
+            ];
+            for (index, place) in places.into_iter().enumerate() {
+                if index == at {
+                    *place = "Shift".into();
+                }
+            }
+            assert_eq!(validate(&config), Err(ProjectError::Value(field)));
+            // Nothing that is refused is written or read back.
+            assert!(canonical_bytes(&config).is_err());
+            let bytes = serde_json::to_vec(&config).unwrap();
+            assert_eq!(decode(&bytes), Err(ProjectError::Value(field)));
+        }
+
+        // Two actions on one key.
+        let mut config = defaults.clone();
+        config.controls.move_backward = "W".into();
+        let shared = ProjectError::SharedKey {
+            first: "controls.move_forward",
+            second: "controls.move_backward",
+        };
+        assert_eq!(validate(&config), Err(shared.clone()));
+        assert!(canonical_bytes(&config).is_err());
+        assert_eq!(
+            shared.to_string(),
+            "project fields controls.move_forward and controls.move_backward name the same key"
+        );
+        // Of three on one key the first two are named.
+        config.controls.jump = "W".into();
+        assert_eq!(validate(&config), Err(shared));
+        // What is looked with is free, also both off.
+        let mut config = defaults;
+        config.controls.look.mouse = false;
+        config.controls.look.gamepad_right_stick = false;
+        assert_eq!(validate(&config), Ok(()));
     }
 }
