@@ -51,11 +51,13 @@ fn io_refusal(code: &str, path: &Path, error: std::io::Error) -> Diagnostic {
         .with("error", error)
 }
 
-/// One file of the emitters' folder that is named as an emitter is: read, or refused with
-/// the reason. A file that cannot be used is listed all the same; it is there, and hiding
-/// it would hide why an emitter is missing.
+/// One file of the emitters' folder whose name ends as an emitter's does: read, or refused
+/// with the reason. A file that cannot be used is listed all the same; it is there, and
+/// hiding it would hide why an emitter is missing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListedEmitter {
+    /// The file's name without the emitters' ending. It is the emitter's ID if the file was
+    /// read; a file that was refused may have a name that is no ID.
     pub id: String,
     pub path: PathBuf,
     pub loaded: Result<LoadedEmitter, Diagnostic>,
@@ -72,8 +74,9 @@ impl ListedEmitter {
 }
 
 /// The emitters of a game: those that can be read first, by name and then by ID, then the
-/// files that cannot. A game without the folder has none. Files that are not named as an
-/// emitter is are not looked at.
+/// files that cannot. A game without the folder has none. Every file whose name ends as an
+/// emitter's does is listed, one whose name is no ID as refused; other files are not looked
+/// at.
 pub fn list_emitters(game: &Path) -> Result<Vec<ListedEmitter>, Diagnostic> {
     let folder = emitters_folder(game);
     let entries = match std::fs::read_dir(&folder) {
@@ -84,11 +87,14 @@ pub fn list_emitters(game: &Path) -> Result<Vec<ListedEmitter>, Diagnostic> {
     let mut listed = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| io_refusal("particle.read_failed", &folder, error))?;
-        let name = entry.file_name();
-        let Some(id) = name.to_str().and_then(spec::id_from_filename) else {
+        // The name as far as it is text: a name that is not is no ID either, and is refused
+        // as one below.
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_suffix(spec::ASSET_SUFFIX) else {
             continue;
         };
         let path = entry.path();
+        // A name that is no ID is refused by the spec before anything is read.
         listed.push(ListedEmitter {
             id: id.to_owned(),
             loaded: spec::load_asset(game, id).map_err(|error| emitter_diagnostic(&error, &path)),
@@ -914,6 +920,29 @@ mod tests {
                 (id(8), "particle.value".to_owned()),
                 (id(9), "particle.decode".to_owned())
             ]
+        );
+    }
+
+    #[test]
+    fn a_file_named_as_an_emitter_with_a_name_that_is_no_id_is_listed_as_refused() {
+        let game = tempfile::tempdir().unwrap();
+        save_emitter(game.path(), &emitter(1, "Sparks"), &OnDisk::Absent).unwrap();
+        let folder = emitters_folder(game.path());
+        // A whole emitter under a name that is no ID: the name is what is wrong with it.
+        let bytes = spec::canonical_bytes(&emitter(2, "Dust")).unwrap();
+        std::fs::write(folder.join("bad-id.emitter-v1.json"), bytes).unwrap();
+
+        let listed = list_emitters(game.path()).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].name(), Some("Sparks"));
+        assert_eq!(listed[1].id, "bad-id");
+        assert_eq!(listed[1].path, folder.join("bad-id.emitter-v1.json"));
+        let refusal = listed[1].loaded.as_ref().unwrap_err();
+        assert_eq!(refusal.code, "particle.value");
+        assert_eq!(refusal.parameters["field"], "id");
+        assert_eq!(
+            refusal.parameters["path"],
+            listed[1].path.display().to_string()
         );
     }
 
