@@ -277,6 +277,7 @@ Known and left as it is:
   detail.
 - A scripted check that waits for Running goes on waiting, for about three minutes, after
   the run has already ended as failed.
+  [Mended since: fifth note.]
 - The adapter draws point emitters without drag and refuses the rest, as before. The
   Particles stage's camera is not HDR.
 - The settings shown switched off in Project settings do nothing.
@@ -303,7 +304,7 @@ these up.]
 8. Published models: a reference in the scene and the cooked level, an Assets browser, a
    model placed as an object (steps 6 and 7 of 2.5).
 
-Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `ec26fff52`
+Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `c169c42aa`
 and the game's `codex/play-readiness` at `626ec45`; both are pushed and merged nowhere. A
 project's settings can now be changed in the editor, what is saved is a manifest the game
 can play with, and the editor does not close over changes that were not saved.
@@ -384,6 +385,30 @@ What was run, each of a different kind, and nothing more:
     is byte for byte as before.
   - Changed again, closing and "Save and close" end the editor with status 0, and the file
     holds the new key and the jump key as it was.
+- For the ways out of a change to the settings, scripted with the window hidden, six cases
+  each on a project folder of its own (`project-draft`, `f7aa7356b`): 6 of 6, run twice.
+  - The dialog's own "Discard changes" puts back what the file has.
+  - Jump put on the key of moving forward is held, and "Save project settings" does nothing.
+  - A save over a file another program wrote meanwhile is refused and the file is that
+    program's. "Read project file again" is then there to be clicked; the change is still
+    held, and saving puts it onto what the other program wrote.
+  - "Save and close" with two actions on one key, and over a file written meanwhile, leaves
+    the editor open with the Project settings opened again and the file not written.
+  - The other program is the script itself: it writes the file a fifth of a second after
+    the editor has read it, and the case waits about three seconds before it saves. A write
+    that came too late would fail the case, not pass it.
+- For the proof of Play, scripted with the window hidden and the stand-in in the game's
+  place, no real game, eight cases (`play-proof`, `c169c42aa`): 8 of 8.
+  - The check's result says how the last run's processes left: the reason behind the end,
+    each exit as its code, its signal or none, with "forced" when the editor had to end the
+    process, and what was said of the cleanup. Stopped on request, both exits are 0 and the
+    cleanup says nothing. A client that ends by itself leaves with 101 and the reason is
+    named. A server that has to be killed is "signal9,forced"; one that stays has no exit
+    and two cleanup failures.
+  - A wait for a state of a run fails once there has been no run for thirty frames, with
+    how the last run ended and why, or that none was started. Three such waits ended at
+    once; before, each would have gone on for minutes. What counts as running is not
+    touched: it is only what the coordinator reports.
 - For the hidden window, one case run hidden and once shown: hidden, its window was at no
   moment among the windows on screen; shown, it was.
 - The game's client, as the game's side reports and not run by the editor's side: its
@@ -396,13 +421,15 @@ What that does not show:
   taken shown. The layout of the Project settings at any window size, the checkboxes, the
   warning colours, and the words of the question on closing as they stand in its dialog are
   unseen.
-- **A refused "Save and close" was not driven.** That the editor stays open on the Project
-  settings when the file was changed by another program, or two actions share a key, is
-  covered by unit tests of the decision, not through the window.
-- **Three paths of the Project settings were not driven:** its own "Discard changes", the
-  marking of two actions on one key, and "Read project file again" after another program
-  changed the file. Each is covered by unit tests of the state behind it, not through the
-  dialog.
+- **The scripted cases read what the editor holds.** Whether the settings are changed,
+  saved or on a shared key, the keys, whether a dialog is open. They do not read the mark
+  beside a key two actions share, or the words of a refusal: the check's result has no
+  field for those.
+- **The exits of a real run are still unrecorded.** The fields for them are there and were
+  read from the stand-in. The real server and client have not been run since.
+- **Two unit tests were not built or run:** those of the wait and of the words for an exit,
+  which are the application's. A test build of the application does not fit on the
+  machine's disk as it is.
 - **No run of the game with changed settings.** The real client has not been started from
   the editor on a project whose keys or profile were changed there. The one run of the
   fourth note was before this.
@@ -416,30 +443,29 @@ Known and left as it is:
   editor, is refused as a whole. It cannot be put right in the dialog.
 - A profile outside `assets/render` that the manifest names is shown and kept; another one
   outside that folder cannot be chosen in the dialog.
-- What the fourth note lists as left is still left: the level rewritten in a newer schema
-  without a copy, the reader's detail missing from a notice, the check that goes on waiting
-  for a run that has ended, the adapter's refused fields.
+- What the fourth note lists as left is still left, but for the check that went on waiting
+  for a run that had ended: the level rewritten in a newer schema without a copy, the
+  reader's detail missing from a notice, the adapter's refused fields.
 
 Proposed next, in this order, none decided:
 
-1. One hidden scripted case each for the paths not driven: the dialog's own discard, two
-   actions on one key, a file changed by another program, and a "Save and close" that is
-   refused for either of the last two.
-2. The proof of Play made whole, from the fourth note: each process's exit status and the
-   cleanup's words in the check's result, a wait for Running that fails at once when the run
-   ends, then one run of the real game on a project whose key and profile were changed in
-   the editor, and one with a level that places an emitter.
-3. A person looks at the Project settings and at the question on closing: once shown from a
+1. The proof of Play made whole. The check now records the exits and does not wait for a
+   run that is over; what is left is the run itself: the real server and client started
+   from the editor on a project whose key and profile were changed there, both exits read
+   as 0 from the result, and once more with a level that places an emitter. The client
+   must show a frame to count as running, so its window is on the desktop for that run.
+2. A person looks at the Project settings and at the question on closing: once shown from a
    scripted run with `ARC_EDITOR_CHECK_VISIBLE=1`, at the default width and at 621 pixels,
    against the design's Dialog page; what is found is mended.
-4. The full checks in both repositories on the tips named above: the linter, each package's
-   tests and the editor's whole scripted suite, with hidden windows. Then the two branches
-   are merged and the game's pins of the editor's crates moved to the merged commit.
-5. Game look takes a newly saved profile without a restart.
-6. A level is never rewritten in a newer schema without the file as it was kept beside it.
-7. The first planned setting made real: the number of clients, in the manifest, in the
+3. The full checks in both repositories on the tips named above: the linter, each package's
+   tests, the application's unit tests among them, and the editor's whole scripted suite,
+   with hidden windows. Then the two branches are merged and the game's pins of the
+   editor's crates moved to the merged commit. This needs room on the disk first.
+4. Game look takes a newly saved profile without a restart.
+5. A level is never rewritten in a newer schema without the file as it was kept beside it.
+6. The first planned setting made real: the number of clients, in the manifest, in the
    Project settings and in the launch (1.9).
-8. Parity by picture, the adapter's refused fields and published models, as the fourth note
+7. Parity by picture, the adapter's refused fields and published models, as the fourth note
    has them.
 
 Sources:
@@ -454,7 +480,7 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend` (commit `ec26fff52`), which continues
+- The editor as it is on the branch `codex/play-backend` (commit `c169c42aa`), which continues
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
