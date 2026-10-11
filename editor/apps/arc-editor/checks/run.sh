@@ -875,6 +875,16 @@ check particles-gpu "$P,click-button=GPU preview,wait-gpu,$X5,$X5,$X5,$X5" \
     'workspace=Particles' 'preview_mode=Gpu' 'gpu=Running' 'stage=\(true, 0\)' 'problem=none'
 check particles-refused-by-gpu "$P,click-button=Cone,click-button=GPU preview,wait-gpu" \
     'emitter_shape=Some\(Cone\)' 'preview_mode=Gpu' 'gpu=Unsupported \{ field: "shape"' 'stage=\(true, [0-9]+\)'
+# An emitter that is saved is placed in the level from the Particles tool: the editor goes
+# to the object tools with the new object selected, named after the emitter, and the level
+# is of its second schema. The core is told what the game's folder holds, so the placement
+# is no problem of the review, and the level is cooked with it. An emitter that was never
+# saved has no file a level could name: nothing is placed.
+check particles-place "$P,click-button=Save emitter,click-button=Place in level,cook" \
+    'workspace=Objects' 'selected=Some\("New Emitter"\)' 'objects=23' 'emitter_placed=1' 'level_schema=2' \
+    'stage=\(false, 0\)' 'review=\[\]' 'undo=Some\("create"\)' 'cook_needed=false' 'problem=none'
+check particles-place-unsaved "$P,click-button=Place in level" \
+    'workspace=Particles' 'objects=22' 'emitter_placed=0' 'level_schema=1' 'undo=None' 'problem=none'
 unset ARC_EDITOR_CHECK_PARTICLES
 
 # check_exit <name> <steps> <saved: yes|no>: the editor must end by itself before the check's

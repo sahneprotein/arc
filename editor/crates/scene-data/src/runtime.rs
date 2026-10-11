@@ -78,6 +78,12 @@ fn compose_world(
 }
 
 pub const COOK_SCHEMA: u32 = 1;
+/// The schema of a visual payload that holds placed particle emitters. A level without
+/// placements is cooked to the first schema, byte for byte as before; one with placements
+/// to this one. The package's manifest and its simulation payload stay at [`COOK_SCHEMA`].
+pub const VISUAL_SCHEMA_EMITTERS: u32 = 2;
+/// The most emitters a level may place.
+pub const MAX_EMITTERS: usize = 4096;
 pub const COLLISION_PROFILE: &str = "arc-game-rigid-box-trimesh-v1";
 pub const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -149,16 +155,99 @@ pub struct VisualTerrain {
     pub layers: Vec<terrain::LayerDefinition>,
     pub tiles: Vec<terrain::TerrainTile>,
 }
+/// One particle emitter as a level places it, for the client to draw. Nothing of it is in
+/// the simulation payload: the server does not know it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CookedEmitter {
+    /// The stable ID of the placement, which is the level object's. The seed of the
+    /// placement's particles is taken from it.
+    pub id: ObjectId,
+    /// The stable ID of the emitter asset: `assets/particles/<emitter_id>.emitter-v1.json`.
+    pub emitter_id: StableId,
+    /// The SHA-256 of that file's exact bytes as they were when the level was cooked.
+    pub emitter_sha256: ContentHash,
+    /// Where the emitter is in the world, through its parents. It has no scale.
+    pub transform: RigidTransform,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "VisualPayloadFields")]
 pub struct VisualPayload {
     pub schema: u32,
     pub terrain: Vec<VisualTerrain>,
+    /// The placed emitters, by placement ID. Written only in a payload of
+    /// [`VISUAL_SCHEMA_EMITTERS`], which always has some.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub emitters: Vec<CookedEmitter>,
+}
+/// A visual payload as it is read, before its schema has said which fields it has.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VisualPayloadFields {
+    schema: u32,
+    terrain: Vec<VisualTerrain>,
+    #[serde(default)]
+    emitters: Option<Vec<CookedEmitter>>,
+}
+impl TryFrom<VisualPayloadFields> for VisualPayload {
+    type Error = &'static str;
+    /// Each schema has exactly its fields: the first has no `emitters`, the second must.
+    fn try_from(fields: VisualPayloadFields) -> Result<Self, Self::Error> {
+        let emitters = match (fields.schema, fields.emitters) {
+            (VISUAL_SCHEMA_EMITTERS, Some(emitters)) => emitters,
+            (VISUAL_SCHEMA_EMITTERS, None) => return Err("missing field `emitters`"),
+            (_, Some(_)) => return Err("unknown field `emitters` for this schema"),
+            (_, None) => Vec::new(),
+        };
+        Ok(Self {
+            schema: fields.schema,
+            terrain: fields.terrain,
+            emitters,
+        })
+    }
 }
 impl VisualPayload {
+    /// The schema a payload with these emitters is written in.
+    pub fn schema_for(emitters: &[CookedEmitter]) -> u32 {
+        if emitters.is_empty() {
+            COOK_SCHEMA
+        } else {
+            VISUAL_SCHEMA_EMITTERS
+        }
+    }
     pub fn validate(&self, ground: &[CookedGround]) -> Result<(), Diagnostic> {
-        if self.schema != COOK_SCHEMA || self.terrain.len() > 4096 {
+        // One form for one content: placements make the second schema, and nothing else
+        // does, so that a level's cooked bytes and their hash do not depend on its past.
+        if self.schema != Self::schema_for(&self.emitters) || self.terrain.len() > 4096 {
             return Err(Diagnostic::new("payload.visual_invalid"));
+        }
+        if self.emitters.len() > MAX_EMITTERS {
+            return Err(Diagnostic::new("payload.emitter_limit"));
+        }
+        let mut placements = std::collections::BTreeSet::new();
+        for emitter in &self.emitters {
+            let transform = &emitter.transform;
+            let norm: f64 = transform
+                .rotation_xyzw
+                .iter()
+                .map(|v| (*v as f64).powi(2))
+                .sum();
+            if !emitter.id.valid()
+                || !placements.insert(&emitter.id)
+                || !emitter.emitter_id.valid()
+                || !transform
+                    .translation_m
+                    .iter()
+                    .chain(&transform.rotation_xyzw)
+                    .all(|v| v.is_finite())
+                || (norm - 1.0).abs() > 0.0001
+            {
+                return Err(Diagnostic::new("payload.emitter_invalid").at(&emitter.id));
+            }
+        }
+        // By placement ID, as the cook writes them: the order is part of the bytes.
+        if !self.emitters.windows(2).all(|pair| pair[0].id < pair[1].id) {
+            return Err(Diagnostic::new("payload.emitter_invalid"));
         }
         let mut objects = std::collections::BTreeSet::new();
         let mut referenced = std::collections::BTreeSet::new();

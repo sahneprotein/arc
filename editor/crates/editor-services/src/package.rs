@@ -293,7 +293,9 @@ fn load_payloads(
     }
     let visual: VisualPayload = serde_json::from_slice(&bytes)
         .map_err(|e| Diagnostic::new("payload.decode").with("detail", e))?;
-    if visual.schema != COOK_SCHEMA {
+    // The visual payload has two schemas: the first, and the second for a level that
+    // places particle emitters. Which of them a payload must be is checked with the rest.
+    if visual.schema != COOK_SCHEMA && visual.schema != VISUAL_SCHEMA_EMITTERS {
         return Err(Diagnostic::new("payload.schema_or_profile"));
     }
     visual.validate(&simulation.ground)?;

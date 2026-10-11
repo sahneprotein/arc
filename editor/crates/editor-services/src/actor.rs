@@ -73,6 +73,9 @@ pub enum JobOperation {
     },
     Cook {
         package_root: PathBuf,
+        /// The game's folder, which the emitters a level places are read from. A level
+        /// that places one is not cooked without it.
+        game: Option<PathBuf>,
     },
     VerifyPackage {
         path: PathBuf,
@@ -327,10 +330,15 @@ fn run_job(
             session.mark_saved(receipt.source_hash);
             Ok(JobOutput::Saved(receipt))
         }
-        JobOperation::Cook { package_root } => {
-            let package = editor_cook::cook_with_cancel(&session.snapshot().document, &|| {
-                check_cancel(cancel)
-            })?;
+        JobOperation::Cook { package_root, game } => {
+            // Each placed emitter's file is read now, and it is those exact bytes whose
+            // hash goes into the package: not what anything said of the file earlier.
+            let emitters =
+                |emitter_id: &str| crate::emitters::cooked_emitter(game.as_deref(), emitter_id);
+            let package =
+                editor_cook::cook_with_emitters(&session.snapshot().document, &emitters, &|| {
+                    check_cancel(cancel)
+                })?;
             check_cancel(cancel)?;
             let publication = Instant::now();
             let expected = cooked_package_identity(&package)?;

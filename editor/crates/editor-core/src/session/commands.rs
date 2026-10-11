@@ -98,6 +98,15 @@ impl EditorSession {
                 }
                 Ok(CommandOutcome::SelectionChanged)
             }
+            Command::SetEmitterAssets(known) => {
+                if *self.emitters != *known {
+                    self.emitters = Arc::new(known.clone());
+                    self.review = review_document_with(&self.document, &self.emitters).into();
+                    self.regions.review += 1;
+                    self.view_revision += 1;
+                }
+                Ok(CommandOutcome::SelectionChanged)
+            }
             Command::Edit {
                 label_key,
                 mutations,

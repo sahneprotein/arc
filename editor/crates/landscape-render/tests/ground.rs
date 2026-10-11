@@ -69,6 +69,7 @@ fn both_consumers_blend_the_same_authored_layer_colors_without_changing_triangle
     let paint = StableId::from_u128(11);
     let visual = VisualPayload {
         schema: COOK_SCHEMA,
+        emitters: vec![],
         terrain: vec![VisualTerrain {
             rules: vec![RuleDefinition {
                 id: StableId::from_u128(101),

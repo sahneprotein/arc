@@ -70,6 +70,7 @@ impl GeometryCache {
         let mut visual = VisualPayload {
             schema: COOK_SCHEMA,
             terrain: vec![],
+            emitters: vec![],
         };
         let mut work = GeometryWork::default();
         let mut rule_us = 0;
@@ -87,7 +88,9 @@ impl GeometryCache {
                     order: *order,
                     position_m: world.translation_m,
                 }),
-                ObjectData::Group => {}
+                // The view draws a placed emitter from the level itself: this cache holds
+                // geometry, and reads no emitter asset.
+                ObjectData::Group | ObjectData::Emitter { .. } => {}
                 ObjectData::Terrain(t) => {
                     let previous = self.previous.as_ref().and_then(|p| {
                         let old = old_objects.get(&o.id)?;

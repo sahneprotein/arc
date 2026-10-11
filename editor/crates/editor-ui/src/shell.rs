@@ -22,6 +22,7 @@ use crate::{
         },
         emitters::{
             emitters_panel, fit_emitters, remove_dialog, show_emitters, show_remove_dialog,
+            tell_emitter_assets,
         },
         empty::{empty_hint, show_empty_hint},
         hierarchy::{
@@ -382,6 +383,7 @@ impl Plugin for EditorUiPlugin {
                     (fit_panels, fit_review, fit_emitters, fit_emitter).chain(),
                     (
                         show_review,
+                        tell_emitter_assets,
                         run_preview,
                         show_preview,
                         show_emitters,

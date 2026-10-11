@@ -165,6 +165,11 @@ fn report_first_frames(
 /// below the depth of a few centimetres at any distance the camera reaches.
 const BOX_DEPTH_BIAS: f32 = -2048.0;
 
+/// The size of a placed emitter's mark, in metres: a cone this wide at its foot and this
+/// tall, with its tip the way the emitter emits.
+const EMITTER_MARK_RADIUS_M: f32 = 0.2;
+const EMITTER_MARK_HEIGHT_M: f32 = 0.5;
+
 /// The camera that draws the level.
 #[derive(Component)]
 pub struct ViewCamera;
@@ -173,8 +178,11 @@ pub struct ViewCamera;
 #[derive(Resource)]
 struct Looks {
     spawn_mesh: Handle<Mesh>,
+    /// The mark of a placed particle emitter: a cone whose tip is the way it emits.
+    emitter_mesh: Handle<Mesh>,
     solid: Handle<StandardMaterial>,
     spawn: Handle<StandardMaterial>,
+    emitter: Handle<StandardMaterial>,
     selected: Handle<StandardMaterial>,
     /// A box as the game draws it, if the editor holds the game's look profile.
     game_box: Option<Handle<StandardMaterial>>,
@@ -395,8 +403,10 @@ fn setup(
     };
     commands.insert_resource(Looks {
         spawn_mesh: meshes.add(Sphere::new(0.3)),
+        emitter_mesh: meshes.add(Cone::new(EMITTER_MARK_RADIUS_M, EMITTER_MARK_HEIGHT_M)),
         solid: materials.add(box_look(to_color(color::TEXT_DIM))),
         spawn: materials.add(matte(to_color(color::SIGNAL_PLAY))),
+        emitter: materials.add(matte(to_color(color::TEXT_MAIN))),
         selected: materials.add(box_look(to_color(color::ACCENT))),
         // The game's box, made only from a profile that was read: its colour, its roughness
         // and the texture it names.
@@ -484,6 +494,7 @@ fn zoom(scroll: On<Pointer<Scroll>>, mut orbit: ResMut<Orbit>) {
 
 fn place_camera(
     orbit: Res<Orbit>,
+    tool: Res<Tool>,
     mut camera: Single<&mut Transform, With<ViewCamera>>,
     mut place: ResMut<PlaceAt>,
     mut redraw: MessageWriter<RequestRedraw>,
@@ -491,12 +502,17 @@ fn place_camera(
     if orbit.is_changed() {
         **camera = orbit.transform();
         // New objects go where the view looks: along this line to the landscape, or to the
-        // point the view turns about, on the level's zero height.
-        *place = PlaceAt {
-            origin: camera.translation,
-            direction: camera.forward().as_vec3(),
-            fallback: Vec3::new(orbit.target.x, 0.0, orbit.target.z),
-        };
+        // point the view turns about, on the level's zero height. While the Particles tool
+        // is chosen the view looks at its stage and not at the level: where the level was
+        // looked at stays what it was, so that an emitter placed from there goes into the
+        // level where the level was last seen.
+        if *tool != Tool::Particles {
+            *place = PlaceAt {
+                origin: camera.translation,
+                direction: camera.forward().as_vec3(),
+                fallback: Vec3::new(orbit.target.x, 0.0, orbit.target.z),
+            };
+        }
         redraw.write(RequestRedraw);
     }
 }
@@ -648,14 +664,19 @@ fn show_level(
             }
             continue;
         };
-        let half_extents = match &object.data {
-            ObjectData::Box { half_extents_m } => Some(*half_extents_m),
-            ObjectData::Spawn { .. } => None,
+        let (half_extents, emitter) = match &object.data {
+            ObjectData::Box { half_extents_m } => (Some(*half_extents_m), false),
+            ObjectData::Spawn { .. } => (None, false),
+            // A placed emitter is the editor's own mark, as a spawn point is: a cone whose
+            // tip points the way the emitter emits. Its particles are not drawn here; the
+            // Particles tool's stage is where an emitter is watched.
+            ObjectData::Emitter { .. } => (None, true),
             // Groups have nothing to draw; the landscape is drawn by the ground renderer.
             ObjectData::Group | ObjectData::Terrain(_) => continue,
         };
         let mesh = |meshes: &mut Assets<Mesh>| match half_extents {
             Some(half) => meshes.add(box_mesh(Vec3::from_array(half) * 2.0, looks.box_repeat_m)),
+            None if emitter => looks.emitter_mesh.clone(),
             None => looks.spawn_mesh.clone(),
         };
         // In Game look a box has the game's material whether it is selected or not: the
@@ -669,6 +690,8 @@ fn show_level(
             game_box.clone()
         } else if snapshot.selection.contains(&object.id) {
             looks.selected.clone()
+        } else if emitter {
+            looks.emitter.clone()
         } else if half_extents.is_none() {
             looks.spawn.clone()
         } else {

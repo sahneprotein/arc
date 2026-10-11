@@ -390,13 +390,15 @@ type Emitters<'w> = (
 /// preview has come to, and whether it runs; `stage` whether the 3D view shows the stage
 /// and how many particles of the reference simulation it drew in the last frame. After
 /// these come `preview_mode=Gpu gpu=Running`: which picture is asked for, and what the stage
-/// says became of the GPU preview.
+/// says became of the GPU preview. Last, `emitter_placed=1 level_schema=2`: how many objects
+/// of the level place an emitter, and the schema the level is of.
 fn emitters_words(
     particles: &editor_ui::Particles,
     preview: &editor_ui::Preview,
     stage: &crate::stage::Stage,
     gpu: &editor_ui::GpuPreview,
     screen: &Screen,
+    level: &editor_core::SceneDocument,
 ) -> String {
     let rows = particles.rows();
     let code = |refusal: Option<&editor_core::Diagnostic>| {
@@ -404,7 +406,7 @@ fn emitters_words(
     };
     let simulation = preview.simulation();
     format!(
-        "emitters={:?} emitter={:?} emitter_game={} emitter_files={} emitter_rows={} emitter_fields={} emitter_rate={:?} emitter_shape={:?} emitter_problem={} emitter_refusal={} emitter_history=({}, {}) remove_asked={} preview=({}, {:.2}, {}) stage=({}, {}) preview_mode={:?} gpu={:?}",
+        "emitters={:?} emitter={:?} emitter_game={} emitter_files={} emitter_rows={} emitter_fields={} emitter_rate={:?} emitter_shape={:?} emitter_problem={} emitter_refusal={} emitter_history=({}, {}) remove_asked={} preview=({}, {:.2}, {}) stage=({}, {}) preview_mode={:?} gpu={:?} emitter_placed={} level_schema={}",
         rows.iter()
             .map(|row| (row.name.as_str(), row.unsaved, row.refused()))
             .collect::<Vec<_>>(),
@@ -433,6 +435,12 @@ fn emitters_words(
         stage.drawn,
         preview.mode,
         gpu,
+        level
+            .objects
+            .iter()
+            .filter(|object| matches!(object.data, scene_data::ObjectData::Emitter { .. }))
+            .count(),
+        level.schema,
     )
 }
 
@@ -927,7 +935,14 @@ fn scripted(
             screen
                 .ground_look()
                 .map(|look| (look.base_color_linear_rgba, look.roughness)),
-            emitters_words(&particles, &preview, &stage, &gpu, &screen),
+            emitters_words(
+                &particles,
+                &preview,
+                &stage,
+                &gpu,
+                &screen,
+                &snapshot.document,
+            ),
             // What the saved picture is: nothing is claimed of a picture that is blank.
             picture.word(),
         );

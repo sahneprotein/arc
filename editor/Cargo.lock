@@ -2315,6 +2315,7 @@ version = "0.1.0"
 dependencies = [
  "editor-cook",
  "editor-core",
+ "particle-runtime",
  "particle-spec",
  "scene-data",
  "serde",

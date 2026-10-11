@@ -322,7 +322,7 @@ fn outline_selection(
     {
         let size = match &object.data {
             ObjectData::Box { half_extents_m } => Vec3::from_array(*half_extents_m) * 2.0,
-            ObjectData::Spawn { .. } => Vec3::splat(SPAWN_OUTLINE_M),
+            ObjectData::Spawn { .. } | ObjectData::Emitter { .. } => Vec3::splat(SPAWN_OUTLINE_M),
             ObjectData::Group | ObjectData::Terrain(_) => continue,
         };
         let place = world_transform(document, object);

@@ -12,6 +12,69 @@ pub struct ReviewProblem {
     pub diagnostic: Diagnostic,
 }
 
+/// What is known of one particle emitter asset of the game, by whoever reads the game's
+/// folder: the core reads no files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmitterAsset {
+    /// The asset's stable ID, which placements name it by.
+    pub id: String,
+    pub state: EmitterAssetState,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EmitterAssetState {
+    /// The file can be read and the game's particle runtime draws it.
+    Usable,
+    /// The file cannot be read as an emitter: the reader's code.
+    Refused { code: String },
+    /// The game's particle runtime does not draw an emitter with this field as it is.
+    Unsupported { field: String },
+}
+/// The game's emitter assets as the session is told them ([`Command::SetEmitterAssets`]).
+/// Before it is told anything there is no game and no asset.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EmitterAssets {
+    /// Whether there is a game folder to read emitters from at all.
+    pub game: bool,
+    pub assets: Vec<EmitterAsset>,
+}
+
+/// What stops the game from showing the level's placed emitters, one problem for each
+/// placement that has one, by placement ID. A placement whose asset is missing, cannot be
+/// read, or cannot be drawn by the game's runtime is never skipped: the level is not
+/// cooked or played until it is put right.
+pub fn emitter_problems(scene: &SceneDocument, known: &EmitterAssets) -> Vec<ReviewProblem> {
+    let mut placements: Vec<_> = scene
+        .objects
+        .iter()
+        .filter_map(|object| match &object.data {
+            ObjectData::Emitter { emitter_id } => Some((&object.id, emitter_id)),
+            _ => None,
+        })
+        .collect();
+    placements.sort();
+    placements
+        .into_iter()
+        .filter_map(|(object, emitter_id)| {
+            let asset = known.assets.iter().find(|asset| &asset.id == emitter_id);
+            let diagnostic = match asset.map(|asset| &asset.state) {
+                _ if !known.game => Diagnostic::new("emitter.no_game"),
+                None => Diagnostic::new("emitter.asset_missing"),
+                Some(EmitterAssetState::Usable) => return None,
+                Some(EmitterAssetState::Refused { code }) => {
+                    Diagnostic::new("emitter.asset_refused").with("code", code)
+                }
+                Some(EmitterAssetState::Unsupported { field }) => {
+                    Diagnostic::new("emitter.runtime_unsupported").with("field", field)
+                }
+            };
+            Some(ReviewProblem {
+                scope: ReviewScope::Play,
+                diagnostic: diagnostic.with("emitter_id", emitter_id).at(object),
+            })
+        })
+        .collect()
+}
+
 /// Shared runtime capability facts. Validation of source/payload syntax remains
 /// with scene-data/package verification. No cook freshness or executable policy.
 #[derive(Clone, Debug, Default)]
@@ -91,6 +154,12 @@ pub fn review_play_payloads(
 /// already block Play; their generated outputs are reported from cooked payloads.
 /// No procedural outputs are guessed or evaluated on the snapshot path.
 pub fn review_document(scene: &SceneDocument) -> Vec<ReviewProblem> {
+    review_document_with(scene, &EmitterAssets::default())
+}
+
+/// [`review_document`] with what is known of the game's emitter assets: after everything
+/// else, what stops the game from showing the level's placed emitters.
+pub fn review_document_with(scene: &SceneDocument, emitters: &EmitterAssets) -> Vec<ReviewProblem> {
     let mut errors = scene_data::validation_diagnostics(scene);
     errors.sort_by(|a, b| {
         (&a.object, &a.code, &a.parameters).cmp(&(&b.object, &b.code, &b.parameters))
@@ -118,5 +187,6 @@ pub fn review_document(scene: &SceneDocument) -> Vec<ReviewProblem> {
         }
     }
     problems.extend(play_problems(&facts));
+    problems.extend(emitter_problems(scene, emitters));
     problems
 }

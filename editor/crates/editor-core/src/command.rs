@@ -106,6 +106,10 @@ pub enum Command {
     SetActiveObject(Option<ObjectId>),
     SetGizmoPivot(crate::GizmoPivot),
     SetSnap(crate::SnapSettings),
+    /// What is known of the game's particle emitter assets. Not part of the level: it is
+    /// neither saved nor undone, and only what the review says of placed emitters follows
+    /// from it.
+    SetEmitterAssets(crate::EmitterAssets),
     Edit {
         label_key: String,
         mutations: Vec<Mutation>,
@@ -300,5 +304,7 @@ pub(crate) fn mutate(scene: &mut SceneDocument, mutations: &[Mutation]) -> Resul
             _ => unreachable!(),
         }
     }
+    // A level with its first placed emitter is of the schema that has such objects.
+    scene.upgrade_for_content();
     scene_data::validate(scene)
 }

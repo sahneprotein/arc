@@ -308,6 +308,7 @@ fn canonical_alias_resolves_to_receipt_but_cook_refuses_another_package() {
     let ticket = handle
         .job(JobOperation::Cook {
             package_root: root.path().into(),
+            game: None,
         })
         .unwrap();
     assert_eq!(
@@ -351,6 +352,7 @@ fn async_cook_receipt_and_preflight_keep_authoring_state_and_compatibility_field
     let ticket = handle
         .job(JobOperation::Cook {
             package_root: root.path().into(),
+            game: None,
         })
         .unwrap();
     let JobOutput::Cooked {

@@ -39,7 +39,7 @@ use crate::{
         snap::{snap_button, snap_item},
     },
     particles::Particles,
-    session::{duplicate_offer, DuplicateOffer, Editor},
+    session::{duplicate_offer, emitter_placements, DuplicateOffer, Editor},
     shell::PanelChoice,
     theme::{size, spacing, text},
     tool::{PlaceAt, Tool},
@@ -75,10 +75,14 @@ pub fn redo(tool: Tool, particles: &mut Particles, editor: &mut Editor) {
 }
 
 /// Removes what is chosen: the selected objects of the level, or, while the Particles tool
-/// is chosen, the chosen emitter, which is asked about first.
+/// is chosen, the chosen emitter, which is asked about first. An emitter that the open level
+/// places is not removed: the panel says so.
 pub fn remove(tool: Tool, particles: &mut Particles, editor: &mut Editor) {
     if tool == Tool::Particles {
-        particles.ask_remove();
+        let placements = particles
+            .chosen_id()
+            .map_or(0, |emitter| emitter_placements(&editor.snapshot(), emitter));
+        particles.ask_remove(placements);
     } else {
         editor.delete_selected();
     }

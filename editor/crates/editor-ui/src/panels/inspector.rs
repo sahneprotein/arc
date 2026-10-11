@@ -47,8 +47,10 @@ use editor_core::{
 use scene_data::{ObjectData, ObjectRecord, RigidTransform};
 
 use crate::{
+    particles::Particles,
     session::Editor,
     theme::{feathers::BORDER, size, spacing, text},
+    tool::Tool,
     wording,
 };
 
@@ -414,7 +416,7 @@ pub fn gizmo_roots(snapshot: &ViewSnapshot) -> Vec<&ObjectRecord> {
         .filter(|object| {
             matches!(
                 object.data,
-                ObjectData::Box { .. } | ObjectData::Spawn { .. }
+                ObjectData::Box { .. } | ObjectData::Spawn { .. } | ObjectData::Emitter { .. }
             ) && !under_a_selected(object)
         })
         .collect()
@@ -426,7 +428,7 @@ pub fn gizmo_object(snapshot: &ViewSnapshot) -> Option<&ObjectRecord> {
     let holds = |object: &&ObjectRecord| {
         matches!(
             object.data,
-            ObjectData::Box { .. } | ObjectData::Spawn { .. }
+            ObjectData::Box { .. } | ObjectData::Spawn { .. } | ObjectData::Emitter { .. }
         )
     };
     let document = &snapshot.document;
@@ -500,7 +502,62 @@ fn gizmo_rows(snapshot: &ViewSnapshot) -> Box<dyn SceneList> {
 /// The scenes of one field: a label and its editor, or its value as text. `mixed` says which
 /// of its numbers differ between the selected objects, and `alone` whether one object is
 /// selected and not several.
-fn field(descriptor: &FieldDescriptor, mixed: [bool; 3], alone: bool) -> Box<dyn SceneList> {
+/// The button of a placed emitter that shows its emitter in the Particles tool, by the
+/// emitter's stable ID.
+#[derive(Component, Default, Clone)]
+pub struct OpenEmitter(pub String);
+
+/// What a placed emitter's row says of its emitter: its name, or what is wrong.
+pub const EMITTER_MISSING: &str = "Not in the game's folder";
+pub const SEVERAL_EMITTERS: &str = "Several emitters";
+
+/// The rows of a placed emitter: which of the game's emitters it is, by name, and the way
+/// to that emitter in the Particles tool. Which emitter an object places is not changed
+/// here.
+fn emitter_rows(
+    title: &str,
+    emitter_id: &str,
+    several: bool,
+    name: Option<&str>,
+) -> Box<dyn SceneList> {
+    if several {
+        return Box::new(bsn_list![row(bsn_list![
+            field_label(title),
+            label_dim(SEVERAL_EMITTERS)
+        ])]);
+    }
+    let Some(name) = name else {
+        return Box::new(bsn_list![row(bsn_list![
+            field_label(title),
+            label_dim(EMITTER_MISSING)
+        ])]);
+    };
+    let name = name.to_owned();
+    let id = emitter_id.to_owned();
+    Box::new(bsn_list![
+        row(bsn_list![field_label(title), label(name)]),
+        row(bsn_list![(
+            @FeathersButton { @caption: bsn! { Text("Open in Particles") ThemedText } }
+            OpenEmitter({id})
+            on(|activate: On<Activate>,
+                buttons: Query<&OpenEmitter>,
+                mut particles: ResMut<Particles>,
+                mut tool: ResMut<Tool>| {
+                if let Ok(button) = buttons.get(activate.entity) {
+                    particles.choose(&button.0);
+                    *tool = Tool::Particles;
+                }
+            })
+        )]),
+    ])
+}
+
+fn field(
+    descriptor: &FieldDescriptor,
+    mixed: [bool; 3],
+    alone: bool,
+    particles: &Particles,
+) -> Box<dyn SceneList> {
     let name = wording::field_label(&descriptor.label_key).to_owned();
     let unit = descriptor
         .unit_key
@@ -529,6 +586,14 @@ fn field(descriptor: &FieldDescriptor, mixed: [bool; 3], alone: bool) -> Box<dyn
                     )]
                 )
             ])])
+        }
+        (FieldKind::Text, FieldValue::Text(emitter_id)) if descriptor.id == "emitter" => {
+            emitter_rows(
+                &title,
+                emitter_id,
+                descriptor.mixed_selection,
+                particles.name_of(emitter_id),
+            )
         }
         (FieldKind::Vector(4), FieldValue::Vector(values))
             if descriptor.id == "rotation" && !descriptor.read_only =>
@@ -641,7 +706,7 @@ fn shape(snapshot: &ViewSnapshot) -> InspectorShape {
 /// otherwise only sends new values to the inputs, so that an input being used is not replaced.
 pub(crate) fn show_inspector(
     mut commands: Commands,
-    editor: NonSend<Editor>,
+    (editor, particles): (NonSend<Editor>, Res<Particles>),
     body: Query<Entity, With<InspectorBody>>,
     mut inputs: Query<(Entity, &mut FieldInput)>,
     mut names: Query<(Entity, &mut NameInput)>,
@@ -707,7 +772,7 @@ pub(crate) fn show_inspector(
                     .inspector
                     .iter()
                     .zip(&now.mixed)
-                    .map(|(descriptor, mixed)| field(descriptor, *mixed, alone)),
+                    .map(|(descriptor, mixed)| field(descriptor, *mixed, alone, &particles)),
             );
             commands
                 .entity(body)

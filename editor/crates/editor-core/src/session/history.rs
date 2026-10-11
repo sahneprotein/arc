@@ -79,7 +79,7 @@ impl EditorSession {
         {
             self.active = self.selection.first().cloned();
         }
-        self.review = review_document(&next).into();
+        self.review = review_document_with(&next, &self.emitters).into();
         self.regions.review += 1;
         self.document = next;
         self.hash = hash;

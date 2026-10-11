@@ -29,8 +29,10 @@
 //!   with. It is not that runtime, and what it shows is not what the game draws.
 
 use crate::persistence::PathLock;
+use editor_core::{EmitterAsset, EmitterAssetState, EmitterAssets};
+use particle_runtime::AdapterError;
 use particle_spec::{self as spec, Blend, EmitterError, EmitterSpec, LoadedEmitter, Shape};
-use scene_data::Diagnostic;
+use scene_data::{ContentHash, Diagnostic};
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -121,6 +123,99 @@ pub fn list_emitters(game: &Path) -> Result<Vec<ListedEmitter>, Diagnostic> {
         key(a).cmp(&key(b)).then_with(|| a.id.cmp(&b.id))
     });
     Ok(listed)
+}
+
+/// The SHA-256 a hash's 64 hexadecimal characters stand for.
+fn hash_of(hex: &str) -> Option<ContentHash> {
+    let mut hash = [0u8; 32];
+    if hex.len() != 64 || !hex.is_ascii() {
+        return None;
+    }
+    for (byte, pair) in hash.iter_mut().zip(hex.as_bytes().chunks(2)) {
+        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(ContentHash(hash))
+}
+
+/// What the game's particle runtime says of an emitter it does not draw, as a refusal.
+fn unsupported(refusal: AdapterError) -> Diagnostic {
+    match refusal {
+        AdapterError::UnsupportedField { field, reason } => {
+            Diagnostic::new("emitter.runtime_unsupported")
+                .with("field", field)
+                .with("reason", reason)
+        }
+        AdapterError::InvalidSpec { detail, .. } => Diagnostic::new("emitter.asset_refused")
+            .with("code", "particle.value")
+            .with("detail", detail),
+    }
+}
+
+/// The emitter asset with this stable ID as a level's cook, and the check before the game
+/// is started, take it: the SHA-256 of the exact bytes of its saved file, read now. Never
+/// a draft that is being edited, and never what was known of the file earlier.
+///
+/// Refused, and never passed over, when the level cannot be shown with it: there is no game
+/// folder (`emitter.no_game`), the file is not there (`emitter.asset_missing`), it cannot be
+/// read as an emitter (`emitter.asset_refused`, with the reader's `code`), or the game's
+/// particle runtime does not draw it as it is (`emitter.runtime_unsupported`, with the
+/// `field`). The caller says which placement it was.
+pub fn cooked_emitter(game: Option<&Path>, emitter_id: &str) -> Result<ContentHash, Diagnostic> {
+    let Some(game) = game else {
+        return Err(Diagnostic::new("emitter.no_game"));
+    };
+    let loaded = spec::load_asset(game, emitter_id).map_err(|refusal| {
+        if refusal.code == "particle.missing" {
+            Diagnostic::new("emitter.asset_missing")
+        } else {
+            Diagnostic::new("emitter.asset_refused")
+                .with("code", refusal.code)
+                .with("detail", &refusal.detail)
+        }
+    })?;
+    particle_runtime::supported(&loaded.spec).map_err(unsupported)?;
+    hash_of(&loaded.sha256_hex).ok_or_else(|| {
+        Diagnostic::new("emitter.asset_refused").with("code", "particle.read_failed")
+    })
+}
+
+/// What is known of the game's emitter assets, for the editor's review of a level that
+/// places emitters ([`editor_core::Command::SetEmitterAssets`]): each file of the game's
+/// folder that is named as an emitter, and whether it can be read and drawn. Read from the
+/// saved files now. Without a game folder there is no game and no asset.
+///
+/// This is for saying what is wrong while a level is edited. A cook does not go by it: it
+/// reads each file again ([`cooked_emitter`]).
+pub fn emitter_assets(game: Option<&Path>) -> EmitterAssets {
+    let Some(game) = game else {
+        return EmitterAssets::default();
+    };
+    // A folder that cannot be listed has no asset to name: its placements are then said
+    // to miss their emitters, which is what a cook would find.
+    let assets = list_emitters(game)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|listed| EmitterAsset {
+            state: match &listed.loaded {
+                Err(refusal) => EmitterAssetState::Refused {
+                    code: refusal.code.clone(),
+                },
+                Ok(loaded) => match particle_runtime::supported(&loaded.spec) {
+                    Ok(()) => EmitterAssetState::Usable,
+                    Err(AdapterError::UnsupportedField { field, .. }) => {
+                        EmitterAssetState::Unsupported {
+                            field: field.to_owned(),
+                        }
+                    }
+                    Err(AdapterError::InvalidSpec { .. }) => EmitterAssetState::Refused {
+                        code: "particle.value".into(),
+                    },
+                },
+            },
+            id: listed.id,
+        })
+        .collect();
+    EmitterAssets { game: true, assets }
 }
 
 /// What the editor last saw of an emitter's file.
@@ -1124,6 +1219,96 @@ mod tests {
         let embers = on_disk_now(&saved.path).unwrap();
         remove_emitter(game.path(), &id(1), &embers).unwrap();
         assert!(!lock.exists() && !saved.path.exists());
+    }
+
+    #[test]
+    fn a_cook_takes_the_hash_of_the_saved_file_or_says_why_it_cannot() {
+        let game = tempfile::tempdir().unwrap();
+        let code = |game: Option<&Path>, emitter: &str| cooked_emitter(game, emitter).unwrap_err();
+        assert_eq!(code(None, &id(1)).code, "emitter.no_game");
+        assert_eq!(
+            code(Some(game.path()), &id(1)).code,
+            "emitter.asset_missing"
+        );
+
+        // A point emitter: the hash is of the file's exact bytes.
+        let saved = save_emitter(game.path(), &emitter(1, "Sparks"), &OnDisk::Absent).unwrap();
+        let hash = cooked_emitter(Some(game.path()), &id(1)).unwrap();
+        assert_eq!(hash.hex(), saved.sha256_hex);
+        assert_eq!(
+            hash,
+            scene_data::payload_hash(&std::fs::read(&saved.path).unwrap())
+        );
+
+        // One the game's runtime does not draw: its field, and never a hash.
+        let cone = changed(
+            &emitter(2, "Fountain"),
+            &EmitterChange::Shape(ShapeKind::Cone),
+        )
+        .unwrap();
+        save_emitter(game.path(), &cone, &OnDisk::Absent).unwrap();
+        let refused = code(Some(game.path()), &id(2));
+        assert_eq!(refused.code, "emitter.runtime_unsupported");
+        assert_eq!(refused.parameters["field"], "shape");
+
+        // A file that is no emitter: the reader's code.
+        let folder = emitters_folder(game.path());
+        std::fs::write(folder.join(format!("{}.emitter-v1.json", id(3))), "{").unwrap();
+        let refused = code(Some(game.path()), &id(3));
+        assert_eq!(refused.code, "emitter.asset_refused");
+        assert_eq!(refused.parameters["code"], "particle.decode");
+        // And what is no ID names no file.
+        assert_eq!(
+            code(Some(game.path()), "sparks").code,
+            "emitter.asset_refused"
+        );
+    }
+
+    #[test]
+    fn the_review_is_told_of_each_emitter_file_whether_it_can_be_read_and_drawn() {
+        assert_eq!(emitter_assets(None), EmitterAssets::default());
+        let game = tempfile::tempdir().unwrap();
+        assert_eq!(
+            emitter_assets(Some(game.path())),
+            EmitterAssets {
+                game: true,
+                assets: vec![]
+            }
+        );
+        save_emitter(game.path(), &emitter(1, "Sparks"), &OnDisk::Absent).unwrap();
+        let cone = changed(
+            &emitter(2, "Fountain"),
+            &EmitterChange::Shape(ShapeKind::Cone),
+        )
+        .unwrap();
+        save_emitter(game.path(), &cone, &OnDisk::Absent).unwrap();
+        let folder = emitters_folder(game.path());
+        std::fs::write(folder.join(format!("{}.emitter-v1.json", id(3))), "{").unwrap();
+
+        let mut known = emitter_assets(Some(game.path()));
+        assert!(known.game);
+        known.assets.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(
+            known.assets,
+            [
+                EmitterAsset {
+                    id: id(1),
+                    state: EmitterAssetState::Usable
+                },
+                EmitterAsset {
+                    id: id(2),
+                    state: EmitterAssetState::Unsupported {
+                        field: "shape".into()
+                    }
+                },
+                EmitterAsset {
+                    id: id(3),
+                    state: EmitterAssetState::Refused {
+                        code: "particle.decode".into()
+                    }
+                },
+            ]
+        );
     }
 
     #[test]

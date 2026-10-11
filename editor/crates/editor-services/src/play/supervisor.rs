@@ -50,10 +50,14 @@ pub(crate) fn run(
                                 shared.publish(&mut model.status);
                                 let cancel = Arc::new(AtomicBool::new(false));
                                 let receipt = model.status.run.as_ref().unwrap().receipt.clone();
-                                let queued = verifier
-                                    .as_ref()
-                                    .map_err(Clone::clone)
-                                    .and_then(|worker| worker.submit(receipt, cancel.clone()));
+                                let queued =
+                                    verifier.as_ref().map_err(Clone::clone).and_then(|worker| {
+                                        worker.submit(
+                                            receipt,
+                                            config.asset_root.clone(),
+                                            cancel.clone(),
+                                        )
+                                    });
                                 match queued {
                                     Ok(result) => {
                                         preparation = Some(Preparation { cancel, result })

@@ -103,8 +103,10 @@ fn main() -> AppExit {
     );
     // The game's particle emitters, read from its folder once before the window opens and
     // again whenever the Particles tool is chosen. A scripted check may name another folder.
-    let particles = check::scripted_particles()
-        .or_else(|| game.clone())
+    // The same folder is where a level's cook reads the emitters the level places.
+    let emitter_game = check::scripted_particles().or_else(|| game.clone());
+    let particles = emitter_game
+        .clone()
         .map_or_else(Particles::default, Particles::of_game);
     let mut editor = match Editor::new(
         scene_data::current_map(),
@@ -112,6 +114,7 @@ fn main() -> AppExit {
         arguments.package,
     ) {
         Ok(mut editor) => {
+            editor.set_emitter_game(emitter_game);
             if let Some(path) = saved_level {
                 editor.open(path);
             }

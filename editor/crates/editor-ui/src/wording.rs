@@ -20,6 +20,18 @@ pub struct Problem {
 /// A code this table does not know is still shown, with the code itself, so that nothing
 /// fails silently and the code can be looked up.
 pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> Problem {
+    // What stops a level's placed emitters is worded once, where the review words it: a
+    // cook or a start that fails on one says the same.
+    if matches!(
+        code,
+        "emitter.no_game"
+            | "emitter.asset_missing"
+            | "emitter.asset_refused"
+            | "emitter.runtime_unsupported"
+            | "emitter.changed_since_cook"
+    ) {
+        return review(code, parameter);
+    }
     let detail = parameter("detail").unwrap_or_default();
     let (title, remedy): (&str, &str) = match code {
         // Saving and opening.
@@ -320,6 +332,47 @@ pub fn review<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> Pr
             "The level has more boxes or spawn points than the game takes",
             "Remove objects, or split the level.".into(),
         ),
+        // A placed emitter the game could not show. None of these is passed over: the
+        // level is not cooked or played until the object or its emitter is put right.
+        "emitter.no_game" => (
+            "This emitter cannot be read: the editor has no game folder",
+            "A placed emitter is a file of the game. Start the editor with --game and the \
+             game's folder, or remove the object."
+                .into(),
+        ),
+        "emitter.asset_missing" => (
+            "The emitter this object places is not in the game's folder",
+            "Its file was removed or never saved. Remove the object, or put the emitter \
+             back and save it in the Particles tool."
+                .into(),
+        ),
+        "emitter.asset_refused" => (
+            "The emitter this object places cannot be read",
+            "Its file is not an emitter this editor reads. The Particles tool lists the file \
+             with the reason."
+                .into(),
+        ),
+        "emitter.runtime_unsupported" => (
+            "The game cannot draw the emitter this object places",
+            match parameter("field") {
+                Some(field) => {
+                    let label = emitter_field(field);
+                    let setting = label.split(" (").next().unwrap_or(label).to_lowercase();
+                    format!(
+                        "The game's particle runtime does not draw an emitter with this \
+                         {setting} yet. Change it in the Particles tool and save, or remove \
+                         the object."
+                    )
+                }
+                None => "Change the emitter in the Particles tool and save, or remove the \
+                         object."
+                    .into(),
+            },
+        ),
+        "emitter.changed_since_cook" => (
+            "An emitter was changed after the level was cooked",
+            "The cooked level names the emitter's file as it was. Cook the level again.".into(),
+        ),
         other => return problem(other, parameter),
     };
     Problem {
@@ -465,6 +518,7 @@ pub fn field_label(label_key: &str) -> &str {
         "field.translation" => "Position",
         "field.rotation" => "Rotation",
         "field.half_extents" => "Half size",
+        "field.emitter" => "Emitter",
         // An unknown field is shown under its own name instead of being hidden.
         other => other.strip_prefix("field.").unwrap_or(other),
     }
@@ -584,6 +638,19 @@ pub fn emitter<'a>(
              emitter to keep your changes under a new one."
                 .into(),
         ),
+        "emitter.placed" => (
+            "The open level places this emitter".into(),
+            match parameter("count") {
+                Some("1") => "It is placed once. Remove that object from the level before \
+                              removing the emitter."
+                    .into(),
+                Some(count) => format!(
+                    "It is placed {count} times. Remove those objects from the level before \
+                     removing the emitter."
+                ),
+                None => "Remove those objects from the level before removing the emitter.".into(),
+            },
+        ),
         "particle.locked" => (
             "Another editor is writing the emitter's file".into(),
             "Nothing was written or removed here. Try again in a moment. If no other editor \
@@ -660,6 +727,7 @@ mod tests {
     fn every_emitter_refusal_is_a_sentence_and_every_number_has_a_label() {
         for code in [
             "particle.value",
+            "emitter.placed",
             "particle.conflict",
             "particle.locked",
             "particle.missing",

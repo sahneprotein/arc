@@ -16,8 +16,9 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
+use editor_core::{EmitterAssetState, EmitterAssets};
 use editor_services::{
-    emitters::{list_emitters, remove_emitter, EmitterEdit, ListedEmitter, OnDisk},
+    emitters::{emitter_assets, list_emitters, remove_emitter, EmitterEdit, ListedEmitter, OnDisk},
     particle_spec::{self as spec},
 };
 use scene_data::Diagnostic;
@@ -98,6 +99,28 @@ pub struct Particles {
     removing: Option<String>,
     /// How many emitters were made here, for their IDs.
     made: u64,
+    /// What the game's folder holds of each emitter as it is saved: whether its file can
+    /// be read and whether the game's particle runtime draws it. Read again whenever this
+    /// editor reads or changes the folder. It is what a level that places emitters is
+    /// reviewed by, and never a draft that is being edited.
+    assets: EmitterAssets,
+}
+
+/// Whether the chosen emitter can be placed in a level, or why not. A level names an
+/// emitter's saved file, and the game must be able to draw it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlaceOffer {
+    Offered,
+    /// The editor was started without a game: there is no file a level could name.
+    NoGame,
+    /// No emitter is chosen.
+    NothingChosen,
+    /// The emitter was never saved: it has no file yet.
+    NotSaved,
+    /// The emitter's file cannot be read.
+    Unreadable,
+    /// The game's particle runtime does not draw the saved emitter: the field at fault.
+    Unsupported(String),
 }
 
 impl Particles {
@@ -120,6 +143,46 @@ impl Particles {
         self.game.as_deref()
     }
 
+    /// What the game's folder holds of each saved emitter, for the review of a level that
+    /// places emitters.
+    pub fn assets(&self) -> &EmitterAssets {
+        &self.assets
+    }
+
+    /// Reads from the game's folder what each saved emitter is, after the folder was read
+    /// or changed here.
+    fn read_assets(&mut self) {
+        self.assets = emitter_assets(self.game.as_deref());
+    }
+
+    /// Whether the chosen emitter can be placed in a level: by its saved file, which is
+    /// what a level names and a cook reads.
+    pub fn place_offer(&self) -> PlaceOffer {
+        if !self.has_game() {
+            return PlaceOffer::NoGame;
+        }
+        let Some(chosen) = self.chosen_id() else {
+            return PlaceOffer::NothingChosen;
+        };
+        match self.assets.assets.iter().find(|asset| asset.id == chosen) {
+            None => PlaceOffer::NotSaved,
+            Some(asset) => match &asset.state {
+                EmitterAssetState::Usable => PlaceOffer::Offered,
+                EmitterAssetState::Refused { .. } => PlaceOffer::Unreadable,
+                EmitterAssetState::Unsupported { field } => PlaceOffer::Unsupported(field.clone()),
+            },
+        }
+    }
+
+    /// The name the saved emitter with this ID goes by here, if it is one of the game's.
+    pub fn name_of(&self, id: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(Entry::edit)
+            .map(|edit| edit.spec().name.as_str())
+    }
+
     /// Reads the game's folder again. An emitter with changes that are not saved is kept as
     /// it is, with its history, whatever its file has become: saving it says so if the file
     /// changed. One without is shown as its file is now, and is gone if its file is.
@@ -127,6 +190,7 @@ impl Particles {
         let Some(game) = self.game.clone() else {
             return;
         };
+        self.read_assets();
         let listed = match list_emitters(&game) {
             Ok(listed) => listed,
             Err(refusal) => {
@@ -420,6 +484,7 @@ impl Particles {
         match edit.save(&game) {
             Ok(_) => {
                 self.problem = None;
+                self.read_assets();
                 true
             }
             Err(refusal) => {
@@ -445,10 +510,12 @@ impl Particles {
             if let Err(refusal) = edit.save(&game) {
                 self.chosen = Some(entry.id.clone());
                 self.problem = Some(refusal);
+                self.read_assets();
                 return false;
             }
         }
         self.problem = None;
+        self.read_assets();
         true
     }
 
@@ -458,9 +525,17 @@ impl Particles {
         self.chosen().is_some()
     }
 
-    /// Asks whether the chosen emitter is to be removed.
-    pub fn ask_remove(&mut self) {
-        if self.can_remove() {
+    /// Asks whether the chosen emitter is to be removed. `placements` is how many objects
+    /// of the open level place it: an emitter that a level places is not removed, since
+    /// those objects would be left naming a file that is gone. That is refused, and the
+    /// problem says so.
+    pub fn ask_remove(&mut self, placements: usize) {
+        if !self.can_remove() {
+            return;
+        }
+        if placements > 0 {
+            self.problem = Some(Diagnostic::new("emitter.placed").with("count", placements));
+        } else {
             self.removing.clone_from(&self.chosen);
         }
     }
@@ -499,6 +574,7 @@ impl Particles {
             }
         }
         self.entries.remove(at);
+        self.read_assets();
         // The row after it is chosen, or the last one.
         self.chosen = self
             .entries
@@ -831,7 +907,7 @@ mod tests {
         particles.choose(&first);
 
         assert!(particles.removing().is_none());
-        particles.ask_remove();
+        particles.ask_remove(0);
         assert_eq!(particles.removing(), Some(("New Emitter", true)));
         // Keeping it changes nothing.
         particles.cancel_remove();
@@ -839,17 +915,72 @@ mod tests {
         assert!(!particles.confirm_remove());
         assert_eq!(particles.rows().len(), 2);
 
-        particles.ask_remove();
+        particles.ask_remove(0);
         assert!(particles.confirm_remove());
         assert_eq!(particles.chosen_id(), Some(second.as_str()));
         assert_eq!(Particles::of_game(game.path().into()).rows(), []);
 
         // One that was never saved has no file to remove.
-        particles.ask_remove();
+        particles.ask_remove(0);
         assert_eq!(particles.removing(), Some(("New Emitter 2", false)));
         assert!(particles.confirm_remove());
         assert_eq!(particles.rows(), []);
         assert_eq!(particles.chosen_id(), None);
+    }
+
+    #[test]
+    fn an_emitter_is_placed_by_its_saved_file_which_the_game_must_be_able_to_draw() {
+        assert_eq!(Particles::default().place_offer(), PlaceOffer::NoGame);
+        let game = tempfile::tempdir().unwrap();
+        let mut particles = Particles::of_game(game.path().into());
+        assert_eq!(particles.place_offer(), PlaceOffer::NothingChosen);
+
+        // Made and not saved: there is no file a level could name.
+        let id = particles.new_emitter().unwrap();
+        assert_eq!(particles.place_offer(), PlaceOffer::NotSaved);
+        assert!(particles.save_chosen());
+        assert_eq!(particles.place_offer(), PlaceOffer::Offered);
+        assert_eq!(particles.name_of(&id), Some("New Emitter"));
+        assert_eq!(particles.name_of("gone"), None);
+        assert!(particles.assets().game);
+
+        // A change that is not saved does not change what the file is: the level uses the
+        // file. Saved, a shape the game's runtime does not draw stops it.
+        particles.apply(&EmitterChange::Shape(ShapeKind::Cone));
+        assert_eq!(particles.place_offer(), PlaceOffer::Offered);
+        assert!(particles.save_chosen());
+        assert_eq!(
+            particles.place_offer(),
+            PlaceOffer::Unsupported("shape".into())
+        );
+
+        // A file that cannot be read.
+        std::fs::write(
+            game.path().join("assets/particles/bad-id.emitter-v1.json"),
+            "{",
+        )
+        .unwrap();
+        particles.refresh();
+        particles.choose("bad-id");
+        assert_eq!(particles.place_offer(), PlaceOffer::Unreadable);
+    }
+
+    #[test]
+    fn an_emitter_a_level_places_is_not_removed() {
+        let game = tempfile::tempdir().unwrap();
+        let mut particles = Particles::of_game(game.path().into());
+        particles.new_emitter().unwrap();
+        particles.save_chosen();
+
+        particles.ask_remove(2);
+        assert!(particles.removing().is_none(), "it is not even asked about");
+        let refusal = particles.problem().unwrap();
+        assert_eq!(refusal.code, "emitter.placed");
+        assert_eq!(refusal.parameters["count"], "2");
+        assert_eq!(particles.rows().len(), 1);
+        // Once the level places it no more, it is asked about as any other.
+        particles.ask_remove(0);
+        assert!(particles.removing().is_some());
     }
 
     #[test]
@@ -868,7 +999,7 @@ mod tests {
         assert_eq!(particles.problem().unwrap().code, "particle.conflict");
         assert!(particles.chosen_unsaved());
         assert!(!particles.save_all());
-        particles.ask_remove();
+        particles.ask_remove(0);
         assert!(!particles.confirm_remove());
         assert_eq!(particles.problem().unwrap().code, "particle.conflict");
         assert_eq!(particles.rows().len(), 1);
@@ -924,7 +1055,7 @@ mod tests {
         assert_eq!(refusal.code, "particle.value");
         assert!(path.ends_with("bad-id.emitter-v1.json"));
         assert!(particles.chosen().is_none() && !particles.can_remove());
-        particles.ask_remove();
+        particles.ask_remove(0);
         assert!(particles.removing().is_none());
     }
 

@@ -160,12 +160,28 @@ pub(crate) fn inspector(scene: &SceneDocument, selection: &[ObjectId]) -> Arc<[F
         f.min = Some(f32::MIN_POSITIVE);
         fields.push(f);
     }
+    // A placed emitter says which asset it is. The asset is not changed here: a placement
+    // of another emitter is another placement.
+    if let ObjectData::Emitter { emitter_id } = &first.data
+        && selected
+            .iter()
+            .all(|o| matches!(o.data, ObjectData::Emitter { .. }))
+    {
+        let mut f = field(
+            "emitter",
+            FieldValue::Text(emitter_id.clone()),
+            FieldKind::Text,
+            None,
+        );
+        f.read_only = true;
+        fields.push(f);
+    }
     for f in &mut fields {
         f.mixed_selection = selected.iter().skip(1).any(|o| match f.id.as_str() {
             "name" => o.name != first.name,
             "translation" => o.local.translation_m != first.local.translation_m,
             "rotation" => o.local.rotation_xyzw != first.local.rotation_xyzw,
-            "half_extents" => o.data != first.data,
+            "half_extents" | "emitter" => o.data != first.data,
             _ => false,
         });
     }

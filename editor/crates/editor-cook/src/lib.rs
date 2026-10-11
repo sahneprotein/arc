@@ -28,9 +28,30 @@ pub struct CookTimings {
 pub fn cook(scene: &SceneDocument) -> Result<CookedPackage, Diagnostic> {
     cook_with_cancel(scene, &|| Ok(()))
 }
-/// Cooperative cancellation at validation/encoding boundaries and geometry rows.
+/// What a cook is told of the particle emitter asset with this stable ID: the SHA-256 of
+/// its file's exact bytes as they are now, or why the level cannot be cooked with it. The
+/// cooker reads no files; whoever has the game's folder answers.
+pub type EmitterHashes<'a> = &'a dyn Fn(&str) -> Result<ContentHash, Diagnostic>;
+/// The answer where there is no game folder to read an emitter from.
+pub fn no_emitter_assets(_: &str) -> Result<ContentHash, Diagnostic> {
+    Err(Diagnostic::new("emitter.no_game"))
+}
+/// Cooperative cancellation at validation/encoding boundaries and geometry rows. A level
+/// that places an emitter is refused: there is no game folder to read the emitter from.
 pub fn cook_with_cancel(
     scene: &SceneDocument,
+    check: &dyn Fn() -> Result<(), Diagnostic>,
+) -> Result<CookedPackage, Diagnostic> {
+    cook_with_emitters(scene, &no_emitter_assets, check)
+}
+/// [`cook_with_cancel`] for a level that may place particle emitters. Each placement goes
+/// into the visual payload with its world transform and the hash `emitters` gives for its
+/// asset; a placement whose asset is refused fails the cook, with the placement as the
+/// refusal's object. A placement is never left out. Nothing of it reaches the simulation
+/// payload.
+pub fn cook_with_emitters(
+    scene: &SceneDocument,
+    emitters: EmitterHashes,
     check: &dyn Fn() -> Result<(), Diagnostic>,
 ) -> Result<CookedPackage, Diagnostic> {
     check()?;
@@ -51,6 +72,7 @@ pub fn cook_with_cancel(
     let mut visual = VisualPayload {
         schema: COOK_SCHEMA,
         terrain: Vec::new(),
+        emitters: Vec::new(),
     };
     for o in objects.values() {
         check()?;
@@ -101,8 +123,19 @@ pub fn cook_with_cancel(
                 });
             }
             ObjectData::Group => {}
+            // In the order of the placements' IDs, which is the order of this loop.
+            ObjectData::Emitter { emitter_id } => visual.emitters.push(CookedEmitter {
+                id: o.id.clone(),
+                emitter_id: StableId(emitter_id.clone()),
+                emitter_sha256: emitters(emitter_id)
+                    .map_err(|refusal| refusal.with("emitter_id", emitter_id).at(&o.id))?,
+                transform: world.clone(),
+            }),
         }
     }
+    // Placements make the visual payload's second schema; without them it is the first,
+    // byte for byte as it always was.
+    visual.schema = VisualPayload::schema_for(&visual.emitters);
     simulation.spawns.sort_by_key(|s| s.order);
     check()?;
     simulation.validate()?;

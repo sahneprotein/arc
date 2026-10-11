@@ -26,13 +26,14 @@ use bevy::{
 };
 
 use crate::{
-    particles::{EmitterRow, Particles},
+    particles::{EmitterRow, Particles, PlaceOffer},
+    session::{emitter_placements, Editor},
     shell::PanelChoice,
     theme::{
         feathers::{BORDER, SCRIM, SIGNAL_WARN},
         radius, size, spacing,
     },
-    tool::Tool,
+    tool::{PlaceAt, Tool},
     wording,
 };
 
@@ -58,12 +59,18 @@ pub enum EmitterAction {
     #[default]
     New,
     Duplicate,
+    /// Places the chosen emitter in the open level, as an object there.
+    Place,
     Remove,
 }
 
 /// One of the buttons under the list.
 #[derive(Component, Default, Clone)]
 pub struct EmitterActionButton(pub EmitterAction);
+
+/// The line under the buttons that says why one of them is off.
+#[derive(Component, Default, Clone)]
+pub struct EmitterActionNote;
 
 /// What the list says without a game, and with a game that has no emitters.
 pub const NO_GAME: &str = "Emitters are kept in the game's folder. Start the editor with \
@@ -96,6 +103,8 @@ fn act(
     activate: On<Activate>,
     actions: Query<&EmitterActionButton>,
     mut particles: ResMut<Particles>,
+    (mut tool, place): (ResMut<Tool>, Res<PlaceAt>),
+    mut editor: NonSendMut<Editor>,
 ) {
     match actions.get(activate.entity).map(|button| button.0) {
         Ok(EmitterAction::New) => {
@@ -104,8 +113,70 @@ fn act(
         Ok(EmitterAction::Duplicate) => {
             particles.duplicate_chosen();
         }
-        Ok(EmitterAction::Remove) => particles.ask_remove(),
+        Ok(EmitterAction::Place) => {
+            // By the saved file, which is what the level names: see `place_offer`.
+            let placed = particles.chosen_id().and_then(|id| {
+                let name = particles.name_of(id)?;
+                (particles.place_offer() == PlaceOffer::Offered)
+                    .then(|| (id.to_owned(), name.to_owned()))
+            });
+            if let Some((id, name)) = placed {
+                // The level is where it is placed, and where it is seen and moved.
+                *tool = Tool::Objects;
+                editor.place_emitter(&place, &id, &name);
+            }
+        }
+        Ok(EmitterAction::Remove) => {
+            let placements = placements(&particles, &editor);
+            particles.ask_remove(placements);
+        }
         Err(_) => {}
+    }
+}
+
+/// How many objects of the open level place the chosen emitter.
+fn placements(particles: &Particles, editor: &Editor) -> usize {
+    particles
+        .chosen_id()
+        .map_or(0, |emitter| emitter_placements(&editor.snapshot(), emitter))
+}
+
+/// Why the chosen emitter cannot be placed in the level, in words. Nothing when it can.
+pub fn place_reason(offer: &PlaceOffer) -> String {
+    match offer {
+        PlaceOffer::Offered | PlaceOffer::NothingChosen => String::new(),
+        PlaceOffer::NoGame => "A level names an emitter's file in the game's folder. Start \
+            the editor with --game to place one."
+            .into(),
+        PlaceOffer::NotSaved => {
+            "Save the emitter before placing it: a level names its file.".into()
+        }
+        PlaceOffer::Unreadable => {
+            "This file cannot be read as an emitter, so it cannot be placed.".into()
+        }
+        PlaceOffer::Unsupported(field) => {
+            let label = wording::emitter_field(field);
+            let setting = label.split(" (").next().unwrap_or(label).to_lowercase();
+            format!(
+                "The saved emitter cannot be placed: the game's particle runtime does not \
+                 draw an emitter with this {setting} yet."
+            )
+        }
+    }
+}
+
+/// Why the chosen emitter cannot be removed while the open level places it, in words.
+/// Nothing when the level does not place it.
+pub fn placed_reason(placements: usize) -> String {
+    match placements {
+        0 => String::new(),
+        1 => "The open level places this emitter once. Remove that object before removing \
+              the emitter."
+            .into(),
+        count => format!(
+            "The open level places this emitter {count} times. Remove those objects before \
+             removing the emitter."
+        ),
     }
 }
 
@@ -144,7 +215,13 @@ pub fn emitters_panel() -> impl Scene {
                 Children [
                     action_button("New emitter", EmitterAction::New),
                     action_button("Duplicate emitter", EmitterAction::Duplicate),
+                    action_button("Place in level", EmitterAction::Place),
                     action_button("Remove emitter", EmitterAction::Remove),
+                    (
+                        label_dim("")
+                        EmitterActionNote
+                        Node { width: percent(100), display: Display::None }
+                    ),
                 ]
             ),
         ]
@@ -224,10 +301,11 @@ type RowsShown = (bool, Vec<(String, String, String)>);
 /// changed, and marks the chosen row.
 pub(crate) fn show_emitters(
     mut commands: Commands,
-    particles: Res<Particles>,
+    (particles, editor): (Res<Particles>, NonSend<Editor>),
     body: Query<Entity, With<EmittersBody>>,
     marks: Query<(Entity, &EmitterRowMark, Has<Selected>)>,
     actions: Query<(Entity, &EmitterActionButton, Has<InteractionDisabled>)>,
+    mut notes: Query<(&mut Text, &mut Node), With<EmitterActionNote>>,
     mut shown: Local<Option<RowsShown>>,
 ) {
     let Ok(body) = body.single() else {
@@ -263,16 +341,50 @@ pub(crate) fn show_emitters(
             commands.entity(entity).remove::<Selected>();
         }
     }
+    let offer = particles.place_offer();
+    let placed = placements(&particles, &editor);
     for (entity, action, off) in &actions {
         let offered = match action.0 {
             EmitterAction::New => particles.has_game(),
-            EmitterAction::Duplicate | EmitterAction::Remove => particles.can_remove(),
+            EmitterAction::Duplicate => particles.can_remove(),
+            EmitterAction::Place => offer == PlaceOffer::Offered,
+            // An emitter the open level places is not removed.
+            EmitterAction::Remove => particles.can_remove() && placed == 0,
         };
         if offered && off {
             commands.entity(entity).remove::<InteractionDisabled>();
         } else if !offered && !off {
             commands.entity(entity).insert(InteractionDisabled);
         }
+    }
+    // A button that is off says why, in the line under the buttons.
+    let reasons: Vec<String> = [place_reason(&offer), placed_reason(placed)]
+        .into_iter()
+        .filter(|reason| !reason.is_empty())
+        .collect();
+    let said = reasons.join(" ");
+    for (mut text, mut node) in &mut notes {
+        if text.0 != said {
+            text.0.clone_from(&said);
+        }
+        let display = if said.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        if node.display != display {
+            node.display = display;
+        }
+    }
+}
+
+/// Tells the core what the game's folder holds of each saved emitter, whenever that is
+/// other than what the core was last told in the level that is open: its review says by it
+/// what is wrong with the emitters the level places.
+pub(crate) fn tell_emitter_assets(particles: Res<Particles>, mut editor: NonSendMut<Editor>) {
+    // Looked at first without touching the editor: nearly always there is nothing to tell.
+    if !editor.told_emitter_assets(particles.assets()) {
+        editor.tell_emitter_assets(particles.assets());
     }
 }
 
@@ -454,6 +566,23 @@ mod tests {
             );
             assert_ne!(reason, named);
         }
+    }
+
+    #[test]
+    fn a_button_that_is_off_says_why_in_words() {
+        assert_eq!(place_reason(&PlaceOffer::Offered), "");
+        assert_eq!(place_reason(&PlaceOffer::NothingChosen), "");
+        assert!(place_reason(&PlaceOffer::NoGame).contains("--game"));
+        assert!(place_reason(&PlaceOffer::NotSaved).starts_with("Save the emitter"));
+        assert!(place_reason(&PlaceOffer::Unreadable).contains("cannot be read"));
+        let shape = place_reason(&PlaceOffer::Unsupported("shape".into()));
+        assert!(shape.contains("with this shape yet"), "{shape}");
+        let drag = place_reason(&PlaceOffer::Unsupported("motion.drag_per_s".into()));
+        assert!(drag.contains("with this drag yet"), "{drag}");
+
+        assert_eq!(placed_reason(0), "");
+        assert!(placed_reason(1).contains("once") && placed_reason(1).contains("that object"));
+        assert!(placed_reason(3).contains("3 times") && placed_reason(3).contains("those objects"));
     }
 
     #[test]

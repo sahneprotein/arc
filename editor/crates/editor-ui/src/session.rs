@@ -11,6 +11,7 @@ use std::{
 };
 
 use bevy::{prelude::*, window::RequestRedraw};
+use editor_core::EmitterAssets;
 use editor_core::GeometryBinding;
 use editor_core::{
     Command, CommandOutcome, CommandRequest, Diagnostic, DuplicateObject, FieldAssignment,
@@ -78,6 +79,11 @@ pub struct Editor {
     package_check: PackageCheck,
     /// The check that is under way, to cancel it.
     check_ticket: Option<JobTicket>,
+    /// The game's folder as the emitters a level places are read from, if there is one.
+    emitter_game: Option<PathBuf>,
+    /// The session the core was last told the game's emitter assets in, and what it was
+    /// told: it is told again in another session, and when they are others.
+    emitters_told: Option<(u64, EmitterAssets)>,
     /// The core's Play coordinator, if this editor has a game to start. It runs beside the
     /// editing core: a game that runs is not work the editor waits for.
     play: Option<PlayHandle>,
@@ -191,6 +197,8 @@ impl Editor {
             cooked: None,
             package_check: PackageCheck::NotAsked,
             check_ticket: None,
+            emitter_game: None,
+            emitters_told: None,
             play: None,
             next_play_request: 1,
             play_when_checked: None,
@@ -1127,6 +1135,7 @@ impl Editor {
     fn start_cook(&mut self) -> bool {
         let operation = JobOperation::Cook {
             package_root: self.package_root.clone(),
+            game: self.emitter_game.clone(),
         };
         self.start_job(JobKind::Cook, operation)
     }
@@ -1231,6 +1240,62 @@ impl Editor {
         if let Some(ticket) = &self.check_ticket {
             ticket.cancel();
         }
+    }
+
+    /// Names the game's folder as the place the emitters a level places are read from when
+    /// it is cooked. Without it a level that places an emitter is not cooked.
+    pub fn set_emitter_game(&mut self, folder: Option<PathBuf>) {
+        self.emitter_game = folder;
+    }
+
+    /// Whether the core has been told exactly these emitter assets in the session that is
+    /// open now.
+    pub fn told_emitter_assets(&self, known: &EmitterAssets) -> bool {
+        let session = self.snapshot().session;
+        self.emitters_told
+            .as_ref()
+            .is_some_and(|(told_in, told)| *told_in == session && told == known)
+    }
+
+    /// Tells the core what the game's folder holds of each emitter, so that its review can
+    /// say what is wrong with the emitters a level places. Not an undo step, and the level
+    /// is not changed by it. Nothing is sent while the core has work or an answer open: a
+    /// command is checked against the level's revision, which is then not known.
+    pub fn tell_emitter_assets(&mut self, known: &EmitterAssets) {
+        if self.busy() || self.told_emitter_assets(known) {
+            return;
+        }
+        self.emitters_told = Some((self.snapshot().session, known.clone()));
+        self.submit(Command::SetEmitterAssets(known.clone()));
+    }
+
+    /// How far above the place it is put a new emitter is, in metres.
+    pub const NEW_EMITTER_HEIGHT: f32 = 1.0;
+
+    /// Places the game's emitter with this stable ID in the level, above `place`, as an
+    /// object named after the emitter, and selects it. One undo step. The level holds the
+    /// emitter's ID and nothing of its content.
+    pub fn place_emitter(&mut self, place: &PlaceAt, emitter_id: &str, name: &str) {
+        let Some(place) = self.place_point(place) else {
+            return;
+        };
+        let snapshot = self.snapshot();
+        let taken = |name: &str| snapshot.document.objects.iter().any(|o| o.name == name);
+        let name = if taken(name) {
+            (2..)
+                .map(|number| format!("{name} {number}"))
+                .find(|name| !taken(name))
+                .unwrap_or_else(|| name.to_owned())
+        } else {
+            name.to_owned()
+        };
+        self.add_object(
+            name,
+            place + Vec3::Y * Self::NEW_EMITTER_HEIGHT,
+            ObjectData::Emitter {
+                emitter_id: emitter_id.to_owned(),
+            },
+        );
     }
 
     /// Gives the editor a game to start: the core's Play coordinator.
@@ -1975,6 +2040,18 @@ pub fn ended_as_asked(code: &str) -> bool {
 /// How many things in the level as it is open stop the game from running it, by the core's
 /// review: a level without a spawn point, a landscape with rules. The core's check before a
 /// start judges the cooked level by the same list.
+/// How many objects of the level place the game's emitter with this stable ID.
+pub fn emitter_placements(snapshot: &ViewSnapshot, emitter_id: &str) -> usize {
+    snapshot
+        .document
+        .objects
+        .iter()
+        .filter(|object| {
+            matches!(&object.data, ObjectData::Emitter { emitter_id: placed } if placed == emitter_id)
+        })
+        .count()
+}
+
 pub fn play_blockers(snapshot: &ViewSnapshot) -> usize {
     snapshot
         .review
@@ -2015,6 +2092,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::SetActiveObject(_) => "set active",
         Command::SetGizmoPivot(_) => "set pivot",
         Command::SetSnap(_) => "set snap",
+        Command::SetEmitterAssets(_) => "set emitter assets",
         // A command the core added that this log has no name for yet.
         #[allow(
             unreachable_patterns,
@@ -4031,5 +4109,115 @@ mod tests {
         assert!(!superseded(JobKind::Geometry, "cook.degenerate_triangle"));
         assert!(!superseded(JobKind::Save, "job.cancelled"));
         assert!(!superseded(JobKind::Save, "job.stale"));
+    }
+
+    /// The level's one placed emitter.
+    fn placement(snapshot: &ViewSnapshot) -> ObjectRecord {
+        snapshot
+            .document
+            .objects
+            .iter()
+            .find(|object| matches!(object.data, ObjectData::Emitter { .. }))
+            .cloned()
+            .expect("the level places an emitter")
+    }
+
+    #[test]
+    fn an_emitter_is_placed_reviewed_and_cooked_by_its_saved_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let game = folder.path().join("game");
+        let mut particles = crate::particles::Particles::of_game(game.clone());
+        let emitter = particles.new_emitter().unwrap();
+        assert!(particles.save_chosen());
+        let file = game.join(format!("assets/particles/{emitter}.emitter-v1.json"));
+
+        let mut editor = cooked_in(folder.path());
+        editor.set_emitter_game(Some(game));
+        let plain = editor.cooked().unwrap().identity().clone();
+        assert_eq!(play_blockers(&editor.snapshot()), 0);
+
+        // Placed: an object named after the emitter, a metre above where the view looks,
+        // selected, as one undo step. The level names the emitter and holds nothing of it.
+        editor.place_emitter(&down_at(2.0, 2.0), &emitter, "New Emitter");
+        settle(&mut editor);
+        let snapshot = editor.snapshot();
+        let placed = placement(&snapshot);
+        assert_eq!(placed.name, "New Emitter");
+        assert_eq!(
+            placed.data,
+            ObjectData::Emitter {
+                emitter_id: emitter.clone()
+            }
+        );
+        assert_eq!(snapshot.selection.as_ref(), [placed.id.clone()]);
+        assert_eq!(snapshot.undo_label.as_deref(), Some("create"));
+        assert_eq!(
+            snapshot.document.schema,
+            scene_data::SCHEMA_VERSION_EMITTERS
+        );
+        assert_eq!(emitter_placements(&snapshot, &emitter), 1);
+        assert_eq!(emitter_placements(&snapshot, "another"), 0);
+
+        // The core has not been told of the game's emitters yet: the placement stops Play.
+        assert_eq!(play_blockers(&snapshot), 1);
+        assert!(!editor.told_emitter_assets(particles.assets()));
+        editor.tell_emitter_assets(particles.assets());
+        settle(&mut editor);
+        assert!(editor.told_emitter_assets(particles.assets()));
+        assert_eq!(play_blockers(&editor.snapshot()), 0);
+        assert_eq!(editor.problem, None);
+        // Telling changed nothing of the level.
+        assert_eq!(
+            editor.snapshot().document_revision,
+            snapshot.document_revision
+        );
+
+        // Cooked: the visual payload is of its second schema and has the placement with
+        // the hash of the emitter's file as it is saved. The server's payload is as before.
+        editor.cook();
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        let package = editor.cooked().unwrap().clone();
+        assert_eq!(package.identity().simulation_hash, plain.simulation_hash);
+        assert_ne!(package.identity().visual_hash, plain.visual_hash);
+        let visual: scene_data::VisualPayload = serde_json::from_slice(
+            &std::fs::read(package.path().join("level.visual.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(visual.schema, scene_data::VISUAL_SCHEMA_EMITTERS);
+        let [cooked] = visual.emitters.as_slice() else {
+            panic!("one placement, not {:?}", visual.emitters);
+        };
+        assert_eq!(cooked.id, placed.id);
+        assert_eq!(cooked.emitter_id.0, emitter);
+        assert_eq!(
+            cooked.emitter_sha256,
+            scene_data::payload_hash(&std::fs::read(&file).unwrap())
+        );
+        assert_eq!(
+            cooked.transform.translation_m[1],
+            placed.local.translation_m[1]
+        );
+
+        // A second placement of the same emitter gets a name of its own.
+        editor.place_emitter(&down_at(4.0, 2.0), &emitter, "New Emitter");
+        settle(&mut editor);
+        assert_eq!(emitter_placements(&editor.snapshot(), &emitter), 2);
+        assert!(editor
+            .snapshot()
+            .document
+            .objects
+            .iter()
+            .any(|object| object.name == "New Emitter 2"));
+
+        // The emitter's file is gone: the level is not cooked, and the problem names a
+        // placement. Nothing is left out to make the cook pass.
+        std::fs::remove_file(&file).unwrap();
+        editor.cook();
+        settle(&mut editor);
+        let refused = editor.problem.clone().expect("the cook is refused");
+        assert_eq!(refused.code, "emitter.asset_missing");
+        assert_eq!(refused.parameters["emitter_id"], emitter);
+        assert!(refused.object.is_some());
     }
 }
