@@ -1,9 +1,9 @@
 # Play and Stop, and how the editor's features are grouped
 
-A proposal, 2026-10-09, brought up to date on 2026-10-10 and four times on 2026-10-11 with
-what has been built since. The first three progress notes are left as records of their
-moment; where one says what is no longer so, a bracket says it, and the fourth note has the
-present state. Nothing proposed in it is decided. It has two parts: how starting and stopping the game should look and behave in the editor, and how
+A proposal, 2026-10-09, brought up to date on 2026-10-10 and five times on 2026-10-11 with
+what has been built since. The earlier progress notes are left as records of their moment;
+where one says what is no longer so, a bracket says it, and the fifth note has the present
+state. Nothing proposed in it is decided. It has two parts: how starting and stopping the game should look and behave in the editor, and how
 the editor's features should be grouped as it grows into the production tool for a zoned
 online game with real-time combat. Each part says first what exists today and then what is
 proposed, and the two are never mixed in one table.
@@ -281,7 +281,8 @@ Known and left as it is:
   Particles stage's camera is not HDR.
 - The settings shown switched off in Project settings do nothing.
 
-Proposed next, in this order, none decided:
+Proposed next, in this order, none decided. [The fifth note orders the work anew and takes
+these up.]
 
 1. Make the proof whole. The check's result line carries each process's exit status and what
    the cleanup said; a check that waits for Running fails at once when the run ends; then the
@@ -302,6 +303,122 @@ Proposed next, in this order, none decided:
 8. Published models: a reference in the scene and the cooked level, an Assets browser, a
    model placed as an object (steps 6 and 7 of 2.5).
 
+Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `3a15c1594`
+and the game's `codex/play-readiness` at `626ec45`; both are pushed and merged nowhere. A
+project's settings can now be changed in the editor, and what is saved is a manifest the game
+can play with.
+
+- The keys and the look profile are changed in the Project settings (`37925c13f`).
+  - A key is changed by pressing its button and then the key. A key the game does not read
+    is not taken, and the dialog says so.
+  - What is looked with is two checkboxes, the mouse and the gamepad's right stick. With
+    neither, the dialog says that the player cannot look around.
+  - The look profile is chosen among the `.json` files of the folder's `assets/render` that
+    the look reader takes. One it refuses is shown with the reason and cannot be chosen.
+  - Looking and changing write nothing: what is changed is a draft beside the manifest. The
+    dialog's foot says "Unsaved changes" and has "Save project settings" and "Discard
+    changes"; after a save it says "Saved".
+  - Two actions on one key are held in the draft, so that two keys can be exchanged, are
+    marked, and are not saved while it is so.
+  - Multiplayer and Gameplay are still controls that are switched off. A save writes
+    nothing of them.
+- A save does not write over what it has not seen.
+  - The manifest is held with the lock file a conversion makes.
+  - A manifest that is no longer the one the editor read is not replaced; the dialog says
+    so and offers to read it again, with the changes made in the editor kept.
+  - It is read once more just before it is replaced, and replaced in one step.
+  - Only the keys and the profile come from the editor. The schema, the name, the start
+    level and the planned settings are taken from the file as it is at that moment.
+  - A profile that is newly chosen must be a file in the folder that the look reader takes.
+    A save that changes nothing writes nothing.
+- The format refuses what the game could not play with (`1cc30c94d`). The 46 key names the
+  game's client reads are part of the shared format now, `project_spec::KEY_NAMES`: the
+  letters, the digits, Space, Escape, Enter, Tab, Backspace, Delete and the four arrow keys,
+  with the client's spelling. A manifest with any other key is refused with its field, and
+  one with two actions on one key with both fields. Before, the format took any short text
+  and the client refused it only when it was started.
+- The game is pinned to that format (`626ec45`), with a test that its key reader takes
+  exactly those names.
+- Game look in the 3D view is drawn from the profile the project names. It was always drawn
+  from `assets/render/look-v1.json`, whatever the project said. A folder that is no project
+  yet still has that file. The profile is read when the editor starts, so one that is saved
+  in the dialog shows from the next start; the dialog says that.
+- A scripted check no longer puts its window on the desktop (`1e7843eb4`). The window is
+  hidden unless `ARC_EDITOR_CHECK_VISIBLE=1` asks for it. The desktop gives a hidden window
+  nothing drawn, so no picture is taken of one and the result says `picture=none`.
+
+What was run, each of a different kind, and nothing more:
+
+- Unit tests of the shared format, `project-spec`: 6 of 6.
+- Unit tests of the project services, `editor-services`, chosen by name (`project::`): 19 of
+  19, eight of them new for saving.
+- Unit tests of the UI's project state, dialog words and refusals, `editor-ui`, chosen by
+  name (`project`): 21 of 21.
+- The editor application builds.
+- Scripted, in the built editor with its window hidden, one case in two runs
+  (`project-settings`, `3a15c1594`): 2 of 2.
+  - The first run sets up a folder with two look profiles, chooses the other profile, puts
+    moving forward on T by its button and the key, switches the right stick off and saves.
+    The dialog then shows those settings as the file's. The file holds them, with the jump
+    key and the planned settings as they were.
+  - The second run starts the editor anew on the folder. It shows the same settings with
+    nothing to save, and the file is byte for byte what the first run saved.
+- For the hidden window, one case run hidden and once shown: hidden, its window was at no
+  moment among the windows on screen; shown, it was.
+- The game's client, as the game's side reports and not run by the editor's side: its
+  project settings tests, 7 of 7.
+
+What that does not show:
+
+- **No question on closing.** The editor closes with unsaved project settings without
+  asking, and they are lost. The question it asks about a level and about emitters does not
+  know them.
+- **Nobody has looked at the dialog.** The scripted case reads what the dialog holds, not
+  how it looks: no picture is taken of a hidden window, and none was taken shown. Its layout
+  at any window size, the checkboxes and the warning colours are unseen.
+- **Three paths of the dialog were not driven:** "Discard changes", the marking of two
+  actions on one key, and "Read project file again" after another program changed the
+  file. Each is covered by unit tests of the state behind it, not through the dialog.
+- **No run of the game with changed settings.** The real client has not been started from
+  the editor on a project whose keys or profile were changed there. The one run of the
+  fourth note was before this.
+- **Focused checks only.** No Clippy run, no workspace suite and no full scripted suite
+  includes any of this, in either repository. The whole scripted suite has not been run
+  with hidden windows; the one case timed took five to six seconds hidden and two shown.
+
+Known and left as it is:
+
+- A manifest that names a key the game does not read, written by hand or by an older
+  editor, is refused as a whole. It cannot be put right in the dialog.
+- A profile outside `assets/render` that the manifest names is shown and kept; another one
+  outside that folder cannot be chosen in the dialog.
+- What the fourth note lists as left is still left: the level rewritten in a newer schema
+  without a copy, the reader's detail missing from a notice, the check that goes on waiting
+  for a run that has ended, the adapter's refused fields.
+
+Proposed next, in this order, none decided:
+
+1. Closing the editor asks about unsaved project settings, in the question it already asks
+   about a level and emitters, and "Save and close" saves them.
+2. One hidden scripted case each for the three paths not driven: discard, two actions on one
+   key, and a file changed by another program.
+3. The proof of Play made whole, from the fourth note: each process's exit status and the
+   cleanup's words in the check's result, a wait for Running that fails at once when the run
+   ends, then one run of the real game on a project whose key and profile were changed in
+   the editor, and one with a level that places an emitter.
+4. A person looks at the Project settings: once shown from a scripted run with
+   `ARC_EDITOR_CHECK_VISIBLE=1`, at the default width and at 621 pixels, against the design's
+   Dialog page; what is found is mended.
+5. The full checks in both repositories on the tips named above: the linter, each package's
+   tests and the editor's whole scripted suite, with hidden windows. Then the two branches
+   are merged and the game's pins of the editor's crates moved to the merged commit.
+6. Game look takes a newly saved profile without a restart.
+7. A level is never rewritten in a newer schema without the file as it was kept beside it.
+8. The first planned setting made real: the number of clients, in the manifest, in the
+   Project settings and in the launch (1.9).
+9. Parity by picture, the adapter's refused fields and published models, as the fourth note
+   has them.
+
 Sources:
 
 - `crates/editor-services/docs/play-boundary.md`: the agreed contract between the UI and the
@@ -314,11 +431,11 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend` (commit `7079e0435`), which continues
+- The editor as it is on the branch `codex/play-backend` (commit `3a15c1594`), which continues
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
-  (commit `3910bc8`), which continues it. Both are pushed; neither is merged into the game's
+  (commit `626ec45`), which continues it. Both are pushed; neither is merged into the game's
   `main`.
 
 Words used here. The **open level** is the level as it is in the editor now, with every
@@ -347,7 +464,7 @@ editor, from the request to the end of its cleanup.
 | Open Game Window in the UI (P1) | editor UI, the same branch | Built. The control reads "Starting", "Game window open" and "Stopping"; Stop is beside it and also cancels a check or a start. The status bar names the steps reached and an end the person asked for; an end nobody asked for is a notice that stays, and a process that was started and never seen to end is a second notice. Closing the editor during a run stops the game first. The editor does not redraw while a game runs; the coordinator wakes it. The game's folder is named with `--game <folder>`; without it the control says no game is set up |
 | The game reporting readiness and taking Stop | game, branch `codex/play-readiness` (pushed, not merged) | Built. Server and client, started by the editor, report their steps over a local connection and stop when told; the client says when its window was closed by the player |
 | Keys, and what a notice offers | editor UI, the same branch | Built (third progress note). F5 cooks, checks and plays in the game's window and Shift+F5 stops; a notice offers "Play again", "Open log" and "Cook and play again" |
-| The game folder as a project | editor and game, the same two branches | Built (fourth progress note). The editor sets a folder up, shows its settings and converts an older manifest on request; a client it starts gets `--project-root` and the folder, a server does not; the client reads its keys from the manifest |
+| The game folder as a project | editor and game, the same two branches | Built (fourth and fifth progress notes). The editor sets a folder up, converts an older manifest on request, and changes and saves its keys and its look profile; a manifest the game could not play with is refused by the shared format; a client the editor starts gets `--project-root` and the folder, a server does not; the client reads its keys from the manifest |
 | Of the design below, not built | editor UI | The box in the 3D view saying a game window is open; "Try again" for a server that did not shut down |
 | Running the game inside the editor's view | editor and game | Not built. P2. "Preview in Editor" is in the menu, switched off, with the reason |
 | Design | Claude Design | Drawn: five boards and the PlayControl page. P0 follows them where it can; the Play menu is as wide as any menu, because the design has no token for the wider menu it draws |
@@ -579,16 +696,16 @@ the whole suite has not been run over it.
 
 | Group | Implemented |
 |---|---|
-| Level | New, Open, Save, Save as, Cook; unsaved-changes questions; a failed save stays visible with "Try again"; one folder of levels. The game folder as a project: setup with a starter level, Project settings, conversion of an older manifest on request, the start level opened by default |
+| Level | New, Open, Save, Save as, Cook; unsaved-changes questions; a failed save stays visible with "Try again"; one folder of levels. The game folder as a project: setup with a starter level, conversion of an older manifest on request, the start level opened by default, and Project settings in which the keys and the look profile are changed and saved |
 | Objects | Boxes and spawn points: add where the view looks (on the landscape if it is there), select in the list or the view, several with Shift, move, rotate and scale with the gizmo, alone or several together, on one of them or at their middle, with or without snapping to a grid and to steps of a turn that can be set, duplicate, rename, type position, rotation and size, also over a value several differ in, remove; every change one undo step |
 | Hierarchy | A foldable tree. A row is dragged onto another to put its object under that one, or onto the list to bring it to the top |
 | Review | A tool whose panel lists what the core's review of the level finds: what stops the game from running it, and what is wrong with the level |
 | Landscape | Add a landscape of four tiles; sculpt (raise, lower, smooth, flatten); layers and painting; rules: grass scattered on a layer, a layer that fills on steep ground |
 | Particles | A tool with its own stage: reusable emitters of the game's folder listed, made, duplicated, edited with their own undo and saved; a reference simulation and a GPU preview through the shared adapter; an emitter placed in the level as an object, and cooked into the level's visual payload |
-| View | The 3D view's menu: the editor's look and Game look, which uses the game's look profile with its sky and HDR. An open-level preview with the editor's camera and overlays, not the client's picture |
+| View | The 3D view's menu: the editor's look and Game look, which uses the look profile the project names, with its sky and HDR. An open-level preview with the editor's camera and overlays, not the client's picture |
 | Window | One toolbar row with menus, whose tools fold into a menu when the row cannot hold them, side panels that give way in a narrow window, status bar, notices |
 | Play | The control with its menu: cook, the cooked level named and checked on disk, and the game started in its own window and stopped, also with one key each (Part 1). A client is started with the project's folder. On `codex/play-backend`, pushed, not merged |
-| Checks | Scripted cases that play input into the built editor, with a scripted stand-in for the game where a case needs one, and start-up timings in the log |
+| Checks | Scripted cases that play input into the built editor, with a scripted stand-in for the game where a case needs one, and start-up timings in the log. The editor's window is hidden in a check unless it is asked to be shown |
 
 Outside the editor, on the game's branches `codex/cooked-level-play` and, continuing it,
 `codex/play-readiness` (pushed, not merged): the game runs a cooked level of boxes and spawn
@@ -615,7 +732,7 @@ its own right-hand panel. The hierarchy, the view, the status bar and Play are s
 
 | Workspace | Is for | Today | Proposed additions |
 |---|---|---|---|
-| **Level** (the Level menu, not a tool) | the file, its cooked package and its settings | file actions, Cook; the project's setup and settings | the project's settings the game does not read yet; level settings (name, zone bounds, the collision profile); a cook report; the list of cooked packages with their hashes |
+| **Level** (the Level menu, not a tool) | the file, its cooked package and its settings | file actions, Cook; the project's setup, and its keys and look profile changed and saved | the project's settings the game does not read yet; level settings (name, zone bounds, the collision profile); a cook report; the list of cooked packages with their hashes |
 | **Objects** | what stands in the level | box, spawn point, gizmo; several selected objects; snapping to a grid; duplicate; reparenting by drag | prefabs with overrides; snapping to a surface; turning an object to the slope; empty groups |
 | **Landscape** | the ground | sculpt, paint, grass rule, steep-ground rule | mask layers; ground textures; noise and erosion brushes; height-map import and export; tiles loaded around the view |
 | **Gameplay** | what the server acts on | spawn point (as an object) | volumes and markers with a meaning: zone exit to another zone, safe area, trigger, spawner for non-player characters, resource node, patrol path; walkable-area preview |
