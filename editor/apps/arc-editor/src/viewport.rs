@@ -183,7 +183,7 @@ struct Looks {
 }
 
 /// Where the camera looks from: around `target`, `distance` away.
-#[derive(Resource)]
+#[derive(Resource, Clone, Copy)]
 pub struct Orbit {
     pub target: Vec3,
     pub yaw: f32,

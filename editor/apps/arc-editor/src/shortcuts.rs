@@ -9,6 +9,11 @@
 //! window; Shift+F5 stops what F5 began, at whatever step it is. When the level has something
 //! the game cannot run, F5 cooks nothing and chooses the Review tool, which lists it. While a
 //! dialog or a menu is open none of them act.
+//!
+//! While the Particles tool is chosen the keys that change something act on the chosen
+//! emitter, which is what the window shows then: Ctrl+Z and Ctrl+Shift+Z or Ctrl+Y undo and
+//! redo its changes, Ctrl+S saves it, Ctrl+D makes a copy of it, and Delete asks whether to
+//! remove it.
 
 use bevy::{
     gizmos::transform_gizmo::{TransformGizmoMode, TransformGizmoSettings},
@@ -16,7 +21,7 @@ use bevy::{
     prelude::*,
     text::EditableText,
 };
-use editor_ui::{Editor, LevelDialog, Modal, Tool};
+use editor_ui::{panels::toolbar, Editor, LevelDialog, Modal, Particles, Tool};
 
 pub struct ShortcutsPlugin;
 
@@ -32,7 +37,7 @@ fn shortcuts(
     fields: Query<(), With<EditableText>>,
     mut gizmo: ResMut<TransformGizmoSettings>,
     mut tool: ResMut<Tool>,
-    (modal, mut levels): (Res<Modal>, ResMut<LevelDialog>),
+    (modal, mut levels, mut particles): (Res<Modal>, ResMut<LevelDialog>, ResMut<Particles>),
     mut editor: NonSendMut<Editor>,
 ) {
     if modal.0 {
@@ -72,27 +77,34 @@ fn shortcuts(
                 *tool = Tool::Sculpt;
             }
             if keys.just_pressed(KeyCode::Delete) {
-                editor.delete_selected();
+                toolbar::remove(*tool, &mut particles, &mut editor);
             }
         }
         return;
     }
+    let emitters = *tool == Tool::Particles;
     if keys.just_pressed(KeyCode::KeyZ) {
         if shift {
-            editor.redo();
+            toolbar::redo(*tool, &mut particles, &mut editor);
         } else {
-            editor.undo();
+            toolbar::undo(*tool, &mut particles, &mut editor);
         }
     } else if keys.just_pressed(KeyCode::KeyY) {
-        editor.redo();
+        toolbar::redo(*tool, &mut particles, &mut editor);
     } else if keys.just_pressed(KeyCode::KeyS) {
         if shift {
             *levels = LevelDialog::SaveAs;
+        } else if emitters {
+            particles.save_chosen();
         } else {
             editor.save();
         }
     } else if keys.just_pressed(KeyCode::KeyD) {
-        editor.duplicate_selected();
+        if emitters {
+            particles.duplicate_chosen();
+        } else {
+            editor.duplicate_selected();
+        }
     } else if keys.just_pressed(KeyCode::KeyO) {
         *levels = LevelDialog::Open;
     } else if keys.just_pressed(KeyCode::KeyN) {

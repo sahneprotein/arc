@@ -28,9 +28,13 @@ use bevy::{
 use crate::{
     panels::menu::{menu_item, menu_popup},
     theme::{size, spacing, text},
-    tool::{LookStatus, ViewMode},
+    tool::{LookStatus, Tool, ViewMode},
     wording,
 };
+
+/// The control in the view's corner.
+#[derive(Component, Default, Clone)]
+pub struct ViewControl;
 
 /// The caption of the control's button, which names the chosen way.
 #[derive(Component, Default, Clone)]
@@ -117,6 +121,7 @@ fn view_row(mode: ViewMode) -> impl Scene {
 /// The control, for the node the 3D view is in: in its upper left corner.
 pub fn view_control() -> impl Scene {
     bsn! {
+        ViewControl
         Node {
             position_type: PositionType::Absolute,
             left: px(spacing::SPACE_4),
@@ -156,15 +161,28 @@ pub fn view_control() -> impl Scene {
 
 /// Shows the chosen way on the button, switches the Game look row on or off with the profile,
 /// and says under the rows why it is off or what it shows. A profile that is lost while Game
-/// look is chosen takes the view back to the editor's own picture.
+/// look is chosen takes the view back to the editor's own picture. The control is not there
+/// while the Particles tool is chosen: the view shows no level then, and the preview's own
+/// controls are in its corner.
 pub(crate) fn show_view(
     mut commands: Commands,
-    look: Res<LookStatus>,
+    (look, tool): (Res<LookStatus>, Res<Tool>),
+    mut controls: Query<&mut Node, With<ViewControl>>,
     mut mode: ResMut<ViewMode>,
     mut captions: Query<&mut Text, (With<ViewCaption>, Without<ViewNote>)>,
     rows: Query<(Entity, &ViewRow, Has<InteractionDisabled>)>,
     mut notes: Query<&mut Text, (With<ViewNote>, Without<ViewCaption>)>,
 ) {
+    let display = if *tool == Tool::Particles {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    for mut node in &mut controls {
+        if node.display != display {
+            node.display = display;
+        }
+    }
     let allowed = view_after(*mode, &look);
     if *mode != allowed {
         *mode = allowed;

@@ -513,12 +513,172 @@ pub fn short_hash(hex: &str) -> &str {
     hex.get(..8).unwrap_or(hex)
 }
 
+/// What a number of an emitter is called in its panel, by the dotted name the shared
+/// particle format uses for it. A name this table does not know is shown as it is.
+pub fn emitter_field(field: &str) -> &str {
+    match field {
+        "name" => "Name",
+        "emission.rate_per_second" => "Rate (per s)",
+        "emission.burst_count" => "Burst",
+        "emission.duration_seconds" => "Duration (s)",
+        "lifetime.min_seconds" => "Shortest life (s)",
+        "lifetime.max_seconds" => "Longest life (s)",
+        "shape.radius_m" => "Radius (m)",
+        "shape.angle_degrees" => "Angle (\u{b0})",
+        "shape.size_m" => "Size (m)",
+        "motion.speed_min_m_per_s" => "Slowest (m/s)",
+        "motion.speed_max_m_per_s" => "Fastest (m/s)",
+        "motion.gravity_m_per_s2" => "Gravity (m/s\u{b2})",
+        "motion.drag_per_s" => "Drag (per s)",
+        "look.size_start_m" => "Size at start (m)",
+        "look.size_end_m" => "Size at end (m)",
+        "look.color_start_linear_rgba" => "Colour at start",
+        "look.color_end_linear_rgba" => "Colour at end",
+        "limits.max_particles" => "Most particles",
+        other => other,
+    }
+}
+
+/// A refusal about an emitter, in words: a value the shared particle format does not take,
+/// a file that cannot be read, or one that changed on disk. `parameter` returns the value of
+/// a named parameter of the diagnostic; `range` the least and the most the field at fault
+/// may be, where the format bounds it.
+pub fn emitter<'a>(
+    code: &str,
+    parameter: impl Fn(&str) -> Option<&'a str>,
+    range: Option<(f64, f64)>,
+) -> Problem {
+    // A field of the format by the name its panel row has, without the unit.
+    let field = parameter("field").map(|field| {
+        let label = emitter_field(field);
+        label.split(" (").next().unwrap_or(label).to_lowercase()
+    });
+    let (title, remedy): (String, String) = match code {
+        // Of a file: its name and the ID written in it are not one valid ID.
+        "particle.value" if parameter("field") == Some("id") => (
+            "The file's name is not the ID of the emitter in it".into(),
+            "An emitter's file is named after its ID. The file was renamed or copied outside \
+             the editor. Give it back its name, or remove it in the game's folder."
+                .into(),
+        ),
+        "particle.value" => (
+            match &field {
+                Some(field) => format!("An emitter cannot have that value for its {field}"),
+                None => "An emitter cannot have that value".into(),
+            },
+            match (range, parameter("detail")) {
+                // Through the format's own width of number: a bound reads as it is written.
+                (Some((least, most)), _) => format!(
+                    "It may be from {} to {}. Nothing was changed.",
+                    least as f32, most as f32
+                ),
+                (None, Some(detail)) if !detail.is_empty() => {
+                    format!("Nothing was changed. Details: {detail}")
+                }
+                _ => "Nothing was changed.".into(),
+            },
+        ),
+        "particle.conflict" => (
+            "The emitter's file changed on disk since the editor read it".into(),
+            "Another program wrote it. Nothing was written or removed here. Duplicate the \
+             emitter to keep your changes under a new one."
+                .into(),
+        ),
+        "particle.missing" => (
+            "The emitter's file is no longer there".into(),
+            "It was removed outside the editor. Save the emitter to write it again.".into(),
+        ),
+        "particle.read_failed" => (
+            "The emitter's file could not be read".into(),
+            "Check that the game's assets/particles folder can be read.".into(),
+        ),
+        "particle.write_failed" => (
+            "The emitter could not be written".into(),
+            "Check that the game's assets/particles folder can be written to.".into(),
+        ),
+        "particle.limit" => (
+            "The file is larger than an emitter can be".into(),
+            "It may be another file under an emitter's name.".into(),
+        ),
+        "particle.decode" => (
+            "The file is not an emitter this editor can read".into(),
+            "It lacks something, or names something this editor does not know. Bring the \
+             editor and the game to the same version."
+                .into(),
+        ),
+        "particle.schema" => (
+            "The emitter is of another version than this editor reads".into(),
+            "Bring the editor and the game to the same version.".into(),
+        ),
+        _ => return problem(code, parameter),
+    };
+    Problem { title, remedy }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn none(_: &str) -> Option<&'static str> {
         None
+    }
+
+    #[test]
+    fn a_refused_emitter_value_names_its_field_and_the_range_it_may_be_in() {
+        let refused = |key: &str| (key == "field").then_some("emission.duration_seconds");
+        let words = emitter("particle.value", refused, Some((0.001_f32 as f64, 3600.0)));
+        assert_eq!(
+            words.title,
+            "An emitter cannot have that value for its duration"
+        );
+        assert_eq!(
+            words.remedy,
+            "It may be from 0.001 to 3600. Nothing was changed."
+        );
+        // A file whose name is no ID, or not the ID in it, is said as that.
+        let named = |key: &str| (key == "field").then_some("id");
+        let words = emitter("particle.value", named, None);
+        assert_eq!(
+            words.title,
+            "The file's name is not the ID of the emitter in it"
+        );
+        // Without a range the format's own detail is given, and never the code.
+        let odd = |key: &str| (key == "detail").then_some("least is above most");
+        let words = emitter("particle.value", odd, None);
+        assert_eq!(words.title, "An emitter cannot have that value");
+        assert!(words.remedy.contains("least is above most"));
+    }
+
+    #[test]
+    fn every_emitter_refusal_is_a_sentence_and_every_number_has_a_label() {
+        for code in [
+            "particle.value",
+            "particle.conflict",
+            "particle.missing",
+            "particle.read_failed",
+            "particle.write_failed",
+            "particle.limit",
+            "particle.decode",
+            "particle.schema",
+        ] {
+            let words = emitter(code, none, None);
+            assert!(
+                !words.title.contains("particle."),
+                "{code}: {}",
+                words.title
+            );
+            assert!(!words.title.contains("Something went wrong"), "{code}");
+            assert!(!words.remedy.is_empty(), "{code}");
+        }
+        // A file that changed on disk: nothing was written, and how to keep the changes.
+        assert!(emitter("particle.conflict", none, None)
+            .remedy
+            .contains("Duplicate"));
+        for field in crate::particles::NUMBER_FIELDS {
+            let label = emitter_field(field.field);
+            assert_ne!(label, field.field, "no label for {}", field.field);
+        }
+        assert_eq!(emitter_field("something.else"), "something.else");
     }
 
     #[test]

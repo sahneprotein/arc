@@ -26,6 +26,9 @@ pub enum Tool {
     /// The level is looked over: the right-hand panel lists what the core finds wrong with
     /// it. Objects can be chosen; nothing is dragged.
     Review,
+    /// The game's particle emitters are made and changed. The window shows them in the
+    /// level's place: the list of emitters, the chosen one's settings, and its preview.
+    Particles,
 }
 
 impl Tool {

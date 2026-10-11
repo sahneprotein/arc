@@ -843,6 +843,28 @@ check saveas-again    'key=ctrl+shift+s,type=8,key=enter' 'level_dialog=SaveAs' 
 check dialog-escape   'choose=Level>Open level,key=escape' 'level_dialog=Closed'
 check dialog-cancel   'choose=Level>New level,click-button=Cancel' 'level_dialog=Closed' 'objects=22'
 check dialog-modal    'click-row=11,drag-gizmo=-60,key=ctrl+o,key=t,key=ctrl+z' 'level_dialog=Open' 'sculpt=false' 'undo=Some\("drag"\)'
+# The Particles tool, with a folder of the case's own in the game's place for the emitters
+# (ARC_EDITOR_CHECK_PARTICLES; the emitters go under its assets/particles). One run through
+# what the tool is for: it is chosen, an emitter is made, a number of it is typed, it is
+# saved, and the preview is paused, begun again and stepped. The emitter is the game's file
+# afterwards and the level is untouched: its undo history is empty and it was never saved.
+# The preview is the editor's reference simulation, not the game's particle runtime: at
+# twenty-five particles a second, fifty-seven steps of a sixtieth of a second are 0.95 s and
+# twenty-three particles, none of which has lived its shortest life of a second yet.
+P='choose=Tool>Particles,click-button=New emitter'
+ARC_EDITOR_CHECK_PARTICLES=game; export ARC_EDITOR_CHECK_PARTICLES
+check particles-smoke "$P,type-emitter=emission.rate_per_second.0:25,click-button=Save emitter,click-button=Pause,click-button=Restart,preview-steps=57" \
+    'workspace=Particles' 'emitters=\[\("New Emitter", false, false\)\]' 'emitter=Some\("New Emitter"\)' \
+    'emitter_game=true' 'emitter_files=1' 'emitter_rows=1' 'emitter_rate=Some\(25\.0\)' 'emitter_problem=none' \
+    'emitter_history=\(true, false\)' 'preview=\(23, 0\.95, false\)' 'stage=\(true, 23\)' \
+    'undo=None' 'has_file=false' 'problem=none' "$row" 'toolbar_fits=Some\(true\)'
+# Back to the level: the stage is gone, the camera is where it was in the level, and the
+# emitter that was made and not saved is still in the list.
+check particles-back "$P,choose=Tool>Move" \
+    'workspace=Objects' 'stage=\(false, 0\)' 'camera=\(0\.600,0\.550,38\.00\)' \
+    'emitters=\[\("New Emitter", true, false\)\]' 'emitter_files=0' 'objects=22' 'problem=none'
+unset ARC_EDITOR_CHECK_PARTICLES
+
 # check_exit <name> <steps> <saved: yes|no>: the editor must end by itself before the check's
 # own end, with status 0, and the level file must or must not have been written.
 check_exit() {

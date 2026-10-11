@@ -3,6 +3,8 @@
 
 pub mod brush;
 pub mod closing;
+pub mod emitter;
+pub mod emitters;
 pub mod empty;
 pub mod hierarchy;
 pub mod inspector;

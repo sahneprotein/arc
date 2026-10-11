@@ -17,6 +17,7 @@ use crate::{
     },
     session::Editor,
     theme::spacing,
+    tool::Tool,
 };
 
 /// The words in the middle of the view of an empty level.
@@ -76,12 +77,14 @@ pub fn empty_hint() -> impl Scene {
     }
 }
 
-/// Shows the hint while the level has no objects.
+/// Shows the hint while the level has no objects, unless the view shows no level: the
+/// Particles tool has it.
 pub(crate) fn show_empty_hint(
     editor: NonSend<Editor>,
+    tool: Res<Tool>,
     mut hint: Query<&mut Node, With<EmptyHint>>,
 ) {
-    let wanted = if editor.snapshot().hierarchy.is_empty() {
+    let wanted = if editor.snapshot().hierarchy.is_empty() && *tool != Tool::Particles {
         Display::Flex
     } else {
         Display::None

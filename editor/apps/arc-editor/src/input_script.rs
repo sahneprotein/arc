@@ -29,6 +29,8 @@ use bevy::{
     },
 };
 use editor_ui::panels::{
+    emitter::{EmitterField, EmitterNameInput},
+    emitters::EmitterRowMark,
     hierarchy::{HierarchyBody, RowObject, RowToggle},
     inspector::{FieldInput, NameInput},
     paint::{LayerNameInput, LayerRow},
@@ -500,6 +502,26 @@ pub struct Screen<'w, 's> {
     objects: Query<'w, 's, (&'static Projected, &'static GlobalTransform)>,
     gizmo_focus: Query<'w, 's, &'static GlobalTransform, With<TransformGizmoFocus>>,
     review_rows: Query<'w, 's, &'static ComputedNode, With<ReviewRow>>,
+    emitter_rows: Query<
+        'w,
+        's,
+        (
+            &'static EmitterRowMark,
+            &'static ComputedNode,
+            &'static UiGlobalTransform,
+        ),
+    >,
+    emitter_fields: Query<
+        'w,
+        's,
+        (
+            &'static EmitterField,
+            &'static ComputedNode,
+            &'static UiGlobalTransform,
+        ),
+    >,
+    emitter_names:
+        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<EmitterNameInput>>,
     look_sun: Query<'w, 's, &'static DirectionalLight, With<LookSun>>,
     ground_renderer: Res<'w, landscape_render::GroundRenderer>,
     hierarchy:
@@ -557,6 +579,50 @@ impl Screen<'_, '_> {
             .iter()
             .filter(|node| !node.is_empty())
             .count()
+    }
+
+    /// The row of the emitter with this ID in the emitters' list.
+    pub fn emitter_row(&self, id: &str) -> Option<Vec2> {
+        self.emitter_rows
+            .iter()
+            .find(|(row, node, _)| row.0 == id && !node.is_empty())
+            .map(|(_, node, transform)| centre(node, transform))
+    }
+
+    /// How many rows the emitters' list has laid out.
+    pub fn emitter_rows(&self) -> usize {
+        self.emitter_rows
+            .iter()
+            .filter(|(_, node, _)| !node.is_empty())
+            .count()
+    }
+
+    /// The number input of this field of the chosen emitter, by the particle format's dotted
+    /// name and the number's place in a vector.
+    pub fn emitter_field(&self, field: &str, component: usize) -> Option<Vec2> {
+        self.emitter_fields
+            .iter()
+            .find(|(input, node, _)| {
+                input.field == field && input.component == component && !node.is_empty()
+            })
+            .map(|(_, node, transform)| centre(node, transform))
+    }
+
+    /// How many number inputs the emitter's panel has laid out.
+    pub fn emitter_fields(&self) -> usize {
+        self.emitter_fields
+            .iter()
+            .filter(|(_, node, _)| !node.is_empty())
+            .count()
+    }
+
+    /// The text field of the chosen emitter's name.
+    pub fn emitter_name_field(&self) -> Option<Vec2> {
+        self.emitter_names
+            .iter()
+            .next()
+            .filter(|(node, _)| !node.is_empty())
+            .map(|(node, transform)| centre(node, transform))
     }
 
     /// How many hierarchy rows are laid out, folded ones not counted.

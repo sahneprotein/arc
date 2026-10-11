@@ -1,7 +1,9 @@
 //! The toolbar: one row at every window width.
 //!
-//! The tools are the ways the gizmo moves an object, the landscape's tools, and Review, which
-//! lists in the right-hand panel what the core finds wrong with the level.
+//! The tools are the ways the gizmo moves an object, the landscape's tools, Review, which
+//! lists in the right-hand panel what the core finds wrong with the level, and Particles,
+//! which shows the game's particle emitters in the level's place. While Particles is chosen
+//! Undo, Redo and Remove act on the chosen emitter, not on the level.
 //!
 //! As the layout "Narrow window: one toolbar row with menus" has it: Level and Add are menus
 //! at every width. In a window narrower than the design's fold width the tools fold into one
@@ -36,6 +38,7 @@ use crate::{
         play::play_control,
         snap::{snap_button, snap_item},
     },
+    particles::Particles,
     session::{duplicate_offer, DuplicateOffer, Editor},
     shell::PanelChoice,
     theme::{size, spacing, text},
@@ -50,6 +53,44 @@ pub(crate) const LANDSCAPE_SPACING: f32 = 1.0;
 /// The toolbar's row.
 #[derive(Component, Default, Clone)]
 pub struct Toolbar;
+
+/// Takes the last change back: the chosen emitter's while the Particles tool is chosen, the
+/// level's otherwise. Each has a history of its own, and the one on screen is the one meant.
+pub fn undo(tool: Tool, particles: &mut Particles, editor: &mut Editor) {
+    if tool == Tool::Particles {
+        particles.undo();
+    } else {
+        editor.undo();
+    }
+}
+
+/// Makes the change again that was last taken back, of the emitter or of the level as
+/// [`undo`] has it.
+pub fn redo(tool: Tool, particles: &mut Particles, editor: &mut Editor) {
+    if tool == Tool::Particles {
+        particles.redo();
+    } else {
+        editor.redo();
+    }
+}
+
+/// Removes what is chosen: the selected objects of the level, or, while the Particles tool
+/// is chosen, the chosen emitter, which is asked about first.
+pub fn remove(tool: Tool, particles: &mut Particles, editor: &mut Editor) {
+    if tool == Tool::Particles {
+        particles.ask_remove();
+    } else {
+        editor.delete_selected();
+    }
+}
+
+/// The Add menu adds to the level, which the Particles tool does not show: what is added
+/// would not be seen. Adding from there goes back to the object tools first.
+fn back_to_the_level(tool: &mut Tool) {
+    if *tool == Tool::Particles {
+        *tool = Tool::Objects;
+    }
+}
 
 /// A part of the toolbar that is there only at some window widths.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug, FromTemplate)]
@@ -135,10 +176,11 @@ pub enum ToolChoice {
     Paint,
     Rules,
     Review,
+    Particles,
 }
 
 impl ToolChoice {
-    pub const ALL: [ToolChoice; 7] = [
+    pub const ALL: [ToolChoice; 8] = [
         Self::Move,
         Self::Rotate,
         Self::Scale,
@@ -146,6 +188,7 @@ impl ToolChoice {
         Self::Paint,
         Self::Rules,
         Self::Review,
+        Self::Particles,
     ];
 
     pub fn name(self) -> &'static str {
@@ -157,6 +200,7 @@ impl ToolChoice {
             Self::Paint => "Paint",
             Self::Rules => "Rules",
             Self::Review => "Review",
+            Self::Particles => "Particles",
         }
     }
 
@@ -167,7 +211,7 @@ impl ToolChoice {
             Self::Rotate => "E",
             Self::Scale => "R",
             Self::Sculpt => "T",
-            Self::Paint | Self::Rules | Self::Review => "",
+            Self::Paint | Self::Rules | Self::Review | Self::Particles => "",
         }
     }
 
@@ -178,6 +222,7 @@ impl ToolChoice {
             (Tool::Paint, _) => Self::Paint,
             (Tool::Rules, _) => Self::Rules,
             (Tool::Review, _) => Self::Review,
+            (Tool::Particles, _) => Self::Particles,
             (Tool::Objects, TransformGizmoMode::Rotate) => Self::Rotate,
             (Tool::Objects, TransformGizmoMode::Scale) => Self::Scale,
             (Tool::Objects, _) => Self::Move,
@@ -193,6 +238,7 @@ impl ToolChoice {
             Self::Paint => (Tool::Paint, None),
             Self::Rules => (Tool::Rules, None),
             Self::Review => (Tool::Review, None),
+            Self::Particles => (Tool::Particles, None),
         };
         if let Some(mode) = mode {
             gizmo.mode = mode;
@@ -287,19 +333,22 @@ fn add_menu() -> impl Scene {
                 Children [
                     (
                         menu_item("Landscape", "")
-                        on(|_: On<Activate>, mut editor: NonSendMut<Editor>| {
+                        on(|_: On<Activate>, mut tool: ResMut<Tool>, mut editor: NonSendMut<Editor>| {
+                            back_to_the_level(&mut tool);
                             editor.add_landscape(LANDSCAPE_CELLS, LANDSCAPE_SPACING);
                         })
                     ),
                     (
                         menu_item("Box", "")
-                        on(|_: On<Activate>, place: Res<PlaceAt>, mut editor: NonSendMut<Editor>| {
+                        on(|_: On<Activate>, place: Res<PlaceAt>, mut tool: ResMut<Tool>, mut editor: NonSendMut<Editor>| {
+                            back_to_the_level(&mut tool);
                             editor.add_box(&place);
                         })
                     ),
                     (
                         menu_item("Spawn point", "")
-                        on(|_: On<Activate>, place: Res<PlaceAt>, mut editor: NonSendMut<Editor>| {
+                        on(|_: On<Activate>, place: Res<PlaceAt>, mut tool: ResMut<Tool>, mut editor: NonSendMut<Editor>| {
+                            back_to_the_level(&mut tool);
                             editor.add_spawn(&place);
                         })
                     ),
@@ -308,7 +357,10 @@ fn add_menu() -> impl Scene {
                         menu_item("Duplicate", "Ctrl+D")
                         DuplicateRow
                         InteractionDisabled
-                        on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.duplicate_selected())
+                        on(|_: On<Activate>, mut tool: ResMut<Tool>, mut editor: NonSendMut<Editor>| {
+                            back_to_the_level(&mut tool);
+                            editor.duplicate_selected();
+                        })
                     ),
                     (
                         // Why the row above is off, beside it, as the design's Menu has it.
@@ -418,6 +470,7 @@ fn tool_menu() -> impl Scene {
                     tool_item(ToolChoice::Rules),
                     @FeathersMenuDivider,
                     tool_item(ToolChoice::Review),
+                    tool_item(ToolChoice::Particles),
                     @FeathersMenuDivider,
                     snap_item(),
                 ]
@@ -483,14 +536,18 @@ pub fn toolbar() -> impl Scene {
                     @caption: bsn! { Text("Undo") ThemedText },
                     @variant: ButtonVariant::Plain,
                 }
-                on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.undo())
+                on(|_: On<Activate>, tool: Res<Tool>, mut particles: ResMut<Particles>, mut editor: NonSendMut<Editor>| {
+                    undo(*tool, &mut particles, &mut editor);
+                })
             ),
             (
                 @FeathersButton {
                     @caption: bsn! { Text("Redo") ThemedText },
                     @variant: ButtonVariant::Plain,
                 }
-                on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.redo())
+                on(|_: On<Activate>, tool: Res<Tool>, mut particles: ResMut<Particles>, mut editor: NonSendMut<Editor>| {
+                    redo(*tool, &mut particles, &mut editor);
+                })
             ),
             pane_header_divider(),
             (
@@ -504,6 +561,7 @@ pub fn toolbar() -> impl Scene {
                     tool_button(ToolChoice::Paint),
                     tool_button(ToolChoice::Rules),
                     tool_button(ToolChoice::Review),
+                    tool_button(ToolChoice::Particles),
                 ]
             ),
             // Snap is a toggle of its own beside the tools, not one of them.
@@ -518,7 +576,9 @@ pub fn toolbar() -> impl Scene {
                     @variant: ButtonVariant::Plain,
                 }
                 Fold::Wide
-                on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.delete_selected())
+                on(|_: On<Activate>, tool: Res<Tool>, mut particles: ResMut<Particles>, mut editor: NonSendMut<Editor>| {
+                    remove(*tool, &mut particles, &mut editor);
+                })
             ),
             (Node { flex_grow: 1.0, min_width: px(spacing::SPACE_4) } ToolbarSpacer),
             // The Play control is at the right end at every width and never folds away.

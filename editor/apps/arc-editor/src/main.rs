@@ -3,6 +3,7 @@
 //! - `viewport.rs`: the 3D view: camera, the level's objects as meshes, picking.
 //! - `brush.rs`: where the landscape brush points, and its ring.
 //! - `shortcuts.rs`: keyboard shortcuts.
+//! - `stage.rs`: what the 3D view shows while the Particles tool is chosen.
 //! - `check.rs`: start-up timings, and the scripted steps used to check a build.
 //! - `input_script.rs`: plays input into the window for those checks.
 //!
@@ -14,13 +15,15 @@
 //!
 //! `--game` names the game's folder, the one its server and client are built in. With it the
 //! Play control can ask the editor's core to start the game on a cooked level; without it the
-//! control says that no game is set up.
+//! control says that no game is set up. The game's particle emitters are kept in that folder
+//! too: without it the Particles tool has nowhere to read or write them, and says so.
 
 mod brush;
 mod check;
 mod input_script;
 mod look;
 mod shortcuts;
+mod stage;
 mod viewport;
 
 use std::{path::PathBuf, time::Instant};
@@ -34,7 +37,7 @@ use bevy::{
 };
 use editor_ui::{
     theme::{color, feathers::to_color},
-    Editor, EditorUiPlugin,
+    Editor, EditorUiPlugin, Particles,
 };
 
 /// Where the editor writes when it is not told otherwise, relative to the working directory.
@@ -98,6 +101,11 @@ fn main() -> AppExit {
                 (path, read)
             }),
     );
+    // The game's particle emitters, read from its folder once before the window opens and
+    // again whenever the Particles tool is chosen. A scripted check may name another folder.
+    let particles = check::scripted_particles()
+        .or_else(|| game.clone())
+        .map_or_else(Particles::default, Particles::of_game);
     let mut editor = match Editor::new(
         scene_data::current_map(),
         arguments.level,
@@ -166,6 +174,7 @@ fn main() -> AppExit {
         look::LookPlugin,
         brush::BrushPlugin,
         shortcuts::ShortcutsPlugin,
+        stage::StagePlugin,
         check::CheckPlugin { started },
     ))
     // What the engine clears the window with while no camera draws into it, which is the
@@ -185,6 +194,7 @@ fn main() -> AppExit {
     })
     .insert_resource(look_status)
     .insert_resource(look::GameLook(game_look))
+    .insert_resource(particles)
     .insert_non_send(editor)
     .init_resource::<check::GameWakes>()
     .add_systems(Startup, wake_for_the_game);

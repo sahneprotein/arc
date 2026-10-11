@@ -6,6 +6,10 @@
 //! goes through the core like any save; if it fails the editor stays where it is and the
 //! notice says why.
 //!
+//! Closing the editor also leaves the game's particle emitters that have changes: they are
+//! asked about in the same dialog, and saving first saves them too. Opening another level or
+//! beginning a new one does not leave them; they are the game's, not the level's.
+//!
 //! The window does not close by itself: the application turns that off, and a request to
 //! close arrives here. Closing while a game the editor started runs goes on in
 //! `closing.rs`: the game is stopped first.
@@ -26,11 +30,13 @@ use bevy::{
 
 use crate::{
     panels::closing::{self, Shutdown},
+    particles::Particles,
     session::Editor,
     theme::{
         feathers::{BORDER, SCRIM},
         radius, spacing,
     },
+    tool::Tool,
 };
 
 /// What leaves the open level.
@@ -79,6 +85,49 @@ pub struct Unsaved {
 #[derive(Component, Default, Clone)]
 pub struct UnsavedDialog;
 
+/// The dialog's question and the line under it, which say what has changes.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, FromTemplate)]
+pub enum UnsavedLine {
+    #[default]
+    Question,
+    Consequence,
+}
+
+/// What the dialog asks and what it says is at stake: the level, emitters of the game, or
+/// both. `emitters` is how many emitters have changes that leaving would lose.
+pub fn unsaved_words(level: bool, emitters: usize) -> (&'static str, String) {
+    let count = match emitters {
+        1 => "1 emitter has".to_owned(),
+        emitters => format!("{emitters} emitters have"),
+    };
+    match (level, emitters) {
+        (_, 0) => (
+            "Save changes to the level?",
+            "The level has changes that are not saved. Discarding them cannot be undone.".into(),
+        ),
+        (false, _) => (
+            "Save changes to the emitters?",
+            format!("{count} changes that are not saved. Discarding them cannot be undone."),
+        ),
+        (true, _) => (
+            "Save changes to the level and the emitters?",
+            format!(
+                "The level has changes that are not saved, and {count}. Discarding them \
+                 cannot be undone."
+            ),
+        ),
+    }
+}
+
+/// How many emitters leaving would lose the changes of: those of the game when the editor
+/// closes, none when only the level is left.
+fn emitters_left(then: &Leave, particles: &Particles) -> usize {
+    match then {
+        Leave::Close => particles.unsaved_count(),
+        Leave::Open(_) | Leave::New(_) => 0,
+    }
+}
+
 /// The caption of the button that saves first; it names what happens afterwards.
 #[derive(Component, Default, Clone)]
 pub struct SaveFirstCaption;
@@ -115,8 +164,11 @@ pub fn unsaved_dialog() -> impl Scene {
             }
             ThemeBorderColor(BORDER)
             Children [
-                label("Save changes to the level?"),
-                label_dim("The level has changes that are not saved. Discarding them cannot be undone."),
+                (label("Save changes to the level?") UnsavedLine::Question),
+                (
+                    label_dim("The level has changes that are not saved. Discarding them cannot be undone.")
+                    UnsavedLine::Consequence
+                ),
                 (
                     label_dim("A game is running. It is stopped before the editor closes.")
                     GameRunsLine
@@ -153,8 +205,22 @@ pub fn unsaved_dialog() -> impl Scene {
                                 @caption: bsn! { Text("Save and close") ThemedText SaveFirstCaption },
                                 @variant: ButtonVariant::Primary,
                             }
-                            on(|_: On<Activate>, mut unsaved: ResMut<Unsaved>, mut editor: NonSendMut<Editor>| {
-                                editor.save();
+                            on(|_: On<Activate>,
+                                mut unsaved: ResMut<Unsaved>,
+                                mut particles: ResMut<Particles>,
+                                mut tool: ResMut<Tool>,
+                                mut editor: NonSendMut<Editor>| {
+                                // The emitters first: they are written at once. One that
+                                // cannot be written keeps the editor where it is, on the
+                                // Particles tool, whose panel says why.
+                                if emitters_left(&unsaved.then, &particles) > 0 && !particles.save_all() {
+                                    unsaved.question = Question::No;
+                                    *tool = Tool::Particles;
+                                    return;
+                                }
+                                if editor.snapshot().status.dirty {
+                                    editor.save();
+                                }
                                 unsaved.question = Question::Saving;
                             })
                         ),
@@ -188,6 +254,7 @@ pub(crate) fn leave_or_ask(
     request: On<Leave>,
     mut unsaved: ResMut<Unsaved>,
     mut shutdown: ResMut<Shutdown>,
+    particles: Res<Particles>,
     mut editor: NonSendMut<Editor>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -195,7 +262,7 @@ pub(crate) fn leave_or_ask(
     if unsaved.question != Question::No || *shutdown != Shutdown::No {
         return;
     }
-    if editor.snapshot().status.dirty {
+    if editor.snapshot().status.dirty || emitters_left(request.event(), &particles) > 0 {
         unsaved.then = request.event().clone();
         unsaved.question = Question::Asking;
     } else {
@@ -219,14 +286,23 @@ pub(crate) fn close_requested(
     }
 }
 
-/// Finishes a save that was chosen in the dialog, and shows or hides the dialog.
+/// The dialog's texts that change with what is left and what has changes, and the emitters
+/// that say whether they have any.
+type DialogWords<'w, 's> = (
+    Query<'w, 's, &'static mut Text, (With<SaveFirstCaption>, Without<UnsavedLine>)>,
+    Query<'w, 's, (&'static UnsavedLine, &'static mut Text), Without<SaveFirstCaption>>,
+    Res<'w, Particles>,
+);
+
+/// Finishes a save that was chosen in the dialog, shows or hides the dialog, and has it say
+/// what has changes.
 pub(crate) fn answer_unsaved(
     mut unsaved: ResMut<Unsaved>,
     mut shutdown: ResMut<Shutdown>,
     mut editor: NonSendMut<Editor>,
     mut dialog: Query<&mut Node, (With<UnsavedDialog>, Without<GameRunsLine>)>,
     mut game_runs: Query<&mut Node, With<GameRunsLine>>,
-    mut caption: Query<&mut Text, With<SaveFirstCaption>>,
+    (mut caption, mut lines, particles): DialogWords,
     mut exit: MessageWriter<AppExit>,
 ) {
     if unsaved.question == Question::Saving && !editor.busy() {
@@ -266,11 +342,53 @@ pub(crate) fn answer_unsaved(
             }
         }
     }
+    if unsaved.question == Question::Asking {
+        let (question, consequence) = unsaved_words(
+            editor.snapshot().status.dirty,
+            emitters_left(&unsaved.then, &particles),
+        );
+        for (line, mut text) in &mut lines {
+            let words = match line {
+                UnsavedLine::Question => question,
+                UnsavedLine::Consequence => consequence.as_str(),
+            };
+            if text.0 != words {
+                words.clone_into(&mut text.0);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_question_says_what_has_changes_the_level_the_emitters_or_both() {
+        // The level alone: as the dialog always was.
+        let (question, consequence) = unsaved_words(true, 0);
+        assert_eq!(question, "Save changes to the level?");
+        assert!(consequence.starts_with("The level has changes"));
+        let (question, consequence) = unsaved_words(false, 1);
+        assert_eq!(question, "Save changes to the emitters?");
+        assert_eq!(
+            consequence,
+            "1 emitter has changes that are not saved. Discarding them cannot be undone."
+        );
+        let (question, consequence) = unsaved_words(true, 3);
+        assert_eq!(question, "Save changes to the level and the emitters?");
+        assert!(consequence.contains("3 emitters have"), "{consequence}");
+    }
+
+    #[test]
+    fn only_closing_the_editor_leaves_the_emitters() {
+        let game = tempfile::tempdir().unwrap();
+        let mut particles = Particles::of_game(game.path().into());
+        particles.new_emitter().unwrap();
+        assert_eq!(emitters_left(&Leave::Close, &particles), 1);
+        assert_eq!(emitters_left(&Leave::Open("a".into()), &particles), 0);
+        assert_eq!(emitters_left(&Leave::New("a".into()), &particles), 0);
+    }
 
     #[test]
     fn the_button_that_saves_first_says_what_follows() {

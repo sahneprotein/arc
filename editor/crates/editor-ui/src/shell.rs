@@ -16,6 +16,13 @@ use crate::{
     panels::{
         brush::{brush_panel, show_brush_mode, show_landscape_parts, BrushPanel},
         closing::{drive_shutdown, shutdown_dialog, Shutdown},
+        emitter::{
+            commit_emitter_name, emitter_panel, fill_emitter_fields, fill_emitter_names,
+            fit_emitter, preview_overlay, run_preview, show_emitter, show_preview,
+        },
+        emitters::{
+            emitters_panel, fit_emitters, remove_dialog, show_emitters, show_remove_dialog,
+        },
         empty::{empty_hint, show_empty_hint},
         hierarchy::{
             fold_rows, hierarchy_panel, show_drop_target, show_hierarchy, show_selection,
@@ -43,6 +50,7 @@ use crate::{
         },
         view::{show_view, view_control},
     },
+    particles::{Particles, Preview},
     session::{pump_editor, Editor, PumpEditor},
     theme::{feathers::ui_theme, size, spacing},
     tool::{Brush, BrushAim, ChosenRule, LookStatus, PaintLayer, PlaceAt, Snap, Tool, ViewMode},
@@ -62,12 +70,14 @@ fn mark_modal(
     levels: Res<LevelDialog>,
     menu: Res<MenuOpen>,
     shutdown: Res<Shutdown>,
+    particles: Res<Particles>,
     mut modal: ResMut<Modal>,
 ) {
     let open = unsaved.question == Question::Asking
         || *levels != LevelDialog::Closed
         || menu.0
-        || *shutdown != Shutdown::No;
+        || *shutdown != Shutdown::No
+        || particles.removing().is_some();
     if modal.0 != open {
         modal.0 = open;
     }
@@ -136,23 +146,32 @@ fn shell() -> impl Scene {
                 Pickable { should_block_lower: false, is_hoverable: false }
                 Children [
                     hierarchy_panel(),
+                    emitters_panel(),
                     // Nothing is drawn here: the 3D view shows through. The node takes camera
                     // input and lets clicks through to the objects behind it.
                     (
                         Node { flex_grow: 1.0, min_width: px(0) }
                         Pickable { should_block_lower: false, is_hoverable: true }
                         ViewportSlot
-                        Children [ empty_hint(), notice(), snap_overlay(), view_control() ]
+                        Children [
+                            empty_hint(),
+                            notice(),
+                            snap_overlay(),
+                            view_control(),
+                            preview_overlay(),
+                        ]
                     ),
                     inspector_panel(),
                     brush_panel(),
                     review_panel(),
+                    emitter_panel(),
                 ]
             ),
             status_bar(),
             menu_scrim(),
             level_dialog(),
             unsaved_dialog(),
+            remove_dialog(),
             shutdown_dialog(),
         ]
     }
@@ -162,7 +181,9 @@ type Only<A, B, C> = (With<A>, Without<B>, Without<C>);
 
 /// Shows the side panels that fit and that the person chose. The right-hand place holds the
 /// inspector, or the landscape tool's settings while that tool is chosen, or the Review panel
-/// while Review is (`review::fit_review`).
+/// while Review is (`review::fit_review`). While the Particles tool is chosen the two places
+/// hold the emitters' list and the chosen emitter's settings (`emitters::fit_emitters`,
+/// `emitter::fit_emitter`): the level's hierarchy is not shown then.
 fn fit_panels(
     window: Single<&Window, With<PrimaryWindow>>,
     tool: Res<Tool>,
@@ -181,8 +202,9 @@ fn fit_panels(
     }
     let display = |shown: bool| if shown { Display::Flex } else { Display::None };
     for mut node in &mut hierarchy {
-        if node.display != display(show.0) {
-            node.display = display(show.0);
+        let listing = show.0 && *tool != Tool::Particles;
+        if node.display != display(listing) {
+            node.display = display(listing);
         }
     }
     let sculpting = tool.is_landscape();
@@ -236,6 +258,8 @@ fn keep_drawing(
         Res<Collapsed>,
         Res<Modal>,
         Res<ViewMode>,
+        Res<Particles>,
+        Res<Preview>,
     ),
     mut seen: Local<Option<(u64, u64, u64, bool)>>,
     mut frames_left: Local<u8>,
@@ -250,8 +274,21 @@ fn keep_drawing(
     );
     let input = mouse.get_just_pressed().len() + mouse.get_just_released().len() > 0
         || keys.get_just_pressed().len() + keys.get_just_released().len() > 0;
-    let (tool, brush, layer, rule, panels, levels, name, unsaved, collapsed, modal, view_mode) =
-        choices;
+    let (
+        tool,
+        brush,
+        layer,
+        rule,
+        panels,
+        levels,
+        name,
+        unsaved,
+        collapsed,
+        modal,
+        view_mode,
+        particles,
+        preview,
+    ) = choices;
     let chosen = tool.is_changed()
         || brush.is_changed()
         || layer.is_changed()
@@ -262,7 +299,9 @@ fn keep_drawing(
         || unsaved.is_changed()
         || collapsed.is_changed()
         || modal.is_changed()
-        || view_mode.is_changed();
+        || view_mode.is_changed()
+        || particles.is_changed()
+        || preview.is_changed();
     if input || chosen || editor.busy() || *seen != Some(view) {
         *frames_left = FRAMES_AFTER_A_CHANGE;
     }
@@ -327,6 +366,8 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<LevelNameProblem>()
             .init_resource::<Modal>()
             .init_resource::<MenuOpen>()
+            .init_resource::<Particles>()
+            .init_resource::<Preview>()
             .add_observer(confirm_level_name)
             .add_systems(Startup, shell.spawn())
             .add_systems(PreUpdate, pump_editor.in_set(PumpEditor))
@@ -334,8 +375,17 @@ impl Plugin for EditorUiPlugin {
             .add_systems(
                 Update,
                 (
-                    (fit_panels, fit_review).chain(),
-                    show_review,
+                    (fit_panels, fit_review, fit_emitters, fit_emitter).chain(),
+                    (
+                        show_review,
+                        run_preview,
+                        show_preview,
+                        show_emitters,
+                        (show_emitter, fill_emitter_fields).chain(),
+                        fill_emitter_names,
+                        commit_emitter_name,
+                        show_remove_dialog,
+                    ),
                     show_hierarchy,
                     (show_selection, show_drop_target).after(show_hierarchy),
                     fold_rows.after(show_hierarchy),

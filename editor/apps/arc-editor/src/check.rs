@@ -44,12 +44,19 @@
 //! | `type-rule=S:TEXT` | a click into setting S of the chosen rule (counted from 0), select all, TEXT, Enter |
 //! | `click-layer=N` | a click on the Nth layer of the landscape tool's list |
 //! | `type-layer=TEXT` | a click into the layer's name field, select all, TEXT, Enter |
+//! | `click-emitter=N` | a click on row N of the emitters' list, counted from 0 |
+//! | `type-emitter=F.C:TEXT` | a click into number C of field F of the chosen emitter, by the particle format's dotted name (`emission.rate_per_second.0`), select all, TEXT, Enter |
+//! | `type-emitter-name=TEXT` | a click into the emitter's name field, select all, TEXT, Enter |
 //!
 //! Steps that call the editor directly, for set-up: `select=N`, `reparent=CHILD:PARENT` (row
 //! numbers), `look-at=X:Y:Z` (the point the view turns about), `tilt=ROW:DEGREES` (turn an
 //! object about X), `inspector` (show the
 //! inspector, hide the hierarchy), `save`, `cook`, `spoil-cooked` (something else writes into
-//! the cooked level on disk).
+//! the cooked level on disk), `preview-steps=N` (N whole steps of the particle preview's
+//! reference simulation, whether it runs or not).
+//!
+//! `ARC_EDITOR_CHECK_PARTICLES` names a folder that stands in the game's place for the
+//! particle emitters; what the result line says of them is at `emitters_words`.
 //!
 //! `wait-run=STATE` plays nothing: the script waits until the game the editor started is in
 //! that state (`none`, `starting`, `running`, `stopping`). A game runs on its own time, and
@@ -192,6 +199,16 @@ pub fn scripted_look() -> Option<PathBuf> {
         return None;
     }
     std::env::var_os("ARC_EDITOR_CHECK_LOOK").map(PathBuf::from)
+}
+
+/// The folder a scripted check names with `ARC_EDITOR_CHECK_PARTICLES`: it stands in the
+/// game's place for the particle emitters, which are read from and written to its
+/// `assets/particles` folder. Without it a check has no game to keep emitters in.
+pub fn scripted_particles() -> Option<PathBuf> {
+    if !is_scripted() {
+        return None;
+    }
+    std::env::var_os("ARC_EDITOR_CHECK_PARTICLES").map(PathBuf::from)
 }
 
 /// The window size a scripted check asks for, if it names one.
@@ -349,6 +366,66 @@ type Tools<'w> = (
     Res<'w, Picture>,
 );
 
+/// What the check reads and sets of the Particles tool: the game's emitters, the preview,
+/// and the stage in the 3D view.
+type Emitters<'w> = (
+    ResMut<'w, editor_ui::Particles>,
+    ResMut<'w, editor_ui::Preview>,
+    Res<'w, crate::stage::Stage>,
+);
+
+/// What the result line says of the Particles tool:
+///
+/// `emitters=[("Sparks", false, false)] emitter=Some("Sparks") emitter_game=true emitter_files=1 emitter_rows=1 emitter_fields=22 emitter_rate=Some(10.0) emitter_shape=Some(Point) emitter_problem=none emitter_refusal=none emitter_history=(false, false) remove_asked=false preview=(0, 0.00, true) stage=(false, 0)`
+///
+/// Each emitter of the list is its name, whether it has changes that are not saved, and
+/// whether its file cannot be read. `emitter_files` is how many emitters another editor
+/// would find in the game's folder now. `emitter_history` is whether the chosen emitter has
+/// a change to undo and one to redo. `preview` is how many particles are alive, the time the
+/// preview has come to, and whether it runs; `stage` whether the 3D view shows the stage
+/// and how many particles it drew in the last frame.
+fn emitters_words(
+    particles: &editor_ui::Particles,
+    preview: &editor_ui::Preview,
+    stage: &crate::stage::Stage,
+    screen: &Screen,
+) -> String {
+    let rows = particles.rows();
+    let code = |refusal: Option<&editor_core::Diagnostic>| {
+        refusal.map_or_else(|| "none".to_owned(), |refusal| refusal.code.clone())
+    };
+    let simulation = preview.simulation();
+    format!(
+        "emitters={:?} emitter={:?} emitter_game={} emitter_files={} emitter_rows={} emitter_fields={} emitter_rate={:?} emitter_shape={:?} emitter_problem={} emitter_refusal={} emitter_history=({}, {}) remove_asked={} preview=({}, {:.2}, {}) stage=({}, {})",
+        rows.iter()
+            .map(|row| (row.name.as_str(), row.unsaved, row.refused()))
+            .collect::<Vec<_>>(),
+        rows.iter().find(|row| row.chosen).map(|row| row.name.as_str()),
+        particles.has_game(),
+        particles.game().map_or(0, |game| {
+            editor_ui::Particles::of_game(game.to_path_buf()).rows().len()
+        }),
+        screen.emitter_rows(),
+        screen.emitter_fields(),
+        particles
+            .chosen()
+            .map(|emitter| emitter.emission.rate_per_second),
+        particles
+            .chosen()
+            .map(|emitter| editor_ui::particles::ShapeKind::of(&emitter.shape)),
+        code(particles.problem()),
+        code(particles.chosen_refusal().map(|(refusal, _)| refusal)),
+        particles.can_undo(),
+        particles.can_redo(),
+        particles.removing().is_some(),
+        simulation.map_or(0, |simulation| simulation.live()),
+        simulation.map_or(0.0, |simulation| simulation.time_seconds()),
+        preview.running,
+        stage.on(),
+        stage.drawn,
+    )
+}
+
 /// Saves the first frames as pictures into the folder named by `ARC_EDITOR_CHECK_EARLY`, to
 /// see what the window shows before the level is drawn.
 fn early_frames(mut commands: Commands, mut frame: Local<u32>) {
@@ -430,6 +507,7 @@ fn scripted(
     gizmo_state: Res<TransformGizmoState>,
     (shown, ground, closing): (Res<Shown>, Res<GroundShown>, Dialogs),
     (tool, brush, aim, stroke, row_drag, view, look, picture): Tools,
+    (mut particles, mut preview, stage): Emitters,
     mut redraw: MessageWriter<RequestRedraw>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -493,6 +571,7 @@ fn scripted(
             &mut panels,
             &screen,
             &mut orbit,
+            (&mut *particles, &mut *preview),
         );
         info!(
             "check step {step}: {played:?}, cursor {:?}",
@@ -553,7 +632,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} picture={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} picture={}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -819,6 +898,7 @@ fn scripted(
             screen
                 .ground_look()
                 .map(|look| (look.base_color_linear_rgba, look.roughness)),
+            emitters_words(&particles, &preview, &stage, &screen),
             // What the saved picture is: nothing is claimed of a picture that is blank.
             picture.word(),
         );
@@ -847,6 +927,7 @@ fn play(
     panels: &mut PanelChoice,
     screen: &Screen,
     orbit: &mut Orbit,
+    (particles, preview): (&mut editor_ui::Particles, &mut editor_ui::Preview),
 ) -> Result<Option<String>, String> {
     let (name, argument) = step.split_once('=').unwrap_or((step, ""));
     let snapshot = editor.snapshot();
@@ -1120,6 +1201,52 @@ fn play(
                 editor_core::StableId(row_id(child)?),
                 Some(editor_core::StableId(row_id(parent)?)),
             );
+        }
+        "click-emitter" => {
+            // A row of the emitters' list, counted from 0 down the list.
+            let index: usize = argument
+                .parse()
+                .map_err(|_| "not a row number".to_owned())?;
+            let rows = particles.rows();
+            let row = rows.get(index).ok_or("no such emitter")?;
+            let at = screen
+                .emitter_row(&row.id)
+                .ok_or("the emitter's row is not on screen")?;
+            input.click(at, MouseButton::Left);
+        }
+        "type-emitter" => {
+            // A number of the chosen emitter, by the format's dotted name and its place.
+            let (target, text) = argument
+                .split_once(':')
+                .ok_or("expected FIELD.COMPONENT:TEXT")?;
+            let (field, component) = target.rsplit_once('.').ok_or("expected FIELD.COMPONENT")?;
+            let component = component
+                .parse()
+                .map_err(|_| "not a component number".to_owned())?;
+            let at = screen
+                .emitter_field(field, component)
+                .ok_or("no such field on screen")?;
+            input.click(at, MouseButton::Left);
+            input.select_all();
+            input.type_text(text);
+            input.key(&[], KeyCode::Enter, Key::Enter);
+        }
+        "type-emitter-name" => {
+            let at = screen
+                .emitter_name_field()
+                .ok_or("no emitter name field on screen")?;
+            input.click(at, MouseButton::Left);
+            input.select_all();
+            input.type_text(argument);
+            input.key(&[], KeyCode::Enter, Key::Enter);
+        }
+        "preview-steps" => {
+            // Whole steps of the reference simulation, whether it runs or not: with the
+            // preview paused and begun again, what is alive afterwards is the same each run.
+            let steps = argument
+                .parse()
+                .map_err(|_| "not a number of steps".to_owned())?;
+            preview.step(steps);
         }
         "inspector" => panels.set(Some(false), Some(true)),
         "save" => editor.save(),
