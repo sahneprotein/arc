@@ -2,6 +2,7 @@
 use super::{wire::*, *};
 use scene_data::Diagnostic;
 use std::{
+    ffi::OsString,
     fs::File,
     io::{Read, Write},
     net::{TcpListener, TcpStream, UdpSocket},
@@ -10,6 +11,31 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+/// What a child of this role is told of the project: for the client, `--project-root` and
+/// the project's folder, if the configuration names one and the folder is a ready project
+/// now. That is: its manifest is one this editor reads, and the level it starts with does
+/// not lead out of the folder. For the server, and for a folder that is no ready project
+/// (no manifest, one of an older or newer version, one that cannot be read), nothing: the
+/// child is started with the arguments it always had.
+///
+/// The folder is given as the file system resolves it: the child's working directory is
+/// another than the editor's, so a path relative to the editor's would name another place.
+pub(crate) fn project_arguments(config: &PlayConfig, role: PlayRole) -> Vec<OsString> {
+    if role != PlayRole::Client {
+        return Vec::new();
+    }
+    let Some(root) = &config.project_root else {
+        return Vec::new();
+    };
+    let ready = crate::project::load_project(root)
+        .and_then(|project| crate::project::start_level_path(root, &project))
+        .is_ok();
+    let Some(resolved) = std::fs::canonicalize(root).ok().filter(|_| ready) else {
+        return Vec::new();
+    };
+    vec!["--project-root".into(), resolved.into_os_string()]
+}
+
 #[derive(Default)]
 pub(crate) struct ExternalBackend {
     protocol: Arc<Mutex<Option<(RunId, String)>>>,
@@ -86,6 +112,8 @@ impl PlayBackend for ExternalBackend {
                 .arg("--client-id")
                 .arg(launch.run.0.to_string());
         }
+        // After everything a child always got, so that those arguments are as they were.
+        cmd.args(project_arguments(&launch.config, launch.role));
         let child = cmd.spawn().map_err(io_error)?;
         let fence = Fence {
             run: launch.run,
@@ -369,5 +397,106 @@ mod tests {
             "play.protocol_mismatch"
         );
         assert_eq!(client.sequence, 0);
+    }
+}
+
+#[cfg(test)]
+mod project_argument_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn config(root: &Path, project: bool) -> PlayConfig {
+        let config = PlayConfig::from_game_worktree(root.into(), root.join("logs"));
+        if project {
+            config.with_project_root(root.into())
+        } else {
+            config
+        }
+    }
+
+    fn arguments(config: &PlayConfig, role: PlayRole) -> Vec<String> {
+        project_arguments(config, role)
+            .into_iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn without_a_project_folder_a_child_is_told_nothing_of_one() {
+        let folder = tempfile::tempdir().unwrap();
+        // Even in a folder that is a project: the configuration names none.
+        crate::project::create_project(folder.path(), "Game").unwrap();
+        let config = config(folder.path(), false);
+        assert_eq!(config.project_root, None);
+        assert_eq!(arguments(&config, PlayRole::Client), [] as [&str; 0]);
+        assert_eq!(arguments(&config, PlayRole::Server), [] as [&str; 0]);
+    }
+
+    #[test]
+    fn the_client_of_a_ready_project_is_told_its_folder_and_the_server_is_not() {
+        let folder = tempfile::tempdir().unwrap();
+        crate::project::create_project(folder.path(), "Game").unwrap();
+        let config = config(folder.path(), true);
+        // As the file system resolves it: the child's working directory is not the editor's.
+        let resolved = std::fs::canonicalize(folder.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            arguments(&config, PlayRole::Client),
+            ["--project-root", resolved.as_str()]
+        );
+        assert_eq!(arguments(&config, PlayRole::Server), [] as [&str; 0]);
+    }
+
+    #[test]
+    fn a_folder_that_is_no_ready_project_is_not_passed() {
+        // No manifest yet.
+        let folder = tempfile::tempdir().unwrap();
+        let named = config(folder.path(), true);
+        assert_eq!(arguments(&named, PlayRole::Client), [] as [&str; 0]);
+
+        // A manifest of an older version, which waits to be converted, and one of a newer.
+        let project = project_spec::ProjectConfig::new("Game");
+        let older = project_spec::ProjectConfigV1 {
+            schema: 1,
+            project: project.project.clone(),
+            startup: project.startup.clone(),
+            rendering: project.rendering.clone(),
+            controls: project.controls.clone(),
+        };
+        let manifest = crate::project::project_path(folder.path());
+        std::fs::write(&manifest, serde_json::to_vec(&older).unwrap()).unwrap();
+        assert_eq!(arguments(&named, PlayRole::Client), [] as [&str; 0]);
+        let mut newer = serde_json::to_value(&project).unwrap();
+        newer["schema"] = (project_spec::SCHEMA + 1).into();
+        std::fs::write(&manifest, serde_json::to_vec(&newer).unwrap()).unwrap();
+        assert_eq!(arguments(&named, PlayRole::Client), [] as [&str; 0]);
+        // One that is no project file at all.
+        std::fs::write(&manifest, b"{").unwrap();
+        assert_eq!(arguments(&named, PlayRole::Client), [] as [&str; 0]);
+
+        // Set up in the same session: the next client is told.
+        std::fs::remove_file(&manifest).unwrap();
+        crate::project::create_project(folder.path(), "Game").unwrap();
+        assert_eq!(arguments(&named, PlayRole::Client).len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_project_whose_start_level_leads_out_of_the_folder_is_not_passed() {
+        let outside = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), folder.path().join("levels")).unwrap();
+        let mut project = project_spec::ProjectConfig::new("Game");
+        project.startup.start_level = "levels/elsewhere.level.json".into();
+        std::fs::write(
+            crate::project::project_path(folder.path()),
+            project_spec::canonical_bytes(&project).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(outside.path().join("elsewhere.level.json"), b"{}").unwrap();
+        let named = config(folder.path(), true);
+        assert_eq!(arguments(&named, PlayRole::Client), [] as [&str; 0]);
     }
 }

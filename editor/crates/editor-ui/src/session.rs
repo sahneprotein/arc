@@ -1309,7 +1309,11 @@ impl Editor {
     /// fails, with its reason. The game's logs go under the folder's `target`.
     pub fn connect_game(&mut self, folder: PathBuf) -> Result<(), Diagnostic> {
         let logs = folder.join("target/arc-editor-play-logs");
-        let handle = PlayHandle::start(PlayConfig::from_game_worktree(folder, logs))?;
+        // The game's folder is the project's folder. The client is told so only while the
+        // folder is a ready project, which the launcher looks at each time it starts one:
+        // a project that is set up or converted during the session counts from then on.
+        let config = PlayConfig::from_game_worktree(folder.clone(), logs).with_project_root(folder);
+        let handle = PlayHandle::start(config)?;
         self.connect_play(handle);
         Ok(())
     }

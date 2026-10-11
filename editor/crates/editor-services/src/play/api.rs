@@ -129,6 +129,12 @@ pub struct PlayConfig {
     /// Directory containing assets/, passed as BEVY_ASSET_ROOT.
     pub asset_root: PathBuf,
     pub working_directory: PathBuf,
+    /// The project's folder, if the game is started on a project: the folder with
+    /// `arc-project.json`. It is passed to the client as `--project-root`, and only while
+    /// that manifest is one this editor reads, which is looked at each time a client is
+    /// started. Without it, or with a folder that is not a ready project, the client is
+    /// started exactly as it always was.
+    pub project_root: Option<PathBuf>,
     pub log_directory: PathBuf,
     pub startup_timeout: Duration,
     pub stop_timeout: Duration,
@@ -146,10 +152,17 @@ impl PlayConfig {
             client: binary("client"),
             asset_root: root.clone(),
             working_directory: root,
+            project_root: None,
             log_directory: logs,
             startup_timeout: Duration::from_secs(30),
             stop_timeout: Duration::from_secs(3),
             reap_timeout: Duration::from_secs(2),
         }
+    }
+    /// The same, with this folder as the project the game is started on
+    /// ([`PlayConfig::project_root`]).
+    pub fn with_project_root(mut self, root: PathBuf) -> Self {
+        self.project_root = Some(root);
+        self
     }
 }
