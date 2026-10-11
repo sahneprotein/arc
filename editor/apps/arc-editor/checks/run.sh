@@ -1027,6 +1027,81 @@ project_exits() {
 }
 project_exits project-close-again-discard "choose=Level>Project settings,$CHANGE_KEY,click-button=Discard changes" no
 project_exits project-close-again-save "choose=Level>Project settings,$CHANGE_KEY,click-button=Save and close" yes
+# The other ways out of a change to the project's settings, each on a folder of its own.
+# Discarding in the dialog puts back what the file has and writes nothing. Jump put on the
+# key of moving forward is held and cannot be saved: the Save button does nothing. The file
+# is as it was after both.
+SET_UP='click-button=Set up project,scroll-project=300'
+check project-draft-discard "$SET_UP,click-button=W,key=t,click-button=Discard changes" \
+    'project=Ready' 'project_draft=Unchanged project_saved=false' 'project_keys=W,S,A,D,Space,V,Escape'
+check project-draft-shared "$SET_UP,click-button=Space,key=w,click-button=Save project settings" \
+    'project=Ready' 'project_draft=SharedKey project_saved=false' 'project_keys=W,S,A,D,W,V,Escape'
+for name in project-draft-discard project-draft-shared; do
+    if wanted "$name"; then
+        grep -q '"move_forward": "W"' "$work/$name/project/arc-project.json" \
+            && grep -q '"jump": "Space"' "$work/$name/project/arc-project.json" \
+            || { echo "$name: FAILED, the project file was written though nothing was saved"; failed=1; }
+    fi
+done
+# renamed_meanwhile <name>: another program writes the project file of this case while the
+# editor has it open. In the background: it waits for the editor to have set the folder up
+# and read the file, and then writes the file with another project name. The steps that
+# follow in the case wait about three seconds before they save, by putting the dialog's
+# content where it is thirty times, so that the file is written first.
+renamed_meanwhile() {
+    wanted "$1" || return 0
+    manifest="$work/$1/project/arc-project.json"
+    (
+        tries=0
+        while [ ! -s "$manifest" ] && [ "$tries" -lt 600 ]; do sleep 0.05; tries=$((tries + 1)); done
+        sleep 0.2
+        sed 's/"name": "[^"]*"/"name": "Renamed"/' "$manifest" > "$manifest.other" && mv "$manifest.other" "$manifest"
+    ) &
+}
+# renamed_and <name> <key>: whether the project file of the case holds the other program's
+# name and this key for moving forward.
+renamed_and() {
+    grep -q '"name": "Renamed"' "$work/$1/project/arc-project.json" \
+        && grep -q "\"move_forward\": \"$2\"" "$work/$1/project/arc-project.json"
+}
+MEANWHILE=''
+count=0
+while [ "$count" -lt 30 ]; do MEANWHILE="${MEANWHILE}scroll-project=300,"; count=$((count + 1)); done
+CHANGED_MEANWHILE="$SET_UP,click-button=W,key=t,$MEANWHILE"
+# A save over a project file another program has written meanwhile is refused: the change
+# stays unsaved and the file is the other program's. The dialog then offers to read the
+# file again; read again, the change is still there and is saved onto what the other
+# program wrote.
+renamed_meanwhile project-draft-conflict
+check project-draft-conflict "${CHANGED_MEANWHILE}click-button=Save project settings" \
+    'project=Ready' 'project_draft=Changed project_saved=false' 'project_keys=T,S,A,D,Space,V,Escape'
+if wanted project-draft-conflict; then
+    renamed_and project-draft-conflict W \
+        || { echo "project-draft-conflict: FAILED, the other program's project file was written over, or was not written in time"; failed=1; }
+fi
+renamed_meanwhile project-draft-reread
+check project-draft-reread "${CHANGED_MEANWHILE}click-button=Save project settings,scroll-project=0,click-button=Read project file again,click-button=Save project settings" \
+    'project=Ready' 'project_draft=Unchanged project_saved=true' 'project_keys=T,S,A,D,Space,V,Escape'
+if wanted project-draft-reread; then
+    renamed_and project-draft-reread T \
+        || { echo "project-draft-reread: FAILED, the project file does not hold both the other program's name and the saved key"; failed=1; }
+fi
+# "Save and close" does not close over settings that cannot be saved: with two actions on
+# one key, and with a project file another program has written meanwhile, the editor stays
+# open, the Project settings are opened again to say why, and the file is not written.
+check project-draft-close-shared "$SET_UP,click-button=Space,key=w,click-button=Close settings,close,click-button=Save and close" \
+    'project=Ready' 'project_dialog=true' 'question=No' 'shutdown=No' 'project_draft=SharedKey project_saved=false'
+if wanted project-draft-close-shared; then
+    grep -q '"jump": "Space"' "$work/project-draft-close-shared/project/arc-project.json" \
+        || { echo "project-draft-close-shared: FAILED, the project file was written though nothing was saved"; failed=1; }
+fi
+renamed_meanwhile project-draft-close-conflict
+check project-draft-close-conflict "${CHANGED_MEANWHILE}click-button=Close settings,close,click-button=Save and close" \
+    'project=Ready' 'project_dialog=true' 'question=No' 'shutdown=No' 'project_draft=Changed project_saved=false'
+if wanted project-draft-close-conflict; then
+    renamed_and project-draft-close-conflict W \
+        || { echo "project-draft-close-conflict: FAILED, the other program's project file was written over, or was not written in time"; failed=1; }
+fi
 unset ARC_EDITOR_CHECK_PROJECT
 
 # check_exit <name> <steps> <saved: yes|no>: the editor must end by itself before the check's
