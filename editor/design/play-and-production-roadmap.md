@@ -14,16 +14,78 @@ level, in its own window, and Stop ends it.
 - The game's side is on the branch `codex/play-readiness`: the game's server and client
   report their readiness steps to the editor and take its Stop.
 - Both branches are local to the development machine and merged nowhere. Neither is pushed.
-- Checked: the editor's full scripted suite passes, 210 of 210 cases, with a scripted
-  stand-in in the game's place. The editor core's live smoke, with the real server and client
-  on a cooked level, reached Running with the client's steps "level drawn" and "first
-  controllable frame" measured, then stopped on request, and both processes ended by
-  themselves and were collected.
+- Checked: the editor's full scripted suite passes with a scripted stand-in in the game's
+  place; its current count is in the results below. The editor core's live smoke, with the
+  real server and client on a cooked level, reached Running with the client's steps "level
+  drawn" and "first controllable frame" measured, then stopped on request, and both processes
+  ended by themselves and were collected.
 - Not checked: the editor's own window has not been used to start the real game, and the new
   states have not been looked at on screen.
 
 Sections 1.3 to 1.8 remain the design. What of them is built is said in 1.1 and 1.11; "Preview
 in Editor" (P2), the play settings of 1.9 and all of Part 2's groupings are proposals as before.
+
+Progress, 2026-10-11, later the same day. Two more things are built on the same two local,
+unmerged branches.
+
+- Blockout editing, the first half of step 2 of 2.5, in the editor on `codex/play-backend`:
+  - Several objects are selected with Shift and a click, in the hierarchy and in the 3D view;
+    the same click on a selected object takes it out, and a plain click selects one as before.
+  - The inspector says how many are selected. Each number they differ in is a dash, as the
+    design's PropertyRow has it; a number they share is a field, and what is typed there goes
+    to all of them as one undo step. Remove takes all of them, as one undo step.
+  - The gizmo moves, turns and sizes them together as one undo step: one move for all, one
+    turn about the object the gizmo is on, so that they stand to each other as before.
+  - Snap is a switch in the toolbar, as the design's ToolButton page has it, and a row of the
+    tool menu in a narrow window; the 3D view says "Snap 0.5 m, 15°" or "Snap off". With it
+    on, a moved object lands on the grid along the axes it is moved on, a turn goes in steps,
+    and a sized box gets a size of whole steps. Of several, the object the gizmo is on lands
+    on the grid and the others move by exactly as much. It is off until switched on.
+- Landscape in Play, in part. The editor's check before a start now lets a level with ground
+  and painted layers through, and refuses, in words, only a level whose landscape has rules,
+  that is grass or a layer a rule fills. The game's side, ground as collision and painted
+  layers as colour, is built on `codex/play-readiness`.
+
+Results on the final build of that day, each of a different kind:
+
+- Scripted, in the built editor: the suite plays real input into the editor's window, so
+  picking, the gizmo and the widgets run for real, with a scripted stand-in wherever a case
+  needs a game. 236 of 236 cases passed, 26 of them new for the above, at the default width,
+  at 1261 and at 621 logical pixels.
+- Unit tests of the editor's workspace: 265 passed, none failed. Among them, through the real
+  check before a start: a level with ground and painted layers is played, and one whose
+  landscape has a rule is refused before anything starts, with the reason. The linter passes
+  with warnings refused, apart from one older finding in the editor core that is allowed by
+  name.
+- The real game, by the editor core's smoke example and not through the editor's window, as
+  reported by the game's side: a fixture package with ground and painted layers, and a freshly
+  cooked level of boxes, each reached Running, was stopped on request and ended as stopped; server
+  and client ended with status 0 and were collected, with nothing forced. One warning stays
+  in the client's log and is known to be harmless: the engine's window code reports a
+  destroyed window with an ID it no longer knows as the client exits.
+- Not checked by anyone: nobody has looked at any of this on screen, and the real game has
+  still not been started from the editor's window.
+- Known and left as it is:
+  - The game runs none of what a landscape's rules make. Such a level is refused; its ground
+    and painted layers alone cannot be played while the rules are in it.
+  - Starting the game works on Unix only, and both branches are local and unmerged.
+  - The gizmo is on the first selected object in the core's order, which is by the objects'
+    IDs and not by which was clicked last.
+  - An object seen behind a handle of the gizmo cannot be clicked there: the handle takes the
+    click.
+  - A number the selected objects differ in cannot be typed over to make it the same.
+  - The step sizes are fixed at half a metre and fifteen degrees; the design names neither.
+
+Proposed next, in this order, none decided:
+
+1. One key to cook, check and play, and one to stop; "Cook and play again", "Play again" and
+   "Open log" on the notices (1.5, 1.7, 1.12).
+2. The rest of step 2 of 2.5: duplicate, a setting for the snap steps, typing over a dash, a
+   choice of which selected object the gizmo is on, a drag in the hierarchy to reparent.
+3. The problems list of step 3 of 2.5, beginning with what stops Play: no spawn point, a
+   landscape with rules.
+4. A person at the window: the real game started and stopped from the Play control, and the
+   new states looked at on screen.
 
 Sources:
 
@@ -65,8 +127,8 @@ editor, from the request to the end of its cleanup.
 | The Play control (P0 of 1.11) | editor UI | Built. At the right end of the toolbar at every width. Its menu holds the two ways to play; the foot names the cooked level, says when the level has moved on from it, and offers "Cook" or "Cook first" |
 | The game running a cooked level | game, branch `codex/cooked-level-play` | Built for levels of boxes and spawn points. Server, client and `cargo xtask run-local` take `--cooked-package <folder> --cooked-package-hash <manifest hash>`. Each process verifies the package itself before it opens a port or a window, and builds collision, spawn points and the client's boxes from it |
 | The same level on both sides | game, the same branch | Built. The client's hello carries the hash of the package's manifest, the server accepts only its own, and the client checks the hash the server answers with. A cooked level against the built-in one, or against another cooked level, is refused before a character exists |
-| Landscape in the game | game | Not built. A cooked level that has a landscape is refused when the game starts, in words; nothing is dropped silently |
-| Starting the game from the editor (P1) | editor core, branch `codex/play-backend` (local, not merged) | Built for the game's own window. A Play coordinator starts one server and one client on the checked cooked level, reports each step they reach, stops them on request, and says how the run ended and whether each process was seen to end. A level with a landscape, or without a spawn point, is refused before anything is started |
+| Landscape in the game | game, branch `codex/play-readiness` (local, not merged) | Built for ground and painted layers, and run in the live smoke: the cooked ground is the game's collision, and the painted layers its colour. What a landscape's rules make (grass, layers a rule fills) is not run, and a level that has any is refused, in words; nothing is dropped silently |
+| Starting the game from the editor (P1) | editor core, branch `codex/play-backend` (local, not merged) | Built for the game's own window. A Play coordinator starts one server and one client on the checked cooked level, reports each step they reach, stops them on request, and says how the run ended and whether each process was seen to end. A level whose landscape has rules, or a level without a spawn point, is refused before anything is started; ground and painted layers are let through |
 | Open Game Window in the UI (P1) | editor UI, the same branch | Built. The control reads "Starting", "Game window open" and "Stopping"; Stop is beside it and also cancels a check or a start. The status bar names the steps reached and an end the person asked for; an end nobody asked for is a notice that stays, and a process that was started and never seen to end is a second notice. Closing the editor during a run stops the game first. The editor does not redraw while a game runs; the coordinator wakes it. The game's folder is named with `--game <folder>`; without it the control says no game is set up |
 | The game reporting readiness and taking Stop | game, branch `codex/play-readiness` (local, not merged) | Built. Server and client, started by the editor, report their steps over a local connection and stop when told; the client says when its window was closed by the player |
 | Of the design below, not built in P1 | editor UI | "Open log" and "Play again" on a notice; "Cook and play again" when the level moves on during a run; the box in the 3D view saying a game window is open; the keys of 1.12 |
@@ -76,12 +138,12 @@ editor, from the request to the end of its cleanup.
 So the two ends are joined for the game's own window. A person can cook in the editor, have
 the cooked level checked, and start and stop the game on it from the Play control.
 
-What has been run, and this note does not claim more. The editor's scripted suite, 210 of
-210 cases, plays the whole of this through the built editor with a scripted stand-in for the
-game's processes. The editor core's live smoke ran the real server and client on a package
-cooked by the editor: the run reached Running with "level drawn" and "first controllable
-frame" measured, was stopped on request, and both processes ended with status 0 and were
-collected. The two have not been put together: nobody has yet started the real game from the
+What has been run, and this note does not claim more. The editor's scripted suite, 236 of
+236 cases, plays the whole of this through the built editor with a scripted stand-in for the
+game's processes. The editor core's live smoke ran the real server and client on a level of
+boxes cooked for the run and on a fixture package with ground and painted layers: each run reached
+Running with "level drawn" and "first controllable frame" measured, was stopped on request,
+and both processes ended with status 0 and were collected. The two have not been put together: nobody has yet started the real game from the
 editor's window, and the new states have not been looked at on screen. Neither repository has
 been through its full checks with these branches, and the process launch works on Unix only.
 
@@ -293,7 +355,7 @@ otherwise.
 | Group | Implemented |
 |---|---|
 | Level | New, Open, Save, Save as, Cook; unsaved-changes questions; a failed save stays visible with "Try again"; one folder of levels |
-| Objects | Boxes and spawn points: add where the view looks (on the landscape if it is there), select in the list or the view, move, rotate and scale with the gizmo, rename, type position, rotation and size, remove; every change one undo step |
+| Objects | Boxes and spawn points: add where the view looks (on the landscape if it is there), select in the list or the view, several with Shift, move, rotate and scale with the gizmo, alone or several together, with or without snapping to a grid and to steps of a turn, rename, type position, rotation and size, remove; every change one undo step |
 | Hierarchy | A foldable tree. Nesting exists in the level and the core; the UI has no gesture for it |
 | Landscape | Add a landscape of four tiles; sculpt (raise, lower, smooth, flatten); layers and painting; rules: grass scattered on a layer, a layer that fills on steep ground |
 | Window | One toolbar row with menus, side panels that give way in a narrow window, status bar, notices |
@@ -303,11 +365,12 @@ otherwise.
 Outside the editor, on the game's branches `codex/cooked-level-play` and, continuing it,
 `codex/play-readiness` (local, not merged): the game runs a cooked level of boxes and spawn
 points, server and client refuse each other unless they hold the same one, and both report
-their readiness to an editor that started them. A level with a landscape cannot be played:
-the editor refuses to start it.
+their readiness to an editor that started them. A level with a landscape is played with its
+ground and its painted layers; one whose landscape has rules is not, and the editor refuses to
+start it.
 
-Not there at all: assets of any kind, materials and textures, prefabs, several selected
-objects, snapping, groups from the UI, anything about gameplay beyond a spawn point. Play
+Not there at all: assets of any kind, materials and textures, prefabs, duplicating an
+object, groups from the UI, anything about gameplay beyond a spawn point. Play
 is there in part: the game in its own window is; the game inside the editor's view and the
 play settings of 1.9 are not.
 
@@ -322,7 +385,7 @@ its own right-hand panel. The hierarchy, the view, the status bar and Play are s
 | Workspace | Is for | Today | Proposed additions |
 |---|---|---|---|
 | **Level** (the Level menu, not a tool) | the file, its cooked package and its settings | file actions, Cook | level settings (name, zone bounds, the collision profile); a cook report; the list of cooked packages with their hashes |
-| **Objects** | what stands in the level | box, spawn point, gizmo | prefabs with overrides; several selected objects; snapping to grid and surface; turning an object to the slope; groups and reparenting by drag |
+| **Objects** | what stands in the level | box, spawn point, gizmo; several selected objects; snapping to a grid | prefabs with overrides; duplicate; snapping to a surface; turning an object to the slope; groups and reparenting by drag |
 | **Landscape** | the ground | sculpt, paint, grass rule, steep-ground rule | mask layers; ground textures; noise and erosion brushes; height-map import and export; tiles loaded around the view |
 | **Gameplay** | what the server acts on | spawn point (as an object) | volumes and markers with a meaning: zone exit to another zone, safe area, trigger, spawner for non-player characters, resource node, patrol path; walkable-area preview |
 | **Combat** | whether a place fights well | nothing | cover and sightline overlays from chosen points; distance rings for weapon ranges; spawn-to-spawn sight check; height advantage tint |
@@ -374,7 +437,7 @@ workspace's "what did this change do" is this table applied to the last edit.
 | Order | Step | Waits for |
 |---|---|---|
 | 1 | Play P1: built, on local branches (see the progress note) | merging `codex/play-backend` and the game's `codex/play-readiness` |
-| 2 | Objects: several selected, snapping, reparent by drag, turn to slope | nothing outside the editor; the core has reparenting |
+| 2 | Objects: several selected and snapping to a grid are built (see the second progress note). Left: duplicate, reparent by drag, turn to slope | nothing outside the editor; the core has reparenting |
 | 3 | Review: problems list, change summary | the core's validation codes, which exist |
 | 4 | Gameplay: zone exit, safe area, trigger as cooked volumes | the game's multi-zone and gateway work giving them a meaning; the format can come first |
 | 5 | Assets: browser, import, models as objects, ground textures | the art pipeline and an asset format in the core |
