@@ -938,6 +938,20 @@ check particles-place "$P,click-button=Save emitter,click-button=Place in level,
     'stage=\(false, 0\)' 'review=\[\]' 'undo=Some\("create"\)' 'cook_needed=false' 'problem=none'
 check particles-place-unsaved "$P,click-button=Place in level" \
     'workspace=Particles' 'objects=22' 'emitter_placed=0' 'level_schema=1' 'undo=None' 'problem=none'
+# A level that was saved before it placed an emitter is a file of the first schema. Saved
+# again with its first emitter placed, the file is of the second schema, and the file as it
+# was is kept beside it, byte for byte, under its name with .schema-1.bak after it.
+check level-backup 'save' 'has_file=true' 'dirty=false' 'level_schema=1' 'problem=none'
+if wanted level-backup; then
+    cp "$work/level-backup/levels/current-map.level.json" "$work/level-backup.before"
+fi
+check level-backup-again "$P,click-button=Save emitter,click-button=Place in level,save" \
+    'has_file=true' 'dirty=false' 'emitter_placed=1' 'level_schema=2' 'problem=none'
+if wanted level-backup-again; then
+    cmp -s "$work/level-backup/levels/current-map.level.json.schema-1.bak" "$work/level-backup.before" \
+        && grep -q '"schema": 2' "$work/level-backup/levels/current-map.level.json" \
+        || { echo "level-backup-again: FAILED, the level as it was is not kept beside it, or the level is not of the second schema"; failed=1; }
+fi
 unset ARC_EDITOR_CHECK_PARTICLES
 
 # The project's settings. Without a project folder they are to be had from the Level menu and
