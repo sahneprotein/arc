@@ -273,6 +273,7 @@ Known and left as it is:
 
 - A level of the first source schema that gets its first placement is saved in the second
   schema over the same file, and no copy of the file as it was is kept.
+  [Mended since: fifth note.]
 - A level file the editor cannot read is named with a reason, but not with the reader's own
   detail.
 - A scripted check that waits for Running goes on waiting, for about three minutes, after
@@ -304,7 +305,7 @@ these up.]
 8. Published models: a reference in the scene and the cooked level, an Assets browser, a
    model placed as an object (steps 6 and 7 of 2.5).
 
-Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `c169c42aa`
+Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `c60aefbf2`
 and the game's `codex/play-readiness` at `626ec45`; both are pushed and merged nowhere. A
 project's settings can now be changed in the editor, what is saved is a manifest the game
 can play with, and the editor does not close over changes that were not saved.
@@ -355,6 +356,20 @@ can play with, and the editor does not close over changes that were not saved.
   from `assets/render/look-v1.json`, whatever the project said. A folder that is no project
   yet still has that file. The profile is read when the editor starts, so one that is saved
   in the dialog shows from the next start; the dialog says that.
+- A level is not saved in a newer schema without its file as it was (`c60aefbf2`).
+  - A level goes to its second schema with its first placed emitter. The save that follows
+    looks at the schema the file on disk says it is of; if it is older than the level's,
+    the file is first kept beside it, byte for byte, under its name with `.schema-N.bak`
+    after it, and only then is the level written and put in its place.
+  - It is done under the lock the save holds and with the bytes whose hash the save has
+    just checked, so the copy is of exactly what is replaced.
+  - A copy that is there already is never written over: the save is refused and says so,
+    and so it is when the copy cannot be written. The level's file is untouched in both.
+  - When a save does not go through after its copy was made, for a failed write, a cancel
+    or a file another program changed meanwhile, the copy is taken away again, so that the
+    next try is not refused for the leftover of the last.
+  - A save in the schema the file is of keeps no copy. The converter of the project file is
+    as it was.
 - A scripted check no longer puts its window on the desktop (`1e7843eb4`). The window is
   hidden unless `ARC_EDITOR_CHECK_VISIBLE=1` asks for it. The desktop gives a hidden window
   nothing drawn, so no picture is taken of one and the result says `picture=none`.
@@ -413,6 +428,13 @@ What was run, each of a different kind, and nothing more:
     for an exit, each run by its name and by itself: 1 of 1 and 1 of 1. They were built in
     the workspace's usual incremental way, from what was built already: only the
     application was compiled, no other crate.
+- For the copy of a level before a newer schema (`c60aefbf2`): unit tests of the save in
+  `editor-services`, chosen by name (`persistence::`), 7 of 7, four of them new; the wording
+  test of the two refusals in `editor-ui`, 1 of 1; the application builds; and, scripted
+  with the window hidden, one case in two runs (`level-backup`), 2 of 2. The first run
+  saves a level, which is of the first schema. The second places an emitter and saves: the
+  level is of the second schema, and the file beside it is byte for byte what the first
+  run saved.
 - For the hidden window, one case run hidden and once shown: hidden, its window was at no
   moment among the windows on screen; shown, it was.
 - The game's client, as the game's side reports and not run by the editor's side: its
@@ -429,6 +451,10 @@ What that does not show:
   saved or on a shared key, the keys, whether a dialog is open. They do not read the mark
   beside a key two actions share, or the words of a refusal: the check's result has no
   field for those.
+- **A refused copy of a level was not driven.** That a save is refused when the copy is
+  there already, or cannot be written, is covered by unit tests of the save and of the
+  words, not through the window: no scripted case saves a level with such a file in the
+  way.
 - **The exits of a real run are still unrecorded.** The fields for them are there and were
   read from the stand-in. The real server and client have not been run since.
 - **No run of the game with changed settings.** The real client has not been started from
@@ -444,9 +470,11 @@ Known and left as it is:
   editor, is refused as a whole. It cannot be put right in the dialog.
 - A profile outside `assets/render` that the manifest names is shown and kept; another one
   outside that folder cannot be chosen in the dialog.
-- What the fourth note lists as left is still left, but for the check that went on waiting
-  for a run that had ended: the level rewritten in a newer schema without a copy, the
-  reader's detail missing from a notice, the adapter's refused fields.
+- Of what the fourth note lists as left, two things are mended, the check that went on
+  waiting for a run that had ended and the level rewritten in a newer schema without a
+  copy. Still left: the reader's detail missing from a notice, the adapter's refused fields.
+- The editor does not say that it kept a copy: the file is there, and nothing in the window
+  names it. Nothing takes old copies away either.
 
 Proposed next, in this order, none decided:
 
@@ -463,10 +491,9 @@ Proposed next, in this order, none decided:
    with hidden windows. Then the two branches are merged and the game's pins of the
    editor's crates moved to the merged commit. This needs room on the disk first.
 4. Game look takes a newly saved profile without a restart.
-5. A level is never rewritten in a newer schema without the file as it was kept beside it.
-6. The first planned setting made real: the number of clients, in the manifest, in the
+5. The first planned setting made real: the number of clients, in the manifest, in the
    Project settings and in the launch (1.9).
-7. Parity by picture, the adapter's refused fields and published models, as the fourth note
+6. Parity by picture, the adapter's refused fields and published models, as the fourth note
    has them.
 
 Sources:
@@ -481,7 +508,7 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend` (commit `c169c42aa`), which continues
+- The editor as it is on the branch `codex/play-backend` (commit `c60aefbf2`), which continues
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
