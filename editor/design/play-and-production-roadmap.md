@@ -527,7 +527,7 @@ workspace's "what did this change do" is this table applied to the last edit.
 | 3 | Review: core problems listed. Left: change summary | the core providing what changed |
 | 4 | Rendered viewport: Game Look now consumes the shared game look profile; compare captures with the client while the display is awake, then add published models and cooked-scene parity | shared presentation contract, capture verification and a real level/model asset path |
 | 5 | Assets: browser, import and reimport, models as objects, ground textures | the art pipeline and an asset reference in the scene/cooked format |
-| 6 | Particles: shared v1 emitter spec is committed; build asset services and editor authoring/preview, then add the Hanabi runtime adapter and place/cook emitters | pin and compile Hanabi in editor and client; prove GPU preview and runtime parity |
+| 6 | Particles: shared v1 spec, emitter services and the first editor authoring/reference-preview tool are implemented; add the Hanabi runtime adapter, then place and cook emitters | pin and compile Hanabi in editor and client; prove GPU preview and runtime parity |
 | 7 | Render tools: material and lighting preview modes, then scene lighting controls | the Game view and asset/material references |
 | 8 | Gameplay: zone exit, safe area, trigger as cooked volumes | the game's multi-zone and gateway work giving them a meaning; the format can come first |
 | 9 | Combat overlays | editor only; most useful once Play with several clients exists |
@@ -545,6 +545,13 @@ require restarting the editor. The shared particle contract is now in
 `editor/crates/particle-spec`, with a 16 KiB closed JSON schema, canonical writer, validation,
 stable ID/path helpers, and conservative live-particle estimate. Hanabi compatibility has only
 been checked from package metadata so far; compile and GPU pipeline validation remain open.
+The Particles tool now lists reusable game-folder emitters, creates and duplicates them, edits
+their shared spec fields with per-emitter undo/redo, saves explicitly, and previews a fixed-seed
+CPU reference simulation on a dedicated stage. The preview is clearly labeled as a reference;
+it is not the game's renderer. Targeted service/UI tests, the app build and two particle scripts
+passed. Emitter file operations serialize cooperating editor instances with a sidecar lock;
+non-cooperating writers can still race an overwrite, and stale locks after a crash require manual
+removal. Do not call particle preview parity complete until the shared Hanabi adapter is active.
 
 ### 2.6 Not proposed
 
@@ -586,12 +593,12 @@ The work is staged so each step has a usable result:
    assets; cooked levels refer to published asset identities rather than machine-specific
    source paths.
 3. **Particle workspace.** The shared renderer-independent v1 emitter document and validation
-   crate now exist at `editor/crates/particle-spec`; the editor and game must depend on that same
+   crate now exist at `editor/crates/particle-spec`; the editor and game depend on that same
    source. Its defined semantics cover point, sphere, cone and box emission, uniform speed and
    lifetime, billboard width, linear colour/size interpolation and world-space simulation after
-   spawn. Build reusable asset services and authoring UI, then a dedicated preview with play,
-   pause, restart, fixed seed and speed control. Keep texture dependencies out of v1. Translate
-   the shared spec through one Hanabi adapter used by preview and runtime. A later step
+   spawn. The editor has reusable asset services and authoring UI with explicit save and a
+   dedicated fixed-seed reference preview. Next, translate the shared spec through one Hanabi
+   adapter used by the game and editor preview. Keep texture dependencies out of v1. A later step
    places emitters in levels and adds their references to the cooked visual payload. GPU
    preview requires a rendering-capable editor; headless checks validate and round-trip the
    asset without opening a window.
