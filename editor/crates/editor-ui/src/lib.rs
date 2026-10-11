@@ -13,6 +13,13 @@
 //!
 //! Each panel and widget is named after its page in the Claude Design system "Arc Editor".
 
+/// The game's look profile as the editor's services read it, for the application's 3D view.
+pub mod look {
+    pub use editor_services::{
+        load_look_profile, look_profile_path, parse_look_profile, procedural_brick_v1, LoadedLook,
+        LookBoxes, LookProfile, LookTexture,
+    };
+}
 pub mod panels;
 pub mod play_script;
 pub mod rules;
@@ -28,4 +35,6 @@ pub use panels::menu::MenuOpen;
 pub use panels::unsaved::{Question, Unsaved};
 pub use session::{Editor, PackageCheck};
 pub use shell::{EditorUiPlugin, Modal, PanelChoice, ViewportSlot};
-pub use tool::{Brush, BrushAim, BrushMode, ChosenRule, PaintLayer, PlaceAt, Snap, Tool};
+pub use tool::{
+    Brush, BrushAim, BrushMode, ChosenRule, LookStatus, PaintLayer, PlaceAt, Snap, Tool, ViewMode,
+};

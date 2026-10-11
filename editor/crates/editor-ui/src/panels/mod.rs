@@ -17,3 +17,4 @@ pub mod snap;
 pub mod status;
 pub mod toolbar;
 pub mod unsaved;
+pub mod view;

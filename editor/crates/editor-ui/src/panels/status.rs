@@ -18,7 +18,7 @@ use crate::{
         feathers::{SIGNAL_ERROR, SIGNAL_PLAY, SIGNAL_WARN},
         size, spacing,
     },
-    tool::{Brush, BrushAim, Tool},
+    tool::{Brush, BrushAim, Tool, ViewMode},
     wording,
 };
 
@@ -86,6 +86,7 @@ fn words(
     tool: Tool,
     brush: &Brush,
     aim: &BrushAim,
+    view: ViewMode,
 ) -> StatusWords {
     let snapshot = editor.snapshot();
     let status = &snapshot.status;
@@ -147,7 +148,7 @@ fn words(
         RunTone::Plain
     };
     StatusWords {
-        level: format!("{level}{selected}   Tool: {tool}"),
+        level: format!("{level}{selected}   Tool: {tool}{}", view_words(view)),
         saved: saved.into(),
         attention,
         work,
@@ -158,18 +159,27 @@ fn words(
     }
 }
 
+/// What the status bar adds when the 3D view is not the editor's own picture. Nothing for
+/// that one: it is what the view always was.
+pub fn view_words(view: ViewMode) -> String {
+    match view {
+        ViewMode::Editor => String::new(),
+        other => format!("   View: {}", other.name()),
+    }
+}
+
 pub(crate) fn show_status(
     mut commands: Commands,
     editor: NonSend<Editor>,
     gizmo: Res<TransformGizmoSettings>,
-    (tool, brush, aim): (Res<Tool>, Res<Brush>, Res<BrushAim>),
+    (tool, brush, aim, view): (Res<Tool>, Res<Brush>, Res<BrushAim>, Res<ViewMode>),
     mut shown: Local<Option<StatusWords>>,
     mut parts: Query<(Entity, &StatusPart, &mut Text)>,
 ) {
     if parts.is_empty() {
         return;
     }
-    let now = words(&editor, gizmo.mode, *tool, &brush, &aim);
+    let now = words(&editor, gizmo.mode, *tool, &brush, &aim, *view);
     if shown.as_ref() == Some(&now) {
         return;
     }

@@ -37,7 +37,10 @@ use editor_ui::panels::{
     toolbar::Toolbar,
 };
 
-use crate::viewport::{Projected, ViewCamera};
+use crate::{
+    look::LookSun,
+    viewport::{Projected, ViewCamera},
+};
 
 /// One thing the desktop could deliver in a frame.
 #[derive(Clone, Debug)]
@@ -497,6 +500,8 @@ pub struct Screen<'w, 's> {
     objects: Query<'w, 's, (&'static Projected, &'static GlobalTransform)>,
     gizmo_focus: Query<'w, 's, &'static GlobalTransform, With<TransformGizmoFocus>>,
     review_rows: Query<'w, 's, &'static ComputedNode, With<ReviewRow>>,
+    look_sun: Query<'w, 's, &'static DirectionalLight, With<LookSun>>,
+    ground_renderer: Res<'w, landscape_render::GroundRenderer>,
     hierarchy:
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<HierarchyBody>>,
     camera: Single<'w, 's, (&'static Camera, &'static GlobalTransform), With<ViewCamera>>,
@@ -533,6 +538,17 @@ impl Screen<'_, '_> {
             .map(|(_, node, at)| (at.translation.y + node.size.y / 2.0) * node.inverse_scale_factor)
             .fold(f32::MIN, f32::max);
         (lowest_row < point.y - 2.0).then_some(point)
+    }
+
+    /// How bright the sun is that Game look made from the game's profile, in lux, if the view
+    /// is drawn so.
+    pub fn look_sun(&self) -> Option<f32> {
+        self.look_sun.iter().next().map(|sun| sun.illuminance)
+    }
+
+    /// What the ground's material is made with in place of its defaults, if anything.
+    pub fn ground_look(&self) -> Option<landscape_render::GroundLook> {
+        self.ground_renderer.look()
     }
 
     /// How many problems the Review panel has laid out.

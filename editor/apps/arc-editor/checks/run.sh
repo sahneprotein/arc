@@ -464,6 +464,29 @@ with_game runs check_sized 1100x700 fold-game 'cook,click-button=Play,click-item
 check_sized "$narrow" narrow-review "$RULE,choose=Tool>Review" 'window=621x' 'toolbar_folded=true' 'workspace=Review' 'review_rows=1' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-review-select "$RULE,choose=Tool>Review,click-button=Select Landscape" 'window=621x' 'selected=Some\("Landscape"\)' 'selection=1'
 
+# The 3D view's corner has one control: how the level is drawn. "Editor" is the editor's own
+# picture and the default. "Game look" is drawn from the game's look profile; a check names a
+# file in the profile's place (with_look), and without one, with one that is not there, or with
+# one that is no profile of this schema, the row is off and the view stays the editor's.
+look="$(cd "$(dirname "$0")" && pwd)/look-v1.json"
+with_look() {
+    ARC_EDITOR_CHECK_LOOK="$1"; export ARC_EDITOR_CHECK_LOOK
+    shift
+    "$@"
+    unset ARC_EDITOR_CHECK_LOOK
+}
+printf '{"schema": 2}' > "$work/look-v2.json"
+check view-default    'click-row=11'                      'view=Editor' 'look=none' 'look_sun=None' 'ground_look=None' 'selected=Some\("Tall box"\)'
+check view-no-game    'click-button=View,click-item=Game look' 'view=Editor' 'look=none' 'look_sun=None' 'menu_open=true' 'problem=none'
+with_look "$work/absent.json" check view-missing 'click-button=View,click-item=Game look' 'view=Editor' 'look=refused:look\.missing' 'look_sun=None' 'menu_open=true' 'problem=none'
+with_look "$work/look-v2.json" check view-other-schema 'click-button=View,click-item=Game look' 'view=Editor' 'look=refused:look\.schema' 'look_sun=None' 'menu_open=true'
+# With the profile the row is on. Game look puts the profile's sun in the view and leaves the
+# level, the selection and what can be undone as they were; Editor takes the sun out again.
+with_look "$look" check view-game-look 'click-row=11,choose=View>Game look' 'view=GameLook' 'look=loaded:3abf9a2f' 'look_sun=Some\(130000' 'ground_look=Some\(\(\[1\.0, 1\.0, 1\.0, 1\.0\], 0\.9\)\)' 'selected=Some\("Tall box"\)' 'selection=1' 'undo=None' 'menu_open=false' 'problem=none' "$row" 'toolbar_fits=Some\(true\)'
+with_look "$look" check view-back      'choose=View>Game look,choose=View>Editor' 'view=Editor' 'look=loaded:3abf9a2f' 'look_sun=None' 'ground_look=None' 'undo=None'
+with_look "$look" check view-game-move 'click-row=11,choose=View>Game look,drag-gizmo=-60' 'view=GameLook' "$moved" 'undo=Some\("drag"\)' 'dragging=false'
+with_look "$look" check_sized "$narrow" narrow-view 'choose=View>Game look' 'window=621x' 'view=GameLook' 'look_sun=Some\(130000' "$row" 'toolbar_fits=Some\(true\)'
+
 # Duplicate copies the selection: with Ctrl+D and from the Add menu. The copy stands a metre
 # beside what it was copied from, is called after it, is what is selected afterwards, and is
 # one undo step. What is under an object is copied with it.

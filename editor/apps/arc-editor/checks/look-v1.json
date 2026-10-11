@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "camera": {
+    "hdr": true,
+    "exposure_ev100": 13,
+    "tonemapping": "aces_fitted",
+    "bloom": {"preset": "natural", "intensity": 0.12}
+  },
+  "sky": {
+    "atmosphere": "earth",
+    "scattering_lut_size": [256, 256],
+    "environment_map": true,
+    "ambient_light": "none",
+    "clear_color_linear_rgba": [0, 0, 0, 1]
+  },
+  "sun": {
+    "illuminance_lux": 130000,
+    "color_linear_rgba": [1, 1, 1, 1],
+    "position_m": [1, 0.9, 0.6],
+    "look_at_m": [0, 0, 0],
+    "shadows": {
+      "enabled": true,
+      "map_size": 4096,
+      "first_cascade_far_bound_m": 8,
+      "maximum_distance_m": 60
+    }
+  },
+  "boxes": {
+    "base_color_linear_rgba": [1, 1, 1, 1],
+    "roughness": 1,
+    "texture": "procedural_brick_v1",
+    "texture_repeat_m": 1
+  },
+  "ground": {
+    "base_color_linear_rgba": [1, 1, 1, 1],
+    "roughness": 0.9,
+    "paint": "linear_vertex_rgba"
+  }
+}

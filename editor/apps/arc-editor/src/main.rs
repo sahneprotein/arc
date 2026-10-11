@@ -19,6 +19,7 @@
 mod brush;
 mod check;
 mod input_script;
+mod look;
 mod shortcuts;
 mod viewport;
 
@@ -87,6 +88,16 @@ fn main() -> AppExit {
     // problem is shown.
     let saved_level = arguments.level.exists().then(|| arguments.level.clone());
     let game = arguments.game.clone();
+    // The game's look profile, which Game look in the 3D view is drawn from: looked for in
+    // the game's folder, once, before the window opens. A scripted check may name a file.
+    let (look_status, game_look) = look::look_status(
+        check::scripted_look()
+            .or_else(|| game.as_deref().map(editor_ui::look::look_profile_path))
+            .map(|path| {
+                let read = editor_ui::look::load_look_profile(&path);
+                (path, read)
+            }),
+    );
     let mut editor = match Editor::new(
         scene_data::current_map(),
         arguments.level,
@@ -152,6 +163,7 @@ fn main() -> AppExit {
         MeshPickingPlugin,
         EditorUiPlugin,
         viewport::ViewportPlugin,
+        look::LookPlugin,
         brush::BrushPlugin,
         shortcuts::ShortcutsPlugin,
         check::CheckPlugin { started },
@@ -171,6 +183,8 @@ fn main() -> AppExit {
     } else {
         WinitSettings::desktop_app()
     })
+    .insert_resource(look_status)
+    .insert_resource(look::GameLook(game_look))
     .insert_non_send(editor)
     .init_resource::<check::GameWakes>()
     .add_systems(Startup, wake_for_the_game);

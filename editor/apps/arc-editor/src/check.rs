@@ -133,6 +133,16 @@ pub fn scripted_opener() -> Option<editor_ui::session::Opener> {
     }))
 }
 
+/// The look profile a scripted check names with `ARC_EDITOR_CHECK_LOOK`: a file that is
+/// looked in for the game's look profile, in place of the game's folder. A file that is not
+/// there, or is no profile, is what a check of a refusal names.
+pub fn scripted_look() -> Option<PathBuf> {
+    if !is_scripted() {
+        return None;
+    }
+    std::env::var_os("ARC_EDITOR_CHECK_LOOK").map(PathBuf::from)
+}
+
 /// The window size a scripted check asks for, if it names one.
 pub fn wanted_window() -> Option<(u32, u32)> {
     if !is_scripted() {
@@ -282,6 +292,8 @@ type Tools<'w> = (
     Res<'w, BrushAim>,
     Res<'w, Stroke>,
     Res<'w, RowDrag>,
+    Res<'w, editor_ui::ViewMode>,
+    Res<'w, editor_ui::LookStatus>,
 );
 
 /// Saves the first frames as pictures into the folder named by `ARC_EDITOR_CHECK_EARLY`, to
@@ -364,7 +376,7 @@ fn scripted(
     gizmo: Res<TransformGizmoSettings>,
     gizmo_state: Res<TransformGizmoState>,
     (shown, ground, closing): (Res<Shown>, Res<GroundShown>, Dialogs),
-    (tool, brush, aim, stroke, row_drag): Tools,
+    (tool, brush, aim, stroke, row_drag, view, look): Tools,
     mut redraw: MessageWriter<RequestRedraw>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -487,7 +499,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -736,6 +748,23 @@ fn scripted(
                 .map(|problem| format!("{:?}:{}", problem.scope, problem.diagnostic.code))
                 .collect::<Vec<_>>(),
             screen.review_rows(),
+            // How the 3D view draws the level, what the editor knows of the game's look
+            // profile, and how bright the sun is that Game look made, if it made one.
+            *view,
+            match &*look {
+                editor_ui::LookStatus::NoGame => "none".to_owned(),
+                editor_ui::LookStatus::Refused { code, .. } => format!("refused:{code}"),
+                editor_ui::LookStatus::Loaded { identity } => format!(
+                    "loaded:{}",
+                    identity.as_deref().map_or("", |hash| &hash[..8])
+                ),
+            },
+            screen.look_sun(),
+            // What the ground's material is made with in place of its defaults: nothing in
+            // the editor's own picture, the profile's colour and roughness in Game look.
+            screen
+                .ground_look()
+                .map(|look| (look.base_color_linear_rgba, look.roughness)),
         );
         exit.write(AppExit::Success);
     }

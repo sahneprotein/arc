@@ -41,10 +41,11 @@ use crate::{
         unsaved::{
             answer_unsaved, close_requested, leave_or_ask, unsaved_dialog, Question, Unsaved,
         },
+        view::{show_view, view_control},
     },
     session::{pump_editor, Editor, PumpEditor},
     theme::{feathers::ui_theme, size, spacing},
-    tool::{Brush, BrushAim, ChosenRule, PaintLayer, PlaceAt, Snap, Tool},
+    tool::{Brush, BrushAim, ChosenRule, LookStatus, PaintLayer, PlaceAt, Snap, Tool, ViewMode},
 };
 
 /// The node the application puts the 3D view in.
@@ -141,7 +142,7 @@ fn shell() -> impl Scene {
                         Node { flex_grow: 1.0, min_width: px(0) }
                         Pickable { should_block_lower: false, is_hoverable: true }
                         ViewportSlot
-                        Children [ empty_hint(), notice(), snap_overlay() ]
+                        Children [ empty_hint(), notice(), snap_overlay(), view_control() ]
                     ),
                     inspector_panel(),
                     brush_panel(),
@@ -234,6 +235,7 @@ fn keep_drawing(
         Res<Unsaved>,
         Res<Collapsed>,
         Res<Modal>,
+        Res<ViewMode>,
     ),
     mut seen: Local<Option<(u64, u64, u64, bool)>>,
     mut frames_left: Local<u8>,
@@ -248,7 +250,8 @@ fn keep_drawing(
     );
     let input = mouse.get_just_pressed().len() + mouse.get_just_released().len() > 0
         || keys.get_just_pressed().len() + keys.get_just_released().len() > 0;
-    let (tool, brush, layer, rule, panels, levels, name, unsaved, collapsed, modal) = choices;
+    let (tool, brush, layer, rule, panels, levels, name, unsaved, collapsed, modal, view_mode) =
+        choices;
     let chosen = tool.is_changed()
         || brush.is_changed()
         || layer.is_changed()
@@ -258,7 +261,8 @@ fn keep_drawing(
         || name.is_changed()
         || unsaved.is_changed()
         || collapsed.is_changed()
-        || modal.is_changed();
+        || modal.is_changed()
+        || view_mode.is_changed();
     if input || chosen || editor.busy() || *seen != Some(view) {
         *frames_left = FRAMES_AFTER_A_CHANGE;
     }
@@ -307,6 +311,8 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<PanelChoice>()
             .init_resource::<Tool>()
             .init_resource::<Snap>()
+            .init_resource::<ViewMode>()
+            .init_resource::<LookStatus>()
             .init_resource::<Brush>()
             .init_resource::<BrushAim>()
             .init_resource::<PlaceAt>()
@@ -354,6 +360,7 @@ impl Plugin for EditorUiPlugin {
                         show_tool,
                         show_duplicate,
                         show_play,
+                        show_view,
                         (mirror_snap, show_snap).chain(),
                     ),
                     (keys_show_row_focus, show_row_focus).chain(),

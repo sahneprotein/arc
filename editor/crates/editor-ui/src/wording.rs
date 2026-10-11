@@ -78,6 +78,33 @@ pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
             "That object has no more room for children",
             "Put the object under another one.",
         ),
+        // The game's look profile, which Game look in the 3D view is drawn from.
+        "look.missing" => (
+            "The game's folder has no look profile",
+            "The game is older than this editor, or the folder named with --game is not the \
+             game's.",
+        ),
+        "look.read_failed" => (
+            "The game's look profile could not be read",
+            "Check that the file can be read.",
+        ),
+        "look.limit" => (
+            "The game's look profile is larger than a profile can be",
+            "It may be another file under the profile's name.",
+        ),
+        "look.decode" => (
+            "The game's look profile is not one this editor can read",
+            "It lacks something, or names something this editor does not know. Bring the \
+             editor and the game to the same version.",
+        ),
+        "look.schema" => (
+            "The game's look profile is of another version than this editor reads",
+            "Bring the editor and the game to the same version.",
+        ),
+        "look.value" => (
+            "The game's look profile holds a value that cannot be drawn",
+            "Correct it in the game's profile.",
+        ),
         // Showing a file, the game's log for instance, in the desktop's program for it.
         "path.missing" => (
             "That file is no longer there",

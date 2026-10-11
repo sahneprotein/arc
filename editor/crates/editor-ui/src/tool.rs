@@ -40,6 +40,52 @@ impl Tool {
     }
 }
 
+/// How the 3D view draws the level. A choice of the window, like which panels are shown: it
+/// is not part of the level, of the core's session or of what can be undone.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ViewMode {
+    /// The editor's own plain picture: what the view always was.
+    #[default]
+    Editor,
+    /// The level lit and coloured as the game's client draws it, from the game's look profile.
+    GameLook,
+}
+
+impl ViewMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Editor => "Editor",
+            Self::GameLook => "Game look",
+        }
+    }
+}
+
+/// What the editor knows of the game's look profile: the description of sun, sky, tone and
+/// materials that the game's client draws from. The application looks for it and says here
+/// what it found; Game look is offered only with a profile that was loaded.
+#[derive(Resource, Clone, PartialEq, Eq, Debug, Default)]
+pub enum LookStatus {
+    /// The editor was started without a game: there is nowhere to look for a profile.
+    #[default]
+    NoGame,
+    /// The profile could not be used: the loader's code, the file it was looked for in, and
+    /// the field at fault where the loader names one.
+    Refused {
+        code: String,
+        path: String,
+        field: Option<String>,
+    },
+    /// The profile is loaded. Its identity, if it has one, is what the client can be
+    /// compared by.
+    Loaded { identity: Option<String> },
+}
+
+impl LookStatus {
+    pub fn loaded(&self) -> bool {
+        matches!(self, Self::Loaded { .. })
+    }
+}
+
 /// Whether a drag on the gizmo keeps to a grid, and to which. A setting of the editor, not of
 /// the level: it is not saved and changes nothing until something is dragged. The editor's
 /// core keeps it ([`editor_core::SnapSettings`]); this is what the core last said, for the 3D

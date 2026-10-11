@@ -45,12 +45,18 @@ use bevy::{
 };
 use editor_core::{GizmoPivot, Mutation, ObjectId, SceneDocument, ViewSnapshot};
 use editor_ui::{
+    look::procedural_brick_v1,
     panels::{
         hierarchy::adds_to_selection,
         inspector::{gizmo_object, gizmo_roots},
     },
     theme::{color, feathers::to_color},
-    Editor, Modal, PlaceAt, Snap, Tool, ViewportSlot,
+    Editor, Modal, PlaceAt, Snap, Tool, ViewMode, ViewportSlot,
+};
+
+use crate::look::{
+    box_material, box_mesh, look_image, EditorSun, GameLook, EDITOR_AMBIENT_BRIGHTNESS,
+    EDITOR_SUN_ILLUMINANCE,
 };
 use landscape_render::{GrassRenderer, GroundRenderer, GroundTile};
 use scene_data::{ObjectData, ObjectRecord, RigidTransform};
@@ -170,6 +176,10 @@ struct Looks {
     solid: Handle<StandardMaterial>,
     spawn: Handle<StandardMaterial>,
     selected: Handle<StandardMaterial>,
+    /// A box as the game draws it, if the editor holds the game's look profile.
+    game_box: Option<Handle<StandardMaterial>>,
+    /// How many metres one repeat of a box's texture covers: the profile's, or a metre.
+    box_repeat_m: f32,
 }
 
 /// Where the camera looks from: around `target`, `distance` away.
@@ -220,6 +230,8 @@ struct ShownKey {
     /// Whether the gizmo may hold the selection: not while the landscape tool is chosen, and
     /// not behind a dialog.
     gizmo_allowed: bool,
+    /// Whether the level is drawn as the game draws it.
+    game_look: bool,
 }
 
 /// One object as the view shows it.
@@ -312,7 +324,8 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    orbit: Res<Orbit>,
+    mut images: ResMut<Assets<Image>>,
+    (orbit, look): (Res<Orbit>, Res<GameLook>),
 ) {
     let window_color = to_color(color::SURFACE_WINDOW);
     // Three cameras of ours, drawn in this order: one that only clears the window, the level
@@ -356,14 +369,15 @@ fn setup(
     commands.spawn((MiddleHandle, Transform::IDENTITY));
 
     commands.spawn((
+        EditorSun,
         DirectionalLight {
-            illuminance: 8000.0,
+            illuminance: EDITOR_SUN_ILLUMINANCE,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
     ));
     commands.insert_resource(GlobalAmbientLight {
-        brightness: 400.0,
+        brightness: EDITOR_AMBIENT_BRIGHTNESS,
         ..default()
     });
 
@@ -384,6 +398,16 @@ fn setup(
         solid: materials.add(box_look(to_color(color::TEXT_DIM))),
         spawn: materials.add(matte(to_color(color::SIGNAL_PLAY))),
         selected: materials.add(box_look(to_color(color::ACCENT))),
+        // The game's box, made only from a profile that was read: its colour, its roughness
+        // and the texture it names.
+        game_box: look.0.as_ref().map(|loaded| {
+            let texture = images.add(look_image(&procedural_brick_v1()));
+            materials.add(box_material(&loaded.profile.boxes, texture))
+        }),
+        box_repeat_m: look
+            .0
+            .as_ref()
+            .map_or(1.0, |loaded| loaded.profile.boxes.texture_repeat_m),
     });
 }
 
@@ -478,7 +502,7 @@ fn place_camera(
 }
 
 /// The transform of an object in the level, through its parents.
-fn world_transform(document: &SceneDocument, object: &ObjectRecord) -> Transform {
+pub(crate) fn world_transform(document: &SceneDocument, object: &ObjectRecord) -> Transform {
     let local = Transform {
         translation: Vec3::from_array(object.local.translation_m),
         rotation: Quat::from_array(object.local.rotation_xyzw),
@@ -520,7 +544,8 @@ fn scope(
     if before == now {
         return None;
     }
-    if before.session != now.session {
+    // Another level, or another way of drawing it: everything is drawn anew.
+    if before.session != now.session || before.game_look != now.game_look {
         return Some(Scope::Everything);
     }
     let mut objects: Vec<ObjectId> = Vec::new();
@@ -551,7 +576,7 @@ fn show_level(
     editor: NonSend<Editor>,
     looks: Res<Looks>,
     gizmo: Res<TransformGizmoState>,
-    (tool, modal): (Res<Tool>, Res<Modal>),
+    (tool, modal, view): (Res<Tool>, Res<Modal>, Res<ViewMode>),
     mut meshes: ResMut<Assets<Mesh>>,
     (mut shown, middle): (ResMut<Shown>, Single<Entity, With<MiddleHandle>>),
 ) {
@@ -563,6 +588,8 @@ fn show_level(
         preview: preview.map(|preview| (preview.transaction, preview.sequence)),
         selection_revision: snapshot.regions.selection,
         gizmo_allowed: *tool == Tool::Objects && !modal.0,
+        // Game look is drawn only with the game's box material, which needs the profile.
+        game_look: *view == ViewMode::GameLook && looks.game_box.is_some(),
     };
     let Some(scope) = scope(shown.key, key, &shown.selection, &snapshot) else {
         return;
@@ -628,10 +655,19 @@ fn show_level(
             ObjectData::Group | ObjectData::Terrain(_) => continue,
         };
         let mesh = |meshes: &mut Assets<Mesh>| match half_extents {
-            Some(half) => meshes.add(Cuboid::from_size(Vec3::from_array(half) * 2.0)),
+            Some(half) => meshes.add(box_mesh(Vec3::from_array(half) * 2.0, looks.box_repeat_m)),
             None => looks.spawn_mesh.clone(),
         };
-        let material = if snapshot.selection.contains(&object.id) {
+        // In Game look a box has the game's material whether it is selected or not: the
+        // selection is an outline drawn over the picture (`look::outline_selection`). A
+        // spawn point is the editor's own mark in both pictures; the game draws none.
+        let game_box = looks
+            .game_box
+            .as_ref()
+            .filter(|_| key.game_look && half_extents.is_some());
+        let material = if let Some(game_box) = game_box {
+            game_box.clone()
+        } else if snapshot.selection.contains(&object.id) {
             looks.selected.clone()
         } else if half_extents.is_none() {
             looks.spawn.clone()
@@ -1524,6 +1560,7 @@ mod tests {
             preview: None,
             selection_revision: selection,
             gizmo_allowed: true,
+            game_look: false,
         }
     }
 
@@ -1550,6 +1587,16 @@ mod tests {
             scope(Some(key(1, 1)), other, &[], &snapshot),
             Some(Scope::Everything)
         ));
+        // And so does another way of drawing the same level: every box gets another material.
+        let game_look = ShownKey {
+            game_look: true,
+            ..key(1, 1)
+        };
+        assert!(matches!(
+            scope(Some(key(1, 1)), game_look, &[], &snapshot),
+            Some(Scope::Everything)
+        ));
+        assert!(scope(Some(game_look), game_look, &[], &snapshot).is_none());
     }
 
     #[test]
