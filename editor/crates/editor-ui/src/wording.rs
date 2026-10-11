@@ -584,6 +584,13 @@ pub fn emitter<'a>(
              emitter to keep your changes under a new one."
                 .into(),
         ),
+        "particle.locked" => (
+            "Another editor is writing the emitter's file".into(),
+            "Nothing was written or removed here. Try again in a moment. If no other editor \
+             is open, one that stopped unexpectedly left a file ending in .lock beside the \
+             emitter's file: remove that file."
+                .into(),
+        ),
         "particle.missing" => (
             "The emitter's file is no longer there".into(),
             "It was removed outside the editor. Save the emitter to write it again.".into(),
@@ -654,6 +661,7 @@ mod tests {
         for code in [
             "particle.value",
             "particle.conflict",
+            "particle.locked",
             "particle.missing",
             "particle.read_failed",
             "particle.write_failed",

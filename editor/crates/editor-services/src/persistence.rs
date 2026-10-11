@@ -138,12 +138,16 @@ fn verify_disk(path: &Path, expected: DiskVersion, cancel: &AtomicBool) -> Resul
         }
     }
 }
-struct PathLock {
+/// A file that says its neighbour is being written: made as a new file, which only one
+/// writer can do at a time, and removed when the writer is done. It holds off other editors,
+/// which make it too; a program that does not is not held off. A writer that stops without
+/// finishing leaves the file behind, and it must then be removed by hand.
+pub(crate) struct PathLock {
     path: PathBuf,
     _file: File,
 }
 impl PathLock {
-    fn acquire(path: PathBuf) -> Result<Self, Diagnostic> {
+    pub(crate) fn acquire(path: PathBuf) -> Result<Self, Diagnostic> {
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)

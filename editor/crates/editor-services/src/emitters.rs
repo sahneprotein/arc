@@ -10,7 +10,16 @@
 //! - [`list_emitters`], [`save_emitter`], [`remove_emitter`]: the files. A save writes the
 //!   spec's canonical bytes to a temporary file beside the target and renames it, and both
 //!   a save and a removal are refused (`particle.conflict`) when the file is not what the
-//!   editor last saw of it, so that nothing another program wrote is lost.
+//!   editor last saw of it, so that nothing another editor wrote is lost.
+//!
+//!   Looking at the file and then writing or removing it are two steps, and between them
+//!   another editor could write it. So each save and removal holds the emitter's file for
+//!   itself from the look to the write, with a `.lock` file beside it that only one editor
+//!   can make at a time; the other is refused (`particle.locked`) and has written nothing.
+//!   A new emitter is also put in place in a way that fails if a file is there. What this
+//!   does not cover: a program that makes no such lock file can still write between the
+//!   look and the write, and an editor that stops in the middle leaves its lock file
+//!   behind, which then has to be removed by hand.
 //! - [`EmitterEdit`]: one emitter being edited. Every change is checked by the spec before
 //!   it is taken, and can be undone and redone; the history is this emitter's and has
 //!   nothing to do with a level's.
@@ -19,6 +28,7 @@
 //!   reading an emitter's numbers by, and for the game's particle runtime to be compared
 //!   with. It is not that runtime, and what it shows is not what the game draws.
 
+use crate::persistence::PathLock;
 use particle_spec::{self as spec, Blend, EmitterError, EmitterSpec, LoadedEmitter, Shape};
 use scene_data::Diagnostic;
 use std::{
@@ -138,6 +148,27 @@ fn on_disk_now(path: &Path) -> Result<OnDisk, Diagnostic> {
     Ok(OnDisk::Sha256(spec::sha256_hex(&bytes)))
 }
 
+/// Holds the emitter's file at `path` for one save or removal: a file of the same name with
+/// `.lock` after it, which another editor that saves or removes the same emitter cannot make
+/// while it is there. It is gone again when what is returned is dropped.
+fn hold(path: &Path) -> Result<PathLock, Diagnostic> {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".lock");
+    let lock = path.with_file_name(name);
+    PathLock::acquire(lock.clone()).map_err(|refusal| {
+        if refusal.code == "save.locked" {
+            Diagnostic::new("particle.locked")
+                .with("path", path.display())
+                .with("lock", lock.display())
+        } else {
+            let error = refusal.parameters.get("detail").unwrap_or(&refusal.code);
+            Diagnostic::new("particle.write_failed")
+                .with("path", path.display())
+                .with("error", error)
+        }
+    })
+}
+
 /// An emitter as it was written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedEmitter {
@@ -149,7 +180,9 @@ pub struct SavedEmitter {
 ///
 /// `expected` is what the editor last saw of that file. If the file is something else now,
 /// nothing is written and the refusal is `particle.conflict`: a new emitter never takes the
-/// place of a file that is there, and a save never undoes what another program wrote.
+/// place of a file that is there, and a save never undoes what another editor wrote. The
+/// file is held from the look to the write ([`hold`]); while another editor holds it the
+/// refusal is `particle.locked`.
 pub fn save_emitter(
     game: &Path,
     emitter: &EmitterSpec,
@@ -165,17 +198,35 @@ pub fn save_emitter(
             .with("path", path.display())
             .with("max_bytes", spec::MAX_FILE_BYTES));
     }
-    if on_disk_now(&path)? != *expected {
-        return Err(Diagnostic::new("particle.conflict").with("path", path.display()));
-    }
+    let conflict = || Diagnostic::new("particle.conflict").with("path", path.display());
     let write_failed = |error: std::io::Error| io_refusal("particle.write_failed", &path, error);
+    // A file that is something else is refused before anything is made, the folder too.
+    if on_disk_now(&path)? != *expected {
+        return Err(conflict());
+    }
     std::fs::create_dir_all(&folder).map_err(write_failed)?;
+    let _held = hold(&path)?;
+    // Looked at again now that no other editor can write it.
+    if on_disk_now(&path)? != *expected {
+        return Err(conflict());
+    }
     let mut temporary = tempfile::NamedTempFile::new_in(&folder).map_err(write_failed)?;
     temporary.write_all(&bytes).map_err(write_failed)?;
     temporary.as_file().sync_all().map_err(write_failed)?;
-    temporary
-        .persist(&path)
-        .map_err(|error| write_failed(error.error))?;
+    match expected {
+        // A new emitter is put in place only if nothing is there, as one step: a file that
+        // a program without the lock made in the meantime stays.
+        OnDisk::Absent => temporary.persist_noclobber(&path).map_err(|error| {
+            if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+                conflict()
+            } else {
+                write_failed(error.error)
+            }
+        })?,
+        OnDisk::Sha256(_) => temporary
+            .persist(&path)
+            .map_err(|error| write_failed(error.error))?,
+    };
     Ok(SavedEmitter {
         sha256_hex: spec::sha256_hex(&bytes),
         path,
@@ -183,17 +234,25 @@ pub fn save_emitter(
 }
 
 /// Removes an emitter's file. Refused with `particle.conflict` when the file is not what the
-/// editor last saw of it, and with `particle.missing` when there is none.
+/// editor last saw of it, with `particle.missing` when there is none, and with
+/// `particle.locked` while another editor holds it ([`hold`]).
 pub fn remove_emitter(game: &Path, id: &str, expected: &OnDisk) -> Result<(), Diagnostic> {
     let folder = emitters_folder(game);
     let path = spec::asset_path(game, id).map_err(|error| emitter_diagnostic(&error, &folder))?;
-    let now = on_disk_now(&path)?;
-    if now == OnDisk::Absent {
-        return Err(Diagnostic::new("particle.missing").with("path", path.display()));
-    }
-    if now != *expected {
-        return Err(Diagnostic::new("particle.conflict").with("path", path.display()));
-    }
+    let seen = |now: OnDisk| {
+        if now == OnDisk::Absent {
+            Err(Diagnostic::new("particle.missing").with("path", path.display()))
+        } else if now != *expected {
+            Err(Diagnostic::new("particle.conflict").with("path", path.display()))
+        } else {
+            Ok(())
+        }
+    };
+    // Before the file is held: without a file there may be no folder to hold it in.
+    seen(on_disk_now(&path)?)?;
+    let _held = hold(&path)?;
+    // And again now that no other editor can write it.
+    seen(on_disk_now(&path)?)?;
     std::fs::remove_file(&path).map_err(|error| io_refusal("particle.write_failed", &path, error))
 }
 
@@ -1020,6 +1079,51 @@ mod tests {
             remove_emitter(game.path(), &id(1), &seen).unwrap_err().code,
             "particle.missing"
         );
+    }
+
+    #[test]
+    fn a_file_another_editor_holds_is_neither_written_nor_removed_and_the_hold_is_let_go() {
+        let game = tempfile::tempdir().unwrap();
+        let sparks = emitter(1, "Sparks");
+        let saved = save_emitter(game.path(), &sparks, &OnDisk::Absent).unwrap();
+        let seen = OnDisk::Sha256(saved.sha256_hex.clone());
+        let before = std::fs::read(&saved.path).unwrap();
+        // A save and a removal let go of the file: no lock is left beside it.
+        let lock = saved
+            .path
+            .with_file_name(format!("{}.emitter-v1.json.lock", id(1)));
+        assert!(!lock.exists());
+
+        // Another editor is in the middle of writing this emitter.
+        std::fs::write(&lock, "").unwrap();
+        let held = save_emitter(game.path(), &emitter(1, "Embers"), &seen).unwrap_err();
+        assert_eq!(held.code, "particle.locked");
+        assert_eq!(held.parameters["path"], saved.path.display().to_string());
+        assert_eq!(held.parameters["lock"], lock.display().to_string());
+        assert_eq!(
+            remove_emitter(game.path(), &id(1), &seen).unwrap_err().code,
+            "particle.locked"
+        );
+        assert_eq!(std::fs::read(&saved.path).unwrap(), before);
+        // The other editor's lock is not this one's to take away, and it is no emitter.
+        assert!(lock.exists());
+        assert_eq!(list_emitters(game.path()).unwrap().len(), 1);
+        // Another emitter is not held by it.
+        save_emitter(game.path(), &emitter(2, "Dust"), &OnDisk::Absent).unwrap();
+
+        // Once it is done, both go through, and a refused save leaves no lock either.
+        std::fs::remove_file(&lock).unwrap();
+        let stale = OnDisk::Sha256(spec::sha256_hex(b"something else"));
+        assert_eq!(
+            save_emitter(game.path(), &sparks, &stale).unwrap_err().code,
+            "particle.conflict"
+        );
+        assert!(!lock.exists());
+        save_emitter(game.path(), &emitter(1, "Embers"), &seen).unwrap();
+        assert!(!lock.exists());
+        let embers = on_disk_now(&saved.path).unwrap();
+        remove_emitter(game.path(), &id(1), &embers).unwrap();
+        assert!(!lock.exists() && !saved.path.exists());
     }
 
     #[test]
