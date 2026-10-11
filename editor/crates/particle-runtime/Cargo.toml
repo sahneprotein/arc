@@ -12,5 +12,8 @@ hanabi-3d = ["dep:bevy", "dep:bevy_hanabi", "bevy/3d"]
 
 [dependencies]
 particle-spec.workspace = true
-bevy = { workspace = true, optional = true }
+# Named as the crates.io package, not by a path: each workspace that builds this crate
+# patches crates.io Bevy to its own Arc source (the editor to its checkout, the game to its
+# pinned revision), so that this crate, Hanabi and the application share one Bevy.
+bevy = { version = "=0.19.1", default-features = false, optional = true }
 bevy_hanabi = { version = "=0.19.0", default-features = false, features = ["3d"], optional = true }

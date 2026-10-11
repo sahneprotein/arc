@@ -29,7 +29,14 @@
 //! the CPU reference simulation available and use it when GPU readiness is
 //! absent or uncertain.
 
-use particle_spec::{Blend, EmitterSpec, Shape};
+/// The emitter format this adapter is built on. An application that loads emitters and
+/// builds effects from them uses the format through here, so that both are one type from
+/// one source.
+pub use particle_spec;
+
+#[cfg(feature = "hanabi-3d")]
+use particle_spec::Blend;
+use particle_spec::{EmitterSpec, Shape};
 
 #[cfg(feature = "hanabi-3d")]
 use bevy::ecs::schedule::IntoScheduleConfigs;
@@ -159,12 +166,10 @@ impl EmissionSchedule {
     }
 }
 
-/// Build the shared Hanabi asset and per-instance emission schedule.
-///
-/// `seed` is copied to the Hanabi asset so all random expressions use the
-/// same deterministic sequence for a given effect instance.
-#[cfg(feature = "hanabi-3d")]
-pub fn build_effect(spec: &EmitterSpec, seed: u32) -> Result<BuiltEffect, AdapterError> {
+/// Whether this adapter draws `spec`: the same refusals [`build_effect`] gives, without
+/// building anything. It needs no renderer and no feature, so that an editor's review, a
+/// cook and a client that has not started its renderer all say the same of an emitter.
+pub fn supported(spec: &EmitterSpec) -> Result<(), AdapterError> {
     particle_spec::validate(spec)?;
     if !matches!(spec.shape, Shape::Point {}) {
         return Err(AdapterError::UnsupportedField {
@@ -178,6 +183,16 @@ pub fn build_effect(spec: &EmitterSpec, seed: u32) -> Result<BuiltEffect, Adapte
             reason: "exact exponential drag mapping is not in this adapter slice",
         });
     }
+    Ok(())
+}
+
+/// Build the shared Hanabi asset and per-instance emission schedule.
+///
+/// `seed` is copied to the Hanabi asset so all random expressions use the
+/// same deterministic sequence for a given effect instance.
+#[cfg(feature = "hanabi-3d")]
+pub fn build_effect(spec: &EmitterSpec, seed: u32) -> Result<BuiltEffect, AdapterError> {
+    supported(spec)?;
 
     let expressions = bevy_hanabi::ExprWriter::new();
     let lifetime = expressions
@@ -440,4 +455,44 @@ mod tests {
 #[cfg(not(feature = "hanabi-3d"))]
 pub fn feature_is_enabled() -> bool {
     false
+}
+
+#[cfg(test)]
+mod support_tests {
+    use super::*;
+
+    #[test]
+    fn support_is_said_without_a_renderer_and_names_the_field_that_is_refused() {
+        let point = particle_spec::default_emitter();
+        assert_eq!(supported(&point), Ok(()));
+
+        let mut cone = point.clone();
+        cone.shape = Shape::Cone {
+            radius_m: 0.25,
+            angle_degrees: 25.0,
+        };
+        assert!(matches!(
+            supported(&cone),
+            Err(AdapterError::UnsupportedField { field: "shape", .. })
+        ));
+
+        let mut dragged = point.clone();
+        dragged.motion.drag_per_s = 0.5;
+        assert!(matches!(
+            supported(&dragged),
+            Err(AdapterError::UnsupportedField {
+                field: "motion.drag_per_s",
+                ..
+            })
+        ));
+
+        // An emitter the format refuses is not one the adapter was asked about.
+        let mut invalid = point;
+        invalid.lifetime.min_seconds = 5.0;
+        invalid.lifetime.max_seconds = 1.0;
+        assert!(matches!(
+            supported(&invalid),
+            Err(AdapterError::InvalidSpec { .. })
+        ));
+    }
 }

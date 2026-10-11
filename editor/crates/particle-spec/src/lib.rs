@@ -620,6 +620,27 @@ fn normalize_zeros(spec: &mut EmitterSpec) {
     spec.look.color_end_linear_rgba.iter_mut().for_each(value);
 }
 
+/// The seed of an emitter that is placed in a level, from the stable ID of the placement:
+/// the ID's 32 hexadecimal characters are decoded to 16 bytes, those bytes are hashed with
+/// SHA-256, and the digest's first four bytes are read as a little-endian `u32`.
+///
+/// The editor's preview and the game's client both take the seed from here, so that one
+/// placement gives the same particles in both. `None` for an ID that is not 32 lowercase
+/// hexadecimal characters or is all zero, which is no stable ID.
+pub fn placement_seed(placement_id: &str) -> Option<u32> {
+    if !valid_id(placement_id) {
+        return None;
+    }
+    let mut decoded = [0u8; 16];
+    for (byte, pair) in decoded.iter_mut().zip(placement_id.as_bytes().chunks(2)) {
+        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    let digest = Sha256::digest(decoded);
+    Some(u32::from_le_bytes([
+        digest[0], digest[1], digest[2], digest[3],
+    ]))
+}
+
 pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -666,6 +687,33 @@ pub fn max_live_estimate(spec: &EmitterSpec) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_placement_seed_is_the_same_for_the_same_id_everywhere() {
+        // Pinned: the editor and the game must both give these.
+        assert_eq!(
+            placement_seed("00000000000000000000000000000001"),
+            Some(281_885_820)
+        );
+        assert_eq!(
+            placement_seed("0123456789abcdef0123456789abcdef"),
+            Some(369_770_018)
+        );
+        assert_eq!(
+            placement_seed("ffffffffffffffffffffffffffffffff"),
+            Some(2_493_892_186)
+        );
+        // What is no stable ID has no seed.
+        for bad in [
+            "",
+            "00000000000000000000000000000000",
+            "0123456789ABCDEF0123456789ABCDEF",
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdeg",
+        ] {
+            assert_eq!(placement_seed(bad), None, "{bad:?}");
+        }
+    }
 
     #[test]
     fn default_is_valid_and_canonical_round_trips() {
