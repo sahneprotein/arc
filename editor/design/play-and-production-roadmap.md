@@ -1,7 +1,7 @@
 # Play and Stop, and how the editor's features are grouped
 
-A proposal, 2026-10-09, brought up to date on 2026-10-10 and 2026-10-11 with what has been
-built since. Nothing proposed in it is decided. It has two parts: how starting and stopping the game should look and behave in the editor, and how
+A proposal, 2026-10-09, brought up to date on 2026-10-10 and three times on 2026-10-11 with
+what has been built since. Nothing proposed in it is decided. It has two parts: how starting and stopping the game should look and behave in the editor, and how
 the editor's features should be grouped as it grows into the production tool for a zoned
 online game with real-time combat. Each part says first what exists today and then what is
 proposed, and the two are never mixed in one table.
@@ -87,6 +87,88 @@ Proposed next, in this order, none decided:
 4. A person at the window: the real game started and stopped from the Play control, and the
    new states looked at on screen.
 
+Progress, 2026-10-11, the third note. The first three of the steps proposed above are built,
+on `codex/play-backend`, which is now pushed to the editor's repository and merged nowhere.
+The editor core's side of them (settings of a session, duplicating, reparenting, giving several
+objects one value, the review of a level, showing a file) is in the same branch.
+
+- Play from the keyboard, and notices that offer what mends them:
+  - F5 cooks the level if it has changed since its cook, has the cooked level checked and
+    starts the game in its own window. The Play menu's row "Cook and Play" does the same.
+    Shift+F5 is Stop, at whatever step that has reached.
+  - The key cooks nothing and says why in one sentence when a game runs already, when no game
+    is set up, and when the level has something the game cannot run.
+  - When the level moves on from the cooked level a run plays, a notice offers "Cook and play
+    again": the run is stopped, the level cooked as it is, checked and played.
+  - A game that stopped by itself, or did not start, offers "Play again" and, where the game
+    wrote a log, "Open log". A start refused for the level itself offers no second try of the
+    same cooked level.
+- The rest of step 2 of 2.5, in the Objects tools:
+  - Duplicate, in the Add menu and with Ctrl+D: each selected object is copied with what is
+    under it, a metre beside it, and the copies are selected. One undo step. A landscape is
+    not copied; the menu's row is off and says why.
+  - The steps of snapping are two number fields at the foot of the inspector, kept by the
+    core for the session.
+  - A dash in the inspector is a field: a number typed over it goes to every selected object.
+  - Of several selected objects the gizmo is on the one clicked last, whose row carries a
+    dot; a Shift-click on another selected one moves it there. Two buttons of the inspector
+    put it on one object or at the middle of them all, which is the mean of where the selected
+    boxes and spawn points are. A turn is about the gizmo's place.
+  - A row of the hierarchy is dragged onto another row to put its object under that one, or
+    onto the list where no row is to bring it to the top of the level. The object stays where
+    it is in the level. Selected rows go together, as one undo step.
+- Review, the first part of step 3 of 2.5: a tool whose panel, in the inspector's place, lists
+  what the core's review of the level finds, under "Play" what stops the game from running it
+  and under "Level" what is wrong with the level itself. A problem about one object has a
+  button that selects it. F5 on a level the game cannot run chooses this tool.
+- The toolbar's row with every tool as a button had grown longer than the 900 pixels the
+  design folds it at. The tools now fold into their menu whenever the row cannot hold them,
+  which is measured, and the panel switches stay buttons from 900 pixels up as designed.
+
+Results on the final build of that note, each of a different kind:
+
+- Scripted, in the built editor, with a scripted stand-in wherever a case needs a game:
+  348 of 348 cases passed, at the default width, at 1261, 1100, 1000, 900 and 621 logical
+  pixels.
+- Unit tests of the editor's workspace: 320 passed, none failed; 165 of them are
+  the UI's and 21 the application's. The linter passes with warnings refused, apart
+  from the one older finding that is allowed by name.
+- The real game: not run again for this note. What the second note says of it still holds
+  and nothing more: it was started by the editor core's smoke example, never from the editor's
+  window.
+- Not checked by anyone: nobody has looked at any of this on screen. "Open log" has only
+  shown a file in a scripted check, where nothing is opened; the core's way to open one is
+  covered by the core's own tests.
+
+Known and left as it is:
+
+- The keys are the ones this milestone was given. The design page proposes F5 for "Preview in
+  Editor" and Shift+F5 for the game window and decides neither; the editor has no preview. The
+  proposal stays open for when it has one (1.12).
+- F5 while a game runs is refused in one sentence. It does not stop and restart the game;
+  the notice's "Cook and play again" does.
+- In the 3D view the middle of the object that has the gizmo is behind the gizmo's handles:
+  a Shift-click there is a hold on a handle and takes nothing out of the selection. Its row
+  does, and so does a click on the object beside the handles.
+- Sizing at the middle of several objects sizes each box about its own middle. It does not
+  move them apart.
+- Review lists what the core's review lists. In a session that is nothing under "Level": the
+  core refuses an edit that would make the level invalid. A summary of changes and cost
+  readouts (2.2) are not built; nothing in the core provides them yet.
+- The design has no page for: the row "Cook and Play", the snap steps, the two buttons and
+  the line for the gizmo, the dot on a row, the ring round a place to drop on, the Review
+  panel, and a third button on a notice. Each is built from existing parts and tokens; none
+  adds a token.
+
+Proposed next, in this order, none decided:
+
+1. A person at the window: the real game started and stopped from the Play control and with
+   F5, a log opened from a notice, and the states of all three notes looked at on screen.
+2. The designs this note lists as missing, drawn, and the keys decided.
+3. The rest of step 3 of 2.5: a summary of changes since the last save, and what a change did
+   to the simulation hash, once the core provides them.
+4. Play P2 or the play settings of 1.9, whichever the owner's answer in 1.12 puts first.
+
 Sources:
 
 - `crates/editor-services/docs/play-boundary.md`: the agreed contract between the UI and the
@@ -131,7 +213,8 @@ editor, from the request to the end of its cleanup.
 | Starting the game from the editor (P1) | editor core, branch `codex/play-backend` (local, not merged) | Built for the game's own window. A Play coordinator starts one server and one client on the checked cooked level, reports each step they reach, stops them on request, and says how the run ended and whether each process was seen to end. A level whose landscape has rules, or a level without a spawn point, is refused before anything is started; ground and painted layers are let through |
 | Open Game Window in the UI (P1) | editor UI, the same branch | Built. The control reads "Starting", "Game window open" and "Stopping"; Stop is beside it and also cancels a check or a start. The status bar names the steps reached and an end the person asked for; an end nobody asked for is a notice that stays, and a process that was started and never seen to end is a second notice. Closing the editor during a run stops the game first. The editor does not redraw while a game runs; the coordinator wakes it. The game's folder is named with `--game <folder>`; without it the control says no game is set up |
 | The game reporting readiness and taking Stop | game, branch `codex/play-readiness` (local, not merged) | Built. Server and client, started by the editor, report their steps over a local connection and stop when told; the client says when its window was closed by the player |
-| Of the design below, not built in P1 | editor UI | "Open log" and "Play again" on a notice; "Cook and play again" when the level moves on during a run; the box in the 3D view saying a game window is open; the keys of 1.12 |
+| Keys, and what a notice offers | editor UI, the same branch | Built (third progress note). F5 cooks, checks and plays in the game's window and Shift+F5 stops; a notice offers "Play again", "Open log" and "Cook and play again" |
+| Of the design below, not built | editor UI | The box in the 3D view saying a game window is open; "Try again" for a server that did not shut down |
 | Running the game inside the editor's view | editor and game | Not built. P2. "Preview in Editor" is in the menu, switched off, with the reason |
 | Design | Claude Design | Drawn: five boards and the PlayControl page. P0 follows them where it can; the Play menu is as wide as any menu, because the design has no token for the wider menu it draws |
 
@@ -332,13 +415,15 @@ editor did not cook it, does the editor show the simulation data's hash instead.
 | Step | The person gets | Needs |
 |---|---|---|
 | P0, built | The Play control with its menu and foot; "Cook first"; "Checking" against the real `VerifyPackage`; the two ways to play shown as not available yet, with the reason | nothing new from the core |
-| P1, built on `codex/play-backend` and `codex/play-readiness` (both local, not merged) | Open Game Window: Starting, Running, Stop, every end of 1.7, closing during a run. Left for later: "Open log", "Play again", "Cook and play again", the box in the 3D view | merging the two branches; in the game, landscape for levels that have one |
+| P1, built on `codex/play-backend` and `codex/play-readiness` (neither merged) | Open Game Window: Starting, Running, Stop, every end of 1.7, closing during a run; one key to cook, check and play and one to stop; "Open log", "Play again" and "Cook and play again" on the notices. Left for later: the box in the 3D view | merging the two branches; in the game, what a landscape's rules make |
 | P2 | Preview in Editor: the game in the 3D view, the pointer handed over and back | the game's client able to run inside the editor's window |
 | P3 | Play settings of 1.9, one at a time | per setting, see its row |
 
 ### 1.12 Open, for the owner
 
-- The keys. F5 and Shift+F5 are assumed on the design pages and not decided.
+- The keys. The design pages assume F5 for "Preview in Editor" and Shift+F5 for the game
+  window and decide neither. Built for now, while there is no preview: F5 cooks, checks and
+  plays in the game's window, Shift+F5 stops. Which it is to be once a preview exists is open.
 - Whether "Cook first" should start the game straight away. Proposed: no.
 - Whether a level with unsaved changes may be played from its older cook without a question.
   Proposed: yes; the foot says what will run.
@@ -355,11 +440,12 @@ otherwise.
 | Group | Implemented |
 |---|---|
 | Level | New, Open, Save, Save as, Cook; unsaved-changes questions; a failed save stays visible with "Try again"; one folder of levels |
-| Objects | Boxes and spawn points: add where the view looks (on the landscape if it is there), select in the list or the view, several with Shift, move, rotate and scale with the gizmo, alone or several together, with or without snapping to a grid and to steps of a turn, rename, type position, rotation and size, remove; every change one undo step |
-| Hierarchy | A foldable tree. Nesting exists in the level and the core; the UI has no gesture for it |
+| Objects | Boxes and spawn points: add where the view looks (on the landscape if it is there), select in the list or the view, several with Shift, move, rotate and scale with the gizmo, alone or several together, on one of them or at their middle, with or without snapping to a grid and to steps of a turn that can be set, duplicate, rename, type position, rotation and size, also over a value several differ in, remove; every change one undo step |
+| Hierarchy | A foldable tree. A row is dragged onto another to put its object under that one, or onto the list to bring it to the top |
+| Review | A tool whose panel lists what the core's review of the level finds: what stops the game from running it, and what is wrong with the level |
 | Landscape | Add a landscape of four tiles; sculpt (raise, lower, smooth, flatten); layers and painting; rules: grass scattered on a layer, a layer that fills on steep ground |
-| Window | One toolbar row with menus, side panels that give way in a narrow window, status bar, notices |
-| Play | The control with its menu: cook, the cooked level named and checked on disk, and the game started in its own window and stopped (Part 1). On `codex/play-backend`, local and not merged |
+| Window | One toolbar row with menus, whose tools fold into a menu when the row cannot hold them, side panels that give way in a narrow window, status bar, notices |
+| Play | The control with its menu: cook, the cooked level named and checked on disk, and the game started in its own window and stopped, also with one key each (Part 1). On `codex/play-backend`, not merged |
 | Checks | Scripted cases that play input into the built editor, with a scripted stand-in for the game where a case needs one, and start-up timings in the log |
 
 Outside the editor, on the game's branches `codex/cooked-level-play` and, continuing it,
@@ -369,8 +455,8 @@ their readiness to an editor that started them. A level with a landscape is play
 ground and its painted layers; one whose landscape has rules is not, and the editor refuses to
 start it.
 
-Not there at all: assets of any kind, materials and textures, prefabs, duplicating an
-object, groups from the UI, anything about gameplay beyond a spawn point. Play
+Not there at all: assets of any kind, materials and textures, prefabs, making an empty group
+from the UI, anything about gameplay beyond a spawn point. Play
 is there in part: the game in its own window is; the game inside the editor's view and the
 play settings of 1.9 are not.
 
@@ -385,13 +471,13 @@ its own right-hand panel. The hierarchy, the view, the status bar and Play are s
 | Workspace | Is for | Today | Proposed additions |
 |---|---|---|---|
 | **Level** (the Level menu, not a tool) | the file, its cooked package and its settings | file actions, Cook | level settings (name, zone bounds, the collision profile); a cook report; the list of cooked packages with their hashes |
-| **Objects** | what stands in the level | box, spawn point, gizmo; several selected objects; snapping to a grid | prefabs with overrides; duplicate; snapping to a surface; turning an object to the slope; groups and reparenting by drag |
+| **Objects** | what stands in the level | box, spawn point, gizmo; several selected objects; snapping to a grid; duplicate; reparenting by drag | prefabs with overrides; snapping to a surface; turning an object to the slope; empty groups |
 | **Landscape** | the ground | sculpt, paint, grass rule, steep-ground rule | mask layers; ground textures; noise and erosion brushes; height-map import and export; tiles loaded around the view |
 | **Gameplay** | what the server acts on | spawn point (as an object) | volumes and markers with a meaning: zone exit to another zone, safe area, trigger, spawner for non-player characters, resource node, patrol path; walkable-area preview |
 | **Combat** | whether a place fights well | nothing | cover and sightline overlays from chosen points; distance rings for weapon ranges; spawn-to-spawn sight check; height advantage tint |
 | **Assets** | what the level is made from | nothing | browser, import and reimport, a model placed as an object, materials |
 | **Play** (the Play control, not a tool) | running the level | cook, the cooked level named and checked; the game started in its own window and stopped, for a level of boxes and spawn points | the rest of Part 1: the game in the editor's view, play settings |
-| **Review** | whether the level is fit to ship | status bar, notices | a problems list from the core's validation; what a change did to the simulation hash; cost readouts for grass and tiles; a summary of changes since the last save for a commit message |
+| **Review** | whether the level is fit to ship | status bar, notices; a problems list from the core's review | what a change did to the simulation hash; cost readouts for grass and tiles; a summary of changes since the last save for a commit message |
 
 Why these and not a list by technology: a person building a zone thinks "place things",
 "shape ground", "say what happens here", "check the fight", "run it". Every workspace answers
@@ -437,8 +523,8 @@ workspace's "what did this change do" is this table applied to the last edit.
 | Order | Step | Waits for |
 |---|---|---|
 | 1 | Play P1: built, on local branches (see the progress note) | merging `codex/play-backend` and the game's `codex/play-readiness` |
-| 2 | Objects: several selected and snapping to a grid are built (see the second progress note). Left: duplicate, reparent by drag, turn to slope | nothing outside the editor; the core has reparenting |
-| 3 | Review: problems list, change summary | the core's validation codes, which exist |
+| 2 | Objects: several selected, snapping, duplicate and reparent by drag are built (see the second and third progress notes). Left: turn to slope | nothing outside the editor |
+| 3 | Review: the problems list is built (third progress note). Left: change summary | the core providing what changed |
 | 4 | Gameplay: zone exit, safe area, trigger as cooked volumes | the game's multi-zone and gateway work giving them a meaning; the format can come first |
 | 5 | Assets: browser, import, models as objects, ground textures | the art pipeline and an asset format in the core |
 | 6 | Combat overlays | editor only; most useful once Play with several clients exists |
