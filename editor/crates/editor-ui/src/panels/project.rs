@@ -17,27 +17,43 @@
 //! start with, and each level file of the folder that cannot be read, with its reason. If
 //! none can be read, the button says that it makes a new starter level, and pressing it is
 //! the person's agreement to that; the files that could not be read are left as they are.
-//! - A project: its name and folder, the level it starts with, the game's look profile and
-//!   whether the editor has it, and the keys the game uses now. These are shown and not
-//!   changed here. Under them are the settings the game does not read yet: each is a
-//!   control that is switched off, and the group says that it is planned.
+//! - A project: its name and folder and the level it starts with, which are shown; the
+//!   game's look profile and the keys the game uses, which are changed here. Under them are
+//!   the settings the game does not read yet: each is a control that is switched off, and
+//!   the group says that it is planned.
+//!
+//! Changing a key or the look profile changes what the editor holds, not the file. The
+//! dialog's foot says that there are unsaved changes and has the two buttons for them:
+//! "Save project settings" writes them, and "Discard changes" puts back what the file has.
+//! A key is changed by pressing its button and then the key; a key the game does not read is
+//! not taken, and two actions on one key are marked and not saved. A look profile is chosen
+//! among the folder's that the look reader takes. A save that is refused says why at the
+//! top, and the changes stay.
 
 use bevy::{
     feathers::{
         containers::pane_body,
-        controls::{ButtonVariant, FeathersButton, FeathersTextInput, FeathersTextInputContainer},
+        controls::{
+            ButtonVariant, FeathersButton, FeathersCheckbox, FeathersTextInput,
+            FeathersTextInputContainer,
+        },
         display::{label, label_dim},
-        theme::{ThemeBackgroundColor, ThemeBorderColor, ThemedText},
+        theme::{ThemeBackgroundColor, ThemeBorderColor, ThemeTextColor, ThemedText},
+        tokens,
     },
+    input::{keyboard::KeyboardInput, ButtonState},
+    input_focus::InputFocus,
     prelude::*,
     text::{EditableText, TextEdit},
-    ui::InteractionDisabled,
-    ui_widgets::{Activate, ScrollArea},
+    ui::{Checked, InteractionDisabled},
+    ui_widgets::{Activate, ScrollArea, ValueChange},
 };
 
 use crate::{
     panels::{inspector::group_title, unsaved::Leave},
-    project::{control_rows, planned_rows, Project, ProjectState},
+    project::{
+        planned_rows, DraftState, KeyAction, LookChoice, Project, ProjectState, SettingsEdit,
+    },
     session::Editor,
     theme::{
         feathers::{BORDER, SCRIM, SIGNAL_WARN},
@@ -113,9 +129,72 @@ pub const CONVERT_HINT: &str = "It is of an older version, which this editor can
     beside it, under its name with .schema-N.bak after it, and then writes the version this \
     editor reads. Its settings are kept.";
 
-/// What the group of the current keys says.
-pub const KEYS_HINT: &str = "The keys the game uses now. They are shown here and not changed \
-    here.";
+/// What the group of the keys says.
+pub const KEYS_HINT: &str = "The keys the game uses. To change one, press its button and then \
+    the key. Letters, digits, Space, Escape, Enter, Tab, Backspace, Delete and the arrow keys \
+    can be used.";
+
+/// What a key's button says while its key is asked for.
+pub const PRESS_A_KEY: &str = "Press a key";
+
+/// What the keys say when the key that was pressed is none the game reads.
+pub const KEY_REFUSED: &str = "The game does not read that key. Press another, or press the \
+    button again to leave the key as it is.";
+
+/// What a key's row says when another action is on the same key.
+pub const KEY_SHARED: &str = "Also on another action";
+
+/// What the look says when neither the mouse nor the stick is looked with.
+pub const NO_LOOK: &str = "With neither, the player cannot look around.";
+
+/// What the group of the look profile says.
+pub const LOOK_HINT: &str = "The profile the game is drawn with. Game look in this editor is \
+    drawn from the profile that was the project's when the editor started; one that is saved \
+    here is used from the next start.";
+
+/// What the foot says of the settings: nothing while they are the file's, that they are
+/// saved after a save, that there are changes, and why changes cannot be saved. The second
+/// part says whether it is said in the warning colour.
+pub fn settings_line(state: &DraftState, saved: bool) -> (String, bool) {
+    match state {
+        DraftState::Unchanged if saved => ("Saved".into(), false),
+        DraftState::Unchanged => (String::new(), false),
+        DraftState::Changed => ("Unsaved changes".into(), true),
+        DraftState::SharedKey { first, second } => (
+            format!(
+                "{} and {} are on the same key. Give one another key to save.",
+                first.words(),
+                second.words()
+            ),
+            true,
+        ),
+        DraftState::Refused(reason) => (format!("Cannot be saved: {reason}."), true),
+    }
+}
+
+/// What a look profile's row says of it: that the look reader took it, or why not.
+pub fn look_choice_words(choice: &LookChoice) -> String {
+    match &choice.read {
+        Ok(identity) => format!("look profile {}", wording::short_hash(identity)),
+        Err(refusal) if refusal.code == "project.outside_folder" => {
+            "a link to a file outside the project's folder".into()
+        }
+        Err(refusal) => wording::problem(&refusal.code, |_| None).title,
+    }
+}
+
+/// The actions that are on a key another action is on too, in these settings.
+pub fn shared_keys(settings: &SettingsEdit) -> Vec<KeyAction> {
+    let key = |action: KeyAction| action.key(&settings.controls);
+    KeyAction::ALL
+        .into_iter()
+        .filter(|&action| {
+            KeyAction::ALL
+                .into_iter()
+                .any(|other| other != action && key(other) == key(action))
+        })
+        .collect()
+}
 
 /// What a group of planned settings says.
 pub const PLANNED_HINT: &str = "Planned. The game does not read these yet, so they cannot be \
@@ -191,14 +270,48 @@ pub fn project_dialog() -> impl Scene {
                     Node {
                         flex_direction: FlexDirection::Row,
                         justify_content: JustifyContent::End,
+                        align_items: AlignItems::Center,
+                        column_gap: px(spacing::SPACE_4),
                         flex_shrink: 0.0,
                     }
-                    Children [(
-                        @FeathersButton { @caption: bsn! { Text("Close settings") ThemedText } }
-                        on(|_: On<Activate>, mut dialog: ResMut<ProjectDialog>| {
-                            dialog.open = false;
-                        })
-                    )]
+                    Children [
+                        (
+                            Node { flex_grow: 1.0, min_width: px(0) }
+                            Children [ (label_dim("") SettingsLine) ]
+                        ),
+                        (
+                            @FeathersButton {
+                                @caption: bsn! { Text("Discard changes") ThemedText }
+                            }
+                            DiscardSettingsButton
+                            InteractionDisabled
+                            Node { flex_shrink: 0.0 }
+                            on(|_: On<Activate>, mut project: ResMut<Project>| {
+                                project.discard_settings();
+                            })
+                        ),
+                        (
+                            @FeathersButton {
+                                @caption: bsn! { Text("Save project settings") ThemedText },
+                                @variant: ButtonVariant::Primary,
+                            }
+                            SaveSettingsButton
+                            InteractionDisabled
+                            Node { flex_shrink: 0.0 }
+                            on(|_: On<Activate>, mut project: ResMut<Project>| {
+                                project.save_settings();
+                            })
+                        ),
+                        (
+                            @FeathersButton {
+                                @caption: bsn! { Text("Close settings") ThemedText }
+                            }
+                            Node { flex_shrink: 0.0 }
+                            on(|_: On<Activate>, mut dialog: ResMut<ProjectDialog>| {
+                                dialog.open = false;
+                            })
+                        ),
+                    ]
                 ),
             ]
         )]
@@ -228,6 +341,165 @@ fn name_of(text: &str) -> impl Scene {
 /// A setting that is shown: its name and what it is.
 fn shown(name: &str, value: String) -> Box<dyn SceneList> {
     Box::new(bsn_list![row(bsn_list![name_of(name), label_dim(value)])])
+}
+
+/// The line of the dialog's foot that says whether the settings are saved.
+#[derive(Component, Default, Clone)]
+pub struct SettingsLine;
+
+/// The button that saves the settings as they were changed.
+#[derive(Component, Default, Clone)]
+pub struct SaveSettingsButton;
+
+/// The button that puts the settings back to the file's.
+#[derive(Component, Default, Clone)]
+pub struct DiscardSettingsButton;
+
+/// The button of an action's key.
+#[derive(Component, Default, Clone, Copy)]
+pub struct KeyButton(pub KeyAction);
+
+/// What is looked with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum LookDevice {
+    #[default]
+    Mouse,
+    GamepadRightStick,
+}
+
+/// The checkbox of something that is looked with.
+#[derive(Component, Default, Clone, Copy)]
+pub struct LookWith(pub LookDevice);
+
+/// The button that chooses a look profile, with the profile's path in the folder.
+#[derive(Component, Default, Clone)]
+pub struct UseLookButton(pub String);
+
+/// The button that reads the project file again after another program changed it.
+#[derive(Component, Default, Clone)]
+pub struct ReadAgainButton;
+
+/// The width of a key's button, so that the keys line up.
+const KEY_WIDTH: f32 = 120.0;
+
+fn ask_key(
+    activate: On<Activate>,
+    buttons: Query<&KeyButton>,
+    mut project: ResMut<Project>,
+    mut focus: ResMut<InputFocus>,
+) {
+    if let Ok(button) = buttons.get(activate.entity) {
+        project.ask_key(button.0);
+        // The key that is pressed next is the action's. It must not also be a press of
+        // this button, as Space and Enter are of a button that has the focus.
+        focus.clear();
+    }
+}
+
+/// An action and the button of its key. While its key is asked for the button says so; an
+/// action that shares its key with another says that beside it, in the warning colour.
+fn key_row(action: KeyAction, key: &str, asking: bool, shared: bool) -> Box<dyn SceneList> {
+    let caption = if asking {
+        PRESS_A_KEY.to_owned()
+    } else {
+        key.to_owned()
+    };
+    let variant = if asking {
+        ButtonVariant::Primary
+    } else {
+        ButtonVariant::Normal
+    };
+    let note: Box<dyn SceneList> = if shared && !asking {
+        Box::new(bsn_list![(label(KEY_SHARED) ThemeTextColor(SIGNAL_WARN))])
+    } else {
+        Box::new(bsn_list![])
+    };
+    Box::new(bsn_list![row(bsn_list![
+        name_of(action.words()),
+        (
+            @FeathersButton { @caption: bsn! { Text({caption}) ThemedText }, @variant: {variant} }
+            KeyButton({action})
+            Node { min_width: px(KEY_WIDTH), flex_shrink: 0.0 }
+            on(ask_key)
+        ),
+        {note}
+    ])])
+}
+
+fn set_look(change: On<ValueChange<bool>>, boxes: Query<&LookWith>, mut project: ResMut<Project>) {
+    match boxes.get(change.source).map(|look| look.0) {
+        Ok(LookDevice::Mouse) => project.set_look(Some(change.value), None),
+        Ok(LookDevice::GamepadRightStick) => project.set_look(None, Some(change.value)),
+        Err(_) => {}
+    }
+}
+
+/// The checkbox of something that is looked with, ticked or not.
+fn look_box(device: LookDevice, caption: &'static str, ticked: bool) -> Box<dyn SceneList> {
+    if ticked {
+        Box::new(bsn_list![(
+            @FeathersCheckbox { @caption: bsn! { Text(caption) ThemedText } }
+            LookWith({device})
+            Checked
+            on(set_look)
+        )])
+    } else {
+        Box::new(bsn_list![(
+            @FeathersCheckbox { @caption: bsn! { Text(caption) ThemedText } }
+            LookWith({device})
+            on(set_look)
+        )])
+    }
+}
+
+fn use_look(activate: On<Activate>, buttons: Query<&UseLookButton>, mut project: ResMut<Project>) {
+    if let Ok(button) = buttons.get(activate.entity) {
+        project.choose_look(&button.0);
+    }
+}
+
+/// A look profile of the folder: its file, what the look reader made of it, and the button
+/// that chooses it. The chosen one says that it is; one the reader refuses cannot be chosen
+/// and says why, in the warning colour.
+fn look_row(choice: &LookChoice, chosen: bool) -> Box<dyn SceneList> {
+    let path = choice.path.clone();
+    let words = look_choice_words(choice);
+    let usable = choice.read.is_ok();
+    let said: Box<dyn SceneList> = if usable {
+        Box::new(bsn_list![label_dim(words)])
+    } else {
+        Box::new(bsn_list![(label(words) ThemeTextColor(SIGNAL_WARN))])
+    };
+    let button: Box<dyn SceneList> = if chosen {
+        Box::new(bsn_list![(
+            @FeathersButton {
+                @caption: bsn! { Text("Selected") ThemedText },
+                @variant: ButtonVariant::Primary,
+            }
+            InteractionDisabled
+            Node { flex_shrink: 0.0 }
+        )])
+    } else if usable {
+        Box::new(bsn_list![(
+            @FeathersButton { @caption: bsn! { Text("Use") ThemedText } }
+            UseLookButton({path.clone()})
+            Node { flex_shrink: 0.0 }
+            on(use_look)
+        )])
+    } else {
+        Box::new(bsn_list![(
+            @FeathersButton { @caption: bsn! { Text("Use") ThemedText } }
+            InteractionDisabled
+            Node { flex_shrink: 0.0 }
+        )])
+    };
+    Box::new(bsn_list![row(bsn_list![
+        (
+            Node { flex_grow: 1.0, min_width: px(0), flex_direction: FlexDirection::Column }
+            Children [ label(path), {said} ]
+        ),
+        {button}
+    ])])
 }
 
 /// A setting the game does not read yet: its name and a control that is switched off.
@@ -346,6 +618,14 @@ fn content(project: &Project, look: &LookStatus) -> Vec<Box<dyn SceneList>> {
             refusal.parameters.get(key).map(String::as_str)
         });
         rows.push(warning(words.title, words.remedy, None));
+        if refusal.code == "project.changed_since_read" {
+            rows.push(Box::new(bsn_list![(
+                @FeathersButton { @caption: bsn! { Text("Read project file again") ThemedText } }
+                ReadAgainButton
+                Node { align_self: AlignSelf::FlexStart, flex_shrink: 0.0 }
+                on(|_: On<Activate>, mut project: ResMut<Project>| project.read_again())
+            )]));
+        }
     }
     let folder = project
         .root()
@@ -481,16 +761,66 @@ fn content(project: &Project, look: &LookStatus) -> Vec<Box<dyn SceneList>> {
                 ));
             }
 
-            rows.push(Box::new(bsn_list![group_title("Rendering")]));
-            rows.push(shown("Look profile", config.rendering.profile.clone()));
+            // The settings as they are being changed, which are the file's until they are.
+            let settings = project
+                .settings()
+                .unwrap_or_else(|| SettingsEdit::of(config));
+
+            rows.push(Box::new(bsn_list![
+                group_title("Rendering"),
+                label_dim(LOOK_HINT)
+            ]));
+            rows.push(shown("Look profile", settings.rendering_profile.clone()));
+            for choice in project.look_choices() {
+                rows.push(look_row(choice, choice.path == settings.rendering_profile));
+            }
+            let chosen_usable = project
+                .look_choices()
+                .iter()
+                .any(|choice| choice.path == settings.rendering_profile && choice.read.is_ok());
+            if !chosen_usable {
+                rows.push(warning(
+                    "The project's look profile cannot be used".into(),
+                    "The game does not start with it. Choose another here, or put the file \
+                     right."
+                        .into(),
+                    None,
+                ));
+            }
             rows.push(shown("In this editor", look_words(look)));
 
             rows.push(Box::new(bsn_list![
                 group_title("Controls"),
                 label_dim(KEYS_HINT)
             ]));
-            for (what, key) in control_rows(config) {
-                rows.push(shown(what, key));
+            let shared = shared_keys(&settings);
+            for action in KeyAction::ALL {
+                rows.push(key_row(
+                    action,
+                    action.key(&settings.controls),
+                    project.asking() == Some(action),
+                    shared.contains(&action),
+                ));
+            }
+            if project.refused_key() {
+                rows.push(Box::new(bsn_list![(
+                    label(KEY_REFUSED) ThemeTextColor(SIGNAL_WARN)
+                )]));
+            }
+            let look_with = &settings.controls.look;
+            let mouse = look_box(LookDevice::Mouse, "Mouse", look_with.mouse);
+            let stick = look_box(
+                LookDevice::GamepadRightStick,
+                "Gamepad right stick",
+                look_with.gamepad_right_stick,
+            );
+            rows.push(Box::new(bsn_list![row(bsn_list![
+                name_of("Look with"),
+                { mouse },
+                { stick },
+            ])]));
+            if !look_with.mouse && !look_with.gamepad_right_stick {
+                rows.push(Box::new(bsn_list![label_dim(NO_LOOK)]));
             }
 
             for (group, settings) in planned_rows(config) {
@@ -513,6 +843,14 @@ type Built = (
     Option<String>,
     Option<(String, bool)>,
     LookStatus,
+    // The settings as they are being changed, the profiles to choose from, and the key
+    // that is asked for.
+    (
+        Option<SettingsEdit>,
+        Vec<LookChoice>,
+        Option<KeyAction>,
+        bool,
+    ),
 );
 
 /// Shows the dialog while it is open, and rebuilds its content when what was found of the
@@ -554,6 +892,12 @@ pub(crate) fn show_project(
             .last_set_up()
             .map(|made| (made.start_level.clone(), made.made_level)),
         look.clone(),
+        (
+            project.settings(),
+            project.look_choices().to_vec(),
+            project.asking(),
+            project.refused_key(),
+        ),
     );
     if built.as_ref() == Some(&now) {
         return;
@@ -563,6 +907,72 @@ pub(crate) fn show_project(
         .entity(body)
         .despawn_children()
         .queue_spawn_related_scenes::<Children>(content(&project, &look));
+}
+
+/// Gives the key that is pressed to the action whose key is asked for. Only while the
+/// dialog is open; the first key that goes down in a frame is the one.
+pub(crate) fn press_project_key(
+    mut pressed: MessageReader<KeyboardInput>,
+    dialog: Res<ProjectDialog>,
+    mut project: ResMut<Project>,
+) {
+    let keys: Vec<KeyCode> = pressed
+        .read()
+        .filter(|input| input.state == ButtonState::Pressed && !input.repeat)
+        .map(|input| input.key_code)
+        .collect();
+    if !dialog.open {
+        // A question that was open when the dialog was closed is not asked any more.
+        if project.asking().is_some() {
+            project.stop_asking();
+        }
+        return;
+    }
+    if project.asking().is_none() {
+        return;
+    }
+    if let Some(&key) = keys.first() {
+        project.press_key(key);
+    }
+}
+
+/// What the dialog's foot says and offers: whether there is anything to save, and the two
+/// buttons while there is.
+pub(crate) fn fit_project_foot(
+    mut commands: Commands,
+    project: Res<Project>,
+    mut lines: Query<(Entity, &mut Text), With<SettingsLine>>,
+    save: Query<(Entity, Has<InteractionDisabled>), With<SaveSettingsButton>>,
+    discard: Query<(Entity, Has<InteractionDisabled>), With<DiscardSettingsButton>>,
+    mut warned: Local<Option<bool>>,
+) {
+    let state = project.draft_state();
+    let (words, warn) = settings_line(&state, project.settings_saved());
+    for (entity, mut text) in &mut lines {
+        if text.0 != words {
+            words.clone_into(&mut text.0);
+        }
+        // The colour is a token that is set anew when it is to be another.
+        if *warned != Some(warn) {
+            *warned = Some(warn);
+            let color = if warn { SIGNAL_WARN } else { tokens::TEXT_DIM };
+            commands.entity(entity).insert(ThemeTextColor(color));
+        }
+    }
+    let offered = [
+        (state == DraftState::Changed, save.iter().next()),
+        (project.settings_unsaved(), discard.iter().next()),
+    ];
+    for (offered, button) in offered {
+        let Some((entity, off)) = button else {
+            continue;
+        };
+        if offered && off {
+            commands.entity(entity).remove::<InteractionDisabled>();
+        } else if !offered && !off {
+            commands.entity(entity).insert(InteractionDisabled);
+        }
+    }
 }
 
 /// Writes the offered name into the setup's field when the field is new.
@@ -619,5 +1029,77 @@ mod tests {
         assert!(NO_FOLDER.contains("--game"));
         assert!(set_up_words("levels/a.level.json", true).contains("starter level that was made"));
         assert!(set_up_words("levels/a.level.json", false).contains("was in the folder"));
+    }
+
+    #[test]
+    fn the_foot_says_whether_there_is_anything_to_save_and_why_it_cannot_be() {
+        assert_eq!(
+            settings_line(&DraftState::Unchanged, false),
+            (String::new(), false)
+        );
+        assert_eq!(
+            settings_line(&DraftState::Unchanged, true),
+            ("Saved".into(), false)
+        );
+        assert_eq!(
+            settings_line(&DraftState::Changed, false),
+            ("Unsaved changes".into(), true)
+        );
+        // Changes that are made after a save are unsaved, whatever was saved before.
+        assert_eq!(
+            settings_line(&DraftState::Changed, true).0,
+            "Unsaved changes"
+        );
+        let (words, warn) = settings_line(
+            &DraftState::SharedKey {
+                first: KeyAction::MoveForward,
+                second: KeyAction::Jump,
+            },
+            false,
+        );
+        assert!(warn);
+        assert!(words.starts_with("Move forward and Jump are on the same key"));
+        let (words, warn) = settings_line(&DraftState::Refused("too long".into()), false);
+        assert!(warn && words == "Cannot be saved: too long.");
+    }
+
+    #[test]
+    fn the_actions_that_share_a_key_are_each_marked() {
+        let mut settings = SettingsEdit::of(&crate::project::ProjectConfig::new("Game"));
+        assert!(shared_keys(&settings).is_empty());
+        settings.controls.jump = settings.controls.move_left.clone();
+        assert_eq!(
+            shared_keys(&settings),
+            [KeyAction::MoveLeft, KeyAction::Jump]
+        );
+        settings.controls.toggle_view = settings.controls.move_left.clone();
+        assert_eq!(shared_keys(&settings).len(), 3);
+    }
+
+    #[test]
+    fn a_look_profile_says_that_it_was_read_or_why_it_cannot_be_chosen() {
+        let read = LookChoice {
+            path: "assets/render/look-v1.json".into(),
+            read: Ok("3abf9a2fbcb48b74".into()),
+        };
+        assert_eq!(look_choice_words(&read), "look profile 3abf9a2f");
+        let missing = LookChoice {
+            path: "assets/render/none.json".into(),
+            read: Err(scene_data::Diagnostic::new("look.missing")),
+        };
+        let words = look_choice_words(&missing);
+        assert!(
+            !words.is_empty() && !words.contains("look.missing"),
+            "{words}"
+        );
+        let linked = LookChoice {
+            path: "assets/render/linked.json".into(),
+            read: Err(scene_data::Diagnostic::new("project.outside_folder")),
+        };
+        assert!(look_choice_words(&linked).contains("outside the project's folder"));
+        // What the dialog says of changing a key and of the profile is said before it is done.
+        assert!(KEYS_HINT.contains("press its button and then the key"));
+        assert!(LOOK_HINT.contains("from the next start"));
+        assert!(KEY_REFUSED.contains("does not read that key"));
     }
 }

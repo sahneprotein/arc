@@ -41,7 +41,10 @@ use crate::{
         notice::{notice, show_notice},
         paint::{commit_layer_name, fill_layer_names, show_layers},
         play::show_play,
-        project::{fill_project_name, project_dialog, show_project, ProjectDialog},
+        project::{
+            fill_project_name, fit_project_foot, press_project_key, project_dialog, show_project,
+            ProjectDialog,
+        },
         review::{fit_review, review_panel, show_review},
         rules::{fill_rule_fields, show_rules},
         snap::{mirror_snap, show_snap, snap_overlay},
@@ -394,7 +397,13 @@ impl Plugin for EditorUiPlugin {
                     (fit_panels, fit_review, fit_emitters, fit_emitter).chain(),
                     (
                         show_review,
-                        (show_project, fill_project_name).chain(),
+                        (
+                            press_project_key,
+                            show_project,
+                            fill_project_name,
+                            fit_project_foot,
+                        )
+                            .chain(),
                         tell_emitter_assets,
                         run_preview,
                         show_preview,

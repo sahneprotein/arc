@@ -105,14 +105,22 @@ fn main() -> AppExit {
         .or_else(|| project.start_level())
         .unwrap_or_else(|| DEFAULT_LEVEL.into());
     let saved_level = level.exists().then(|| level.clone());
-    // The game's look profile, which Game look in the 3D view is drawn from: looked for in
-    // the game's folder, once, before the window opens. A scripted check may name a file.
+    // The game's look profile, which Game look in the 3D view is drawn from: read once,
+    // before the window opens. It is the profile the project names; a folder that is no
+    // project yet has the one a game always had. A profile that is chosen in the Project
+    // settings later is the one of the next start. A scripted check may name a file.
+    let read_look = |path: PathBuf| {
+        let read = editor_ui::look::load_look_profile(&path);
+        (path, read)
+    };
     let (look_status, game_look) = look::look_status(
         check::scripted_look()
-            .or_else(|| game.as_deref().map(editor_ui::look::look_profile_path))
-            .map(|path| {
-                let read = editor_ui::look::load_look_profile(&path);
-                (path, read)
+            .map(read_look)
+            .or_else(|| project.look_profile())
+            .or_else(|| {
+                game.as_deref()
+                    .map(editor_ui::look::look_profile_path)
+                    .map(read_look)
             }),
     );
     // The game's particle emitters, read from its folder once before the window opens and

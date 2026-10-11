@@ -397,7 +397,7 @@ fn mip_chain(base: &[u8], size: u32) -> (Vec<u8>, u32) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The profile as the game's side gave its first version.

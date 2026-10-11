@@ -595,7 +595,7 @@ pub fn project<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
             },
         ),
         "project.locked" => (
-            "Another editor is converting the project file",
+            "Another editor is writing the project file",
             "Nothing was changed. Try again in a moment. If no other editor is open, one \
              that stopped unexpectedly left arc-project.json.lock in the folder: remove \
              that file."
@@ -635,10 +635,56 @@ pub fn project<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
                 None => "Nothing was changed. Move that file away and try again.".into(),
             },
         ),
-        "project.value" => (
-            "The project cannot have that value",
-            with_detail("A project needs a name of 1 to 96 characters. Nothing was changed."),
+        "project.changed_since_read" => (
+            "The project file was changed by another program",
+            "Nothing was saved, and the file is as that program left it. Read it again \
+             here; what was changed here is kept and can be saved then."
+                .into(),
         ),
+        "project.profile_unusable" => ("The look profile cannot be used", {
+            let reason = parameter("reason")
+                .map(|code| problem(code, |_| None).title)
+                .unwrap_or_default();
+            match parameter("profile") {
+                Some(profile) => {
+                    format!("{profile}: {reason}. Nothing was saved. Choose another profile.")
+                }
+                None => "Nothing was saved. Choose another profile.".into(),
+            }
+        }),
+        "project.value" => {
+            let action = |key: &str| {
+                parameter(key)
+                    .and_then(crate::project::KeyAction::of_field)
+                    .map(crate::project::KeyAction::words)
+            };
+            match (action("field"), action("shares_with"), parameter("field")) {
+                (Some(second), Some(first), _) => (
+                    "Two actions are on one key",
+                    format!(
+                        "{first} and {second} are on the same key, and the game could not \
+                         do both. Nothing was changed. Give one of them another key."
+                    ),
+                ),
+                (Some(action), None, _) => (
+                    "A key of the project is none the game reads",
+                    format!(
+                        "{action} is on a key the game does not know. Nothing was changed. \
+                         Choose its key in the Project settings."
+                    ),
+                ),
+                (None, _, Some("rendering.profile")) => (
+                    "The look profile's path cannot be used",
+                    with_detail("It must be a path in the project's folder. Nothing was changed."),
+                ),
+                _ => (
+                    "The project cannot have that value",
+                    with_detail(
+                        "A project needs a name of 1 to 96 characters. Nothing was changed.",
+                    ),
+                ),
+            }
+        }
         "project.decode" | "project.schema_missing" => (
             "The project file is not one this editor can read",
             with_detail("It is not changed. Put right what is wrong with it, or move it away."),
@@ -827,6 +873,8 @@ mod tests {
             "project.schema_unsupported",
             "project.locked",
             "project.changed",
+            "project.changed_since_read",
+            "project.profile_unusable",
             "project.outside_folder",
             "project.levels_rejected",
             "project.conflict",
@@ -854,6 +902,42 @@ mod tests {
         let newer = |key: &str| (key == "schema").then_some("9");
         let words = project("project.schema_unsupported", newer);
         assert!(words.remedy.contains("version 9") && words.remedy.contains("newer editor"));
+        // A save of the settings that is refused says which setting, in the dialog's words.
+        let shared = |key: &str| match key {
+            "field" => Some("controls.jump"),
+            "shares_with" => Some("controls.move_forward"),
+            _ => None,
+        };
+        let words = project("project.value", shared);
+        assert_eq!(words.title, "Two actions are on one key");
+        assert!(words
+            .remedy
+            .starts_with("Move forward and Jump are on the same key"));
+        let unknown = |key: &str| (key == "field").then_some("controls.toggle_view");
+        let words = project("project.value", unknown);
+        assert!(words
+            .remedy
+            .starts_with("Change view is on a key the game does not know"));
+        let path = |key: &str| (key == "field").then_some("rendering.profile");
+        assert_eq!(
+            project("project.value", path).title,
+            "The look profile's path cannot be used"
+        );
+        // A name is what it was said of before.
+        assert!(project("project.value", none)
+            .remedy
+            .contains("name of 1 to 96"));
+        let profile = |key: &str| match key {
+            "profile" => Some("assets/render/dusk.json"),
+            "reason" => Some("look.missing"),
+            _ => None,
+        };
+        let words = project("project.profile_unusable", profile);
+        assert!(words.remedy.starts_with("assets/render/dusk.json: "));
+        assert!(!words.remedy.contains("look.missing"), "{}", words.remedy);
+        assert!(words.remedy.contains("Nothing was saved"));
+        let words = project("project.changed_since_read", none);
+        assert!(words.remedy.contains("Nothing was saved") && words.remedy.contains("kept"));
         // Each reason a level file is passed over for is said in words.
         assert_eq!(
             level_rejection("source.decode", "expected value at line 1"),

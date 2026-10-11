@@ -17,6 +17,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod settings;
+pub use settings::*;
+
 pub const PROJECT_FILE: &str = project_spec::FILE_NAME;
 
 /// The largest level file a setup looks into.
@@ -440,11 +443,19 @@ fn project_error(path: &Path, error: ProjectError) -> Diagnostic {
         ProjectError::Schema { found, .. } | ProjectError::NoConverter(found) => {
             ("project.schema_unsupported", Some(*found))
         }
-        ProjectError::Value(_) => ("project.value", None),
+        ProjectError::Value(_) | ProjectError::SharedKey { .. } => ("project.value", None),
     };
     let refusal = Diagnostic::new(code)
         .with("path", path.display())
         .with("detail", &error);
+    // Which setting it is about, and for a key two actions share, the other one.
+    let refusal = match &error {
+        ProjectError::Value(field) => refusal.with("field", field),
+        ProjectError::SharedKey { first, second } => {
+            refusal.with("field", second).with("shares_with", first)
+        }
+        _ => refusal,
+    };
     match schema {
         Some(schema) => refusal
             .with("schema", schema)
