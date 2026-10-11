@@ -471,10 +471,22 @@ What that does not show:
   words, not through the window: no scripted case saves a level with such a file in the
   way.
 - **The first try of a client to be accepted can time out.** It did in the first of the two
-  real runs, with an error in the server's log, before the next try went through. A change
-  to the game's connection clean-up that is meant for it is in the game's working copy on
-  `codex/play-readiness`. It is not committed and not verified: its focused build was
-  stopped for want of disk. Nothing here says that it is mended.
+  real runs, with an error in the server's log, before the next try went through. It is not
+  shown to be mended. Where the follow-up on the game's side stands, as that side reports
+  it:
+  - A change meant for it is in the game's working copy on `codex/play-readiness`, in the
+    protocol crate. It is not committed.
+  - It is narrower than it first was: it covers only a link whose first hello ran out of
+    time. A link that was refused and is kept for a moment before it goes is still taken
+    away by the general clean-up, as before.
+  - What passes: the formatter, the check of the diff, and
+    `cargo check --offline --locked -p protocol --test udp`, which says that the crate and
+    its UDP test compile. Compiling is all that this shows.
+  - What was not run: the focused UDP test itself, the strict one that would show the
+    link being taken away once. Building it made the dependencies be compiled again for the
+    test profile, which used up the disk, and the build was stopped safely.
+  - What was not done at all: the first real run repeated. So neither the test nor a run
+    says that a client's first try is accepted now or that the server's log stays clean.
 - **What the two real runs do not show.** That a run starts, is accepted, counts as running
   and ends cleanly on such a project. Not that the key or the look profile took effect in
   the game, and not that the emitter was drawn: nobody moved the character or took a
@@ -498,10 +510,12 @@ Known and left as it is:
 
 Proposed next, in this order, none decided:
 
-1. The client's first try to be accepted: the change in the game's working copy built,
-   checked by the game's own focused tests, committed, and the first real run repeated until
-   its first try is accepted and the server's log is clean. Until then the timeout stands
-   as a known fault of a start, though the run recovers from it.
+1. The client's first try to be accepted. The change in the game's working copy compiles
+   and is narrowed to a first hello that ran out of time; what is left is its proof: room on
+   the disk for the test profile's build, the focused UDP test run and passing, the change
+   committed, and the first real run repeated until its first try is accepted and the
+   server's log is clean. Until then the timeout stands as a known fault of a start, though
+   the run recovers from it.
 2. A person looks at the Project settings and at the question on closing: once shown from a
    scripted run with `ARC_EDITOR_CHECK_VISIBLE=1`, at the default width and at 621 pixels,
    against the design's Dialog page; what is found is mended.
