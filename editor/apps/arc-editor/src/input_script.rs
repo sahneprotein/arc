@@ -22,7 +22,7 @@ use bevy::{
     },
     prelude::*,
     ui::{ComputedNode, UiGlobalTransform},
-    ui_widgets::{Button, MenuButton, MenuItem},
+    ui_widgets::{Button, Checkbox, MenuButton, MenuItem},
     window::{
         CursorLeft, CursorMoved, PrimaryWindow, RequestRedraw, WindowCloseRequested, WindowEvent,
         WindowFocused,
@@ -454,6 +454,7 @@ pub struct Screen<'w, 's> {
         ),
     >,
     buttons: Query<'w, 's, &'static InheritedVisibility, With<Button>>,
+    checkboxes: Query<'w, 's, &'static InheritedVisibility, With<Checkbox>>,
     menu_buttons: Query<'w, 's, (), With<MenuButton>>,
     menu_items: Query<'w, 's, &'static InheritedVisibility, With<MenuItem>>,
     toolbar: Query<
@@ -660,6 +661,22 @@ impl Screen<'_, '_> {
                     && !node.is_empty()
                     && self
                         .buttons
+                        .get(parent.parent())
+                        .is_ok_and(|visibility| visibility.get())
+            })
+            .map(|(_, node, transform, _)| centre(node, transform))
+    }
+
+    /// The caption of a checkbox that is laid out and shown on the window: a click there is
+    /// a click on the checkbox.
+    pub fn checkbox(&self, caption: &str) -> Option<Vec2> {
+        self.texts
+            .iter()
+            .find(|(text, node, _, parent)| {
+                text.0 == caption
+                    && !node.is_empty()
+                    && self
+                        .checkboxes
                         .get(parent.parent())
                         .is_ok_and(|visibility| visibility.get())
             })

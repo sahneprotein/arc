@@ -954,6 +954,34 @@ if wanted project-newer; then
         && [ "$(ls "$work/project-newer/project" | wc -l | tr -d ' ')" = 1 ] \
         || { echo "project-newer: FAILED, the newer project file was changed or something was written beside it"; failed=1; }
 fi
+# The settings of a project are changed in the Project settings and saved: another look
+# profile of the folder is chosen, moving forward is put on another key by pressing its
+# button and then the key, and the right stick is no longer looked with. The dialog then
+# shows them as the file's, and the file holds them, with what was not changed as it was.
+# Started again on the folder the editor shows the same as read, with nothing to save, and
+# looking at them does not write the file.
+if wanted project-settings; then
+    mkdir -p "$work/project-settings/project/assets/render"
+    cp "$look" "$work/project-settings/project/assets/render/look-v1.json"
+    cp "$look" "$work/project-settings/project/assets/render/dusk.json"
+fi
+SAVED_SETTINGS='project_keys=T,S,A,D,Space,V,Escape project_look=mouse project_profile=assets/render/dusk\.json'
+check project-settings 'click-button=Set up project,click-button=Use,scroll-project=300,click-button=W,key=t,click-checkbox=Gamepad right stick,click-button=Save project settings' \
+    'project=Ready' 'project_dialog=true' 'project_draft=Unchanged project_saved=true' "$SAVED_SETTINGS" 'problem=none'
+if wanted project-settings; then
+    manifest="$work/project-settings/project/arc-project.json"
+    grep -q '"move_forward": "T"' "$manifest" && grep -q '"jump": "Space"' "$manifest" \
+        && grep -q '"mouse": true' "$manifest" && grep -q '"gamepad_right_stick": false' "$manifest" \
+        && grep -q '"profile": "assets/render/dusk.json"' "$manifest" && grep -q '"clients": null' "$manifest" \
+        || { echo "project-settings: FAILED, the project file does not hold the saved settings"; failed=1; }
+    cp "$manifest" "$work/project-settings.saved"
+fi
+check project-settings-again 'choose=Level>Project settings' \
+    'project=Ready' 'project_dialog=true' 'project_draft=Unchanged project_saved=false' "$SAVED_SETTINGS" 'problem=none'
+if wanted project-settings-again; then
+    cmp -s "$work/project-settings/project/arc-project.json" "$work/project-settings.saved" \
+        || { echo "project-settings-again: FAILED, looking at the settings changed the project file"; failed=1; }
+fi
 unset ARC_EDITOR_CHECK_PROJECT
 
 # check_exit <name> <steps> <saved: yes|no>: the editor must end by itself before the check's

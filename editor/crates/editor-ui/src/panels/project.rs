@@ -73,9 +73,10 @@ pub struct ProjectDialog {
 #[derive(Component, Default, Clone)]
 pub struct ProjectDialogRoot;
 
-/// The node the dialog's content is rebuilt in.
+/// The node the dialog's content is rebuilt in. It scrolls when the content is taller than
+/// the dialog.
 #[derive(Component, Default, Clone)]
-pub(crate) struct ProjectBody;
+pub struct ProjectBody;
 
 /// The text field of the name a new project gets.
 #[derive(Component, Default, Clone)]

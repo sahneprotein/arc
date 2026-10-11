@@ -17,6 +17,7 @@
 //! | `click-object=N` | a click in the 3D view on the object of hierarchy row N |
 //! | `shift-click-row=N`, `shift-click-object=N` | the same two with Shift held from before the click until after it |
 //! | `click-button=Caption` | a click on the button with that caption |
+//! | `click-checkbox=Caption` | a click on the checkbox with that caption |
 //! | `choose=Menu>Caption` | a click on the button with that caption if one is on the window, as the tools and panel switches are in a wide window; otherwise a click on the button of that toolbar menu and then on its row with that caption |
 //! | `click-item=Caption` | a click on the row with that caption of the menu that is open |
 //! | `drag-gizmo=P` | a drag of P pixels along the gizmo's X handle |
@@ -61,7 +62,12 @@
 //!
 //! `ARC_EDITOR_CHECK_PROJECT` names a folder that stands in the game's place for the project
 //! file; the result line says what the editor found of it (`project=`) and whether the
-//! Project settings are open (`project_dialog=`).
+//! Project settings are open (`project_dialog=`). At its end it says what the settings are
+//! as the dialog shows them (`settings_words`).
+//!
+//! `scroll-project=PIXELS` plays nothing: it puts the content of the Project settings that
+//! far up, so that a step after it finds a setting that is lower than the dialog is tall. A
+//! click on something the dialog does not show would go to whatever is there.
 //!
 //! `ARC_EDITOR_CHECK_PARTICLES` names a folder that stands in the game's place for the
 //! particle emitters; what the result line says of them is at `emitters_words`.
@@ -106,10 +112,12 @@ use bevy::{
     picking::PickingSystems,
     prelude::*,
     render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured},
+    ui::ScrollPosition,
     window::{PrimaryWindow, RequestRedraw},
 };
 use editor_ui::{
     panels::hierarchy::{RowDrag, RowObject},
+    panels::project::ProjectBody,
     Brush, BrushAim, Editor, PanelChoice, Tool,
 };
 
@@ -422,6 +430,45 @@ type Emitters<'w> = (
     Res<'w, editor_ui::ProjectDialog>,
 );
 
+/// What the result line says of the project's settings as the dialog shows them:
+///
+/// `project_draft=Unchanged project_saved=false project_keys=W,S,A,D,Space,V,Escape project_look=mouse+stick project_profile=assets/render/look-v1.json`
+///
+/// `project_draft` is whether they are the file's (`Unchanged`), were changed and can be
+/// saved (`Changed`), or cannot be (`SharedKey`, `Refused`); `project_saved` whether the
+/// last thing done to them was a save that went through. The keys are in the manifest's
+/// order: forward, backward, left, right, jump, view, cursor. Without a project that is
+/// read there are none (`project_draft=None`).
+fn settings_words(project: &editor_ui::Project) -> String {
+    use editor_ui::project::{DraftState, KeyAction};
+    let Some(settings) = project.settings() else {
+        return "project_draft=None project_saved=false project_keys= project_look= \
+                project_profile="
+            .to_owned();
+    };
+    let draft = match project.draft_state() {
+        DraftState::Unchanged => "Unchanged",
+        DraftState::Changed => "Changed",
+        DraftState::SharedKey { .. } => "SharedKey",
+        DraftState::Refused(_) => "Refused",
+    };
+    let keys = KeyAction::ALL.map(|action| action.key(&settings.controls).to_owned());
+    let look = &settings.controls.look;
+    let look = match (look.mouse, look.gamepad_right_stick) {
+        (true, true) => "mouse+stick",
+        (true, false) => "mouse",
+        (false, true) => "stick",
+        (false, false) => "none",
+    };
+    format!(
+        "project_draft={draft} project_saved={} project_keys={} project_look={look} \
+         project_profile={}",
+        project.settings_saved(),
+        keys.join(","),
+        settings.rendering_profile
+    )
+}
+
 /// What the result line says of the Particles tool:
 ///
 /// `emitters=[("Sparks", false, false)] emitter=Some("Sparks") emitter_game=true emitter_files=1 emitter_rows=1 emitter_fields=22 emitter_rate=Some(10.0) emitter_shape=Some(Point) emitter_problem=none emitter_refusal=none emitter_history=(false, false) remove_asked=false preview=(0, 0.00, true) stage=(false, 0)`
@@ -641,6 +688,23 @@ fn scripted(
             redraw.write(RequestRedraw);
             return;
         }
+        if let Some(pixels) = step.strip_prefix("scroll-project=") {
+            // Set-up: the content of the Project settings is put this far up.
+            match pixels.parse::<f32>() {
+                Ok(pixels) => commands.queue(move |world: &mut World| {
+                    let mut bodies =
+                        world.query_filtered::<&mut ScrollPosition, With<ProjectBody>>();
+                    for mut position in bodies.iter_mut(world) {
+                        position.y = pixels;
+                    }
+                }),
+                Err(_) => script.failed.push(format!("{step}: not a number")),
+            }
+            script.next_step_at = script.frame + BETWEEN_STEPS;
+            redraw.write(RequestRedraw);
+            info!("check step {step}");
+            return;
+        }
         script.next_step_at = script.frame + BETWEEN_STEPS;
         // The step's first event, or its call into the editor, wakes the editor once.
         redraw.write(RequestRedraw);
@@ -713,7 +777,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} project={} project_dialog={} picture={} window_shown={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} project={} project_dialog={} picture={} window_shown={} {}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -998,6 +1062,8 @@ fn scripted(
             picture.word(),
             // Whether the window was on the desktop while the check ran.
             window_shown(),
+            // The project's settings as the dialog shows them.
+            settings_words(&project),
         );
         exit.write(AppExit::Success);
     }
@@ -1082,6 +1148,12 @@ fn play(
         }
         "click-button" => {
             let at = screen.button(argument).ok_or("no such button on screen")?;
+            input.click(at, MouseButton::Left);
+        }
+        "click-checkbox" => {
+            let at = screen
+                .checkbox(argument)
+                .ok_or("no such checkbox on screen")?;
             input.click(at, MouseButton::Left);
         }
         "choose" => {
