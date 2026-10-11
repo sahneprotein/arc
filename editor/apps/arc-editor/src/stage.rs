@@ -354,7 +354,21 @@ fn switch_stage(
 /// The particles as one mesh: a square for each, as wide as the particle, facing along
 /// `back` and spanned by `right` and `up`, in the particle's colour. The farthest along
 /// `back` come first, so that those in front are drawn over those behind.
+///
+/// Without particles the mesh is one square of no size at the emitter, which draws nothing.
+/// It is never without vertices: the engine keeps no place for such a mesh and then says,
+/// as an error, that it was asked to fill one.
 fn quads(particles: &[PreviewParticle], right: Vec3, up: Vec3, back: Vec3) -> Mesh {
+    const NOTHING: [PreviewParticle; 1] = [PreviewParticle {
+        position_m: [0.0; 3],
+        size_m: 0.0,
+        color_linear_rgba: [0.0; 4],
+    }];
+    let particles = if particles.is_empty() {
+        &NOTHING[..]
+    } else {
+        particles
+    };
     let mut order: Vec<&PreviewParticle> = particles.iter().collect();
     order.sort_by(|a, b| {
         let depth = |particle: &PreviewParticle| Vec3::from_array(particle.position_m).dot(back);
@@ -605,9 +619,40 @@ mod tests {
     }
 
     #[test]
-    fn no_particles_make_an_empty_mesh_and_a_size_below_nothing_is_nothing() {
+    fn no_particles_make_one_square_of_no_size_and_never_a_mesh_without_vertices() {
         let empty = quads(&[], Vec3::X, Vec3::Y, Vec3::Z);
-        assert_eq!(positions(&empty).len(), 0);
+        // Four corners in one place and two triangles of no area: nothing to see, and
+        // something for the engine to keep a place for.
+        let corners = positions(&empty);
+        assert_eq!(corners.len(), 4);
+        assert!(corners.iter().all(|corner| *corner == EMITTER_AT));
+        assert_eq!(empty.indices().unwrap().len(), 6);
+        assert!(empty.get_vertex_buffer_size() > 0);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) =
+            empty.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("the mesh has no colours");
+        };
+        assert!(
+            colors.iter().all(|color| color[3] == 0.0),
+            "and it has no colour"
+        );
+        // Every attribute a mesh with particles has, so that its layout does not change.
+        let drawn = quads(&[particle([0.0; 3], 0.1)], Vec3::X, Vec3::Y, Vec3::Z);
+        assert_eq!(
+            empty
+                .attributes()
+                .map(|(attribute, _)| attribute.id)
+                .collect::<Vec<_>>(),
+            drawn
+                .attributes()
+                .map(|(attribute, _)| attribute.id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_size_below_nothing_is_nothing() {
         let shrunk = quads(&[particle([0.0; 3], -1.0)], Vec3::X, Vec3::Y, Vec3::Z);
         assert!(positions(&shrunk)
             .iter()

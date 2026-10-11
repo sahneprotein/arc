@@ -867,9 +867,13 @@ check particles-back "$P,choose=Tool>Move" \
 # is said to run only once the graphics card has said that it draws the effect; the
 # reference simulation is then not drawn. An emitter the game's adapter does not draw, a
 # cone here, is said as that, and the reference simulation stays.
-check particles-gpu "$P,click-button=GPU preview,wait-gpu" \
+# Twenty more clicks on the speed that is chosen already change nothing and take about two
+# seconds: the effect is still running after them, and the saved picture is of an effect
+# that has been emitting for that long, not of its first frame.
+X5='click-button=1x,click-button=1x,click-button=1x,click-button=1x,click-button=1x'
+check particles-gpu "$P,click-button=GPU preview,wait-gpu,$X5,$X5,$X5,$X5" \
     'workspace=Particles' 'preview_mode=Gpu' 'gpu=Running' 'stage=\(true, 0\)' 'problem=none'
-check particles-gpu-refused "$P,click-button=Cone,click-button=GPU preview,wait-gpu" \
+check particles-refused-by-gpu "$P,click-button=Cone,click-button=GPU preview,wait-gpu" \
     'emitter_shape=Some\(Cone\)' 'preview_mode=Gpu' 'gpu=Unsupported \{ field: "shape"' 'stage=\(true, [0-9]+\)'
 unset ARC_EDITOR_CHECK_PARTICLES
 
