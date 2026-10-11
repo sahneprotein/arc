@@ -261,7 +261,7 @@ What that run does not show, and nothing else does either:
   the scripted check. A person has still not done it by hand, and the states have not been
   looked at on screen beyond the picture the check takes at its end.
 - **No emitter in it.** The level of the run places none. A level with a placed emitter has
-  not been played from the editor into the real client.
+  not been played from the editor into the real client. [It has been since: fifth note.]
 - **No picture of the client.** No capture of the client was taken or compared with the
   editor's, for Game look or for any emitter. Parity is not shown.
 - **Focused checks only.** Everything in this note was checked by tests of single packages
@@ -435,6 +435,21 @@ What was run, each of a different kind, and nothing more:
   saves a level, which is of the first schema. The second places an emitter and saves: the
   level is of the second schema, and the file beside it is byte for byte what the first
   run saved.
+- The real game from the editor, twice, on 2026-10-11. Both were runs of the built editor
+  as a scripted check with its own window hidden, bounded in time, with the real server and
+  client; the client's window was on the desktop for a moment, as it must be to count as
+  running. They are recorded here as those who ran them report them; the writer of this
+  note did not run them.
+  - On a project prepared with moving forward on I and the look profile
+    `assets/render/play-smoke-look.json`, cooked level `6105ad50`: the run reached Running
+    and was stopped. Server and client both left with status 0, and the cleanup had nothing
+    to say. The client's first try to be accepted by the server timed out, and the server
+    logged an error about an entity it took away twice and no longer knew; the client's
+    next try was accepted.
+  - On a project whose level places an emitter the game's runtime draws, cooked level
+    `e6a4e18b`, the level of its second schema with one placement: the run reached Running
+    and was stopped. Both left with status 0, the cleanup had nothing to say, and both logs
+    were clean.
 - For the hidden window, one case run hidden and once shown: hidden, its window was at no
   moment among the windows on screen; shown, it was.
 - The game's client, as the game's side reports and not run by the editor's side: its
@@ -455,11 +470,16 @@ What that does not show:
   there already, or cannot be written, is covered by unit tests of the save and of the
   words, not through the window: no scripted case saves a level with such a file in the
   way.
-- **The exits of a real run are still unrecorded.** The fields for them are there and were
-  read from the stand-in. The real server and client have not been run since.
-- **No run of the game with changed settings.** The real client has not been started from
-  the editor on a project whose keys or profile were changed there. The one run of the
-  fourth note was before this.
+- **The first try of a client to be accepted can time out.** It did in the first of the two
+  real runs, with an error in the server's log, before the next try went through. A change
+  to the game's connection clean-up that is meant for it is in the game's working copy on
+  `codex/play-readiness`. It is not committed and not verified: its focused build was
+  stopped for want of disk. Nothing here says that it is mended.
+- **What the two real runs do not show.** That a run starts, is accepted, counts as running
+  and ends cleanly on such a project. Not that the key or the look profile took effect in
+  the game, and not that the emitter was drawn: nobody moved the character or took a
+  picture of the client. The settings of the first project were prepared in its file, not
+  changed through the Project settings in that run. Each was run once.
 - **Focused checks only.** No Clippy run, no workspace suite and no full scripted suite
   includes any of this, in either repository. The whole scripted suite has not been run
   with hidden windows; the one case timed took five to six seconds hidden and two shown.
@@ -478,11 +498,10 @@ Known and left as it is:
 
 Proposed next, in this order, none decided:
 
-1. The proof of Play made whole. The check now records the exits and does not wait for a
-   run that is over; what is left is the run itself: the real server and client started
-   from the editor on a project whose key and profile were changed there, both exits read
-   as 0 from the result, and once more with a level that places an emitter. The client
-   must show a frame to count as running, so its window is on the desktop for that run.
+1. The client's first try to be accepted: the change in the game's working copy built,
+   checked by the game's own focused tests, committed, and the first real run repeated until
+   its first try is accepted and the server's log is clean. Until then the timeout stands
+   as a known fault of a start, though the run recovers from it.
 2. A person looks at the Project settings and at the question on closing: once shown from a
    scripted run with `ARC_EDITOR_CHECK_VISIBLE=1`, at the default width and at 621 pixels,
    against the design's Dialog page; what is found is mended.
