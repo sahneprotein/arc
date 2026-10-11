@@ -74,6 +74,109 @@ fn package() -> editor_cook::CookedPackage {
     })
     .unwrap()
 }
+/// Draws the package's ground with this renderer into this world.
+fn draw(
+    renderer: &mut GroundRenderer,
+    world: &mut World,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    package: &editor_cook::CookedPackage,
+) {
+    let mut queue = CommandQueue::default();
+    renderer
+        .sync_with_visual(
+            &mut Commands::new(&mut queue, world),
+            meshes,
+            materials,
+            &package.simulation.ground,
+            Some(&package.visual),
+            &[],
+        )
+        .unwrap();
+    queue.apply(world);
+}
+#[test]
+fn the_grounds_material_takes_a_views_look_where_it_is_and_the_defaults_back() {
+    let package = package();
+    let mut world = World::new();
+    let mut meshes = Assets::<Mesh>::default();
+    let mut materials = Assets::<StandardMaterial>::default();
+    let mut renderer = GroundRenderer::default();
+    draw(
+        &mut renderer,
+        &mut world,
+        &mut meshes,
+        &mut materials,
+        &package,
+    );
+    let mut query = world.query::<(&MeshMaterial3d<StandardMaterial>, &Mesh3d)>();
+    let (material, mesh) = query.single(&world).unwrap();
+    let (material, mesh) = (material.0.clone(), mesh.0.clone());
+    let defaults = ground_material();
+    let now = |materials: &Assets<StandardMaterial>| {
+        let material = materials.get(material.id()).unwrap();
+        (material.base_color, material.perceptual_roughness)
+    };
+    assert_eq!(renderer.look(), None);
+    assert_eq!(
+        now(&materials),
+        (defaults.base_color, defaults.perceptual_roughness)
+    );
+
+    // A view's look changes the one material where it is: the tile keeps its entity, its
+    // material and its mesh, vertex colours and all.
+    let look = GroundLook {
+        base_color_linear_rgba: [0.5, 0.25, 0.125, 1.0],
+        roughness: 0.4,
+    };
+    renderer.set_look(Some(look), &mut materials);
+    assert_eq!(renderer.look(), Some(look));
+    assert_eq!(
+        now(&materials),
+        (Color::linear_rgba(0.5, 0.25, 0.125, 1.0), 0.4)
+    );
+    draw(
+        &mut renderer,
+        &mut world,
+        &mut meshes,
+        &mut materials,
+        &package,
+    );
+    assert_eq!(materials.len(), 1);
+    let (after_material, after_mesh) = query.single(&world).unwrap();
+    assert_eq!((&after_material.0, &after_mesh.0), (&material, &mesh));
+    let Some(VertexAttributeValues::Float32x4(colors)) = meshes
+        .get(mesh.id())
+        .unwrap()
+        .attribute(Mesh::ATTRIBUTE_COLOR)
+    else {
+        panic!()
+    };
+    assert_eq!(colors, &vec![[0.5, 0.0, 0.5, 1.0]; 4]);
+
+    // Without a look the defaults are back, exactly.
+    renderer.set_look(None, &mut materials);
+    assert_eq!(
+        now(&materials),
+        (defaults.base_color, defaults.perceptual_roughness)
+    );
+
+    // A look that is set before anything is drawn is what the material is made with.
+    let mut early = GroundRenderer::default();
+    let mut early_world = World::new();
+    let mut early_materials = Assets::<StandardMaterial>::default();
+    early.set_look(Some(look), &mut early_materials);
+    draw(
+        &mut early,
+        &mut early_world,
+        &mut meshes,
+        &mut early_materials,
+        &package,
+    );
+    let (_, made) = early_materials.iter().next().unwrap();
+    assert_eq!(made.perceptual_roughness, 0.4);
+    assert_eq!(made.base_color, Color::linear_rgba(0.5, 0.25, 0.125, 1.0));
+}
 #[test]
 fn bevy_ground_mesh_is_exact_collision_geometry_and_reuses_entity_and_asset() {
     let package = package();
