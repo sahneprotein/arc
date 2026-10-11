@@ -303,10 +303,10 @@ these up.]
 8. Published models: a reference in the scene and the cooked level, an Assets browser, a
    model placed as an object (steps 6 and 7 of 2.5).
 
-Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `3a15c1594`
+Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `ec26fff52`
 and the game's `codex/play-readiness` at `626ec45`; both are pushed and merged nowhere. A
-project's settings can now be changed in the editor, and what is saved is a manifest the game
-can play with.
+project's settings can now be changed in the editor, what is saved is a manifest the game
+can play with, and the editor does not close over changes that were not saved.
 
 - The keys and the look profile are changed in the Project settings (`37925c13f`).
   - A key is changed by pressing its button and then the key. A key the game does not read
@@ -331,6 +331,17 @@ can play with.
     level and the planned settings are taken from the file as it is at that moment.
   - A profile that is newly chosen must be a file in the folder that the look reader takes.
     A save that changes nothing writes nothing.
+- Closing the editor asks about settings that were changed and not saved (`ec26fff52`).
+  - It is the question the editor asks about a level and about emitters, which now names the
+    project settings too, alone or with the others. Opening another level or beginning one
+    does not ask about them: they are the project's, not the level's.
+  - "Keep editing" leaves the editor open and the changes held. "Discard changes" gives
+    them up and closes; the project file is not written.
+  - "Save and close" saves them after the emitters and before the level, by the save the
+    dialog's own button does, so that everything that protects that save holds here. If
+    they are not saved, because another program changed the file or two actions share a
+    key, nothing is written, the editor stays open, and the Project settings are opened,
+    which say why.
 - The format refuses what the game could not play with (`1cc30c94d`). The 46 key names the
   game's client reads are part of the shared format now, `project_spec::KEY_NAMES`: the
   letters, the digits, Space, Escape, Enter, Tab, Backspace, Delete and the four arrow keys,
@@ -363,6 +374,16 @@ What was run, each of a different kind, and nothing more:
     key and the planned settings as they were.
   - The second run starts the editor anew on the folder. It shows the same settings with
     nothing to save, and the file is byte for byte what the first run saved.
+- For the question on closing: unit tests of the question, `editor-ui`, chosen by name
+  (`unsaved`), 10 of 10, four of them new; the application builds; and, scripted with the
+  window hidden, three runs on one project folder (`project-close`, `ec26fff52`), 3 of 3.
+  - With a key changed and the level without changes, closing and "Keep editing" leave the
+    editor open, the change held and the file as it was. The level having no changes, the
+    question was about the settings alone.
+  - Changed again, closing and "Discard changes" end the editor with status 0, and the file
+    is byte for byte as before.
+  - Changed again, closing and "Save and close" end the editor with status 0, and the file
+    holds the new key and the jump key as it was.
 - For the hidden window, one case run hidden and once shown: hidden, its window was at no
   moment among the windows on screen; shown, it was.
 - The game's client, as the game's side reports and not run by the editor's side: its
@@ -370,15 +391,18 @@ What was run, each of a different kind, and nothing more:
 
 What that does not show:
 
-- **No question on closing.** The editor closes with unsaved project settings without
-  asking, and they are lost. The question it asks about a level and about emitters does not
-  know them.
-- **Nobody has looked at the dialog.** The scripted case reads what the dialog holds, not
-  how it looks: no picture is taken of a hidden window, and none was taken shown. Its layout
-  at any window size, the checkboxes and the warning colours are unseen.
-- **Three paths of the dialog were not driven:** "Discard changes", the marking of two
-  actions on one key, and "Read project file again" after another program changed the
-  file. Each is covered by unit tests of the state behind it, not through the dialog.
+- **Nobody has looked at the dialog or at the question.** The scripted cases read what
+  the editor holds, not how it looks: no picture is taken of a hidden window, and none was
+  taken shown. The layout of the Project settings at any window size, the checkboxes, the
+  warning colours, and the words of the question on closing as they stand in its dialog are
+  unseen.
+- **A refused "Save and close" was not driven.** That the editor stays open on the Project
+  settings when the file was changed by another program, or two actions share a key, is
+  covered by unit tests of the decision, not through the window.
+- **Three paths of the Project settings were not driven:** its own "Discard changes", the
+  marking of two actions on one key, and "Read project file again" after another program
+  changed the file. Each is covered by unit tests of the state behind it, not through the
+  dialog.
 - **No run of the game with changed settings.** The real client has not been started from
   the editor on a project whose keys or profile were changed there. The one run of the
   fourth note was before this.
@@ -398,25 +422,24 @@ Known and left as it is:
 
 Proposed next, in this order, none decided:
 
-1. Closing the editor asks about unsaved project settings, in the question it already asks
-   about a level and emitters, and "Save and close" saves them.
-2. One hidden scripted case each for the three paths not driven: discard, two actions on one
-   key, and a file changed by another program.
-3. The proof of Play made whole, from the fourth note: each process's exit status and the
+1. One hidden scripted case each for the paths not driven: the dialog's own discard, two
+   actions on one key, a file changed by another program, and a "Save and close" that is
+   refused for either of the last two.
+2. The proof of Play made whole, from the fourth note: each process's exit status and the
    cleanup's words in the check's result, a wait for Running that fails at once when the run
    ends, then one run of the real game on a project whose key and profile were changed in
    the editor, and one with a level that places an emitter.
-4. A person looks at the Project settings: once shown from a scripted run with
-   `ARC_EDITOR_CHECK_VISIBLE=1`, at the default width and at 621 pixels, against the design's
-   Dialog page; what is found is mended.
-5. The full checks in both repositories on the tips named above: the linter, each package's
+3. A person looks at the Project settings and at the question on closing: once shown from a
+   scripted run with `ARC_EDITOR_CHECK_VISIBLE=1`, at the default width and at 621 pixels,
+   against the design's Dialog page; what is found is mended.
+4. The full checks in both repositories on the tips named above: the linter, each package's
    tests and the editor's whole scripted suite, with hidden windows. Then the two branches
    are merged and the game's pins of the editor's crates moved to the merged commit.
-6. Game look takes a newly saved profile without a restart.
-7. A level is never rewritten in a newer schema without the file as it was kept beside it.
-8. The first planned setting made real: the number of clients, in the manifest, in the
+5. Game look takes a newly saved profile without a restart.
+6. A level is never rewritten in a newer schema without the file as it was kept beside it.
+7. The first planned setting made real: the number of clients, in the manifest, in the
    Project settings and in the launch (1.9).
-9. Parity by picture, the adapter's refused fields and published models, as the fourth note
+8. Parity by picture, the adapter's refused fields and published models, as the fourth note
    has them.
 
 Sources:
@@ -431,7 +454,7 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend` (commit `3a15c1594`), which continues
+- The editor as it is on the branch `codex/play-backend` (commit `ec26fff52`), which continues
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
