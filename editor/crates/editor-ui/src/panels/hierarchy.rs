@@ -7,6 +7,14 @@
 //!
 //! An object with children has a toggle that folds them away. What is folded is the panel's
 //! own business: it is not part of the level and is forgotten with the session.
+//!
+//! A row is dragged to put its object under another: dropped on a row it goes under that
+//! row's object, after its other children; dropped on the list where no row is, to the top of
+//! the level. A dragged row that is selected takes the other selected objects with it, in the
+//! list's order. Each stays where it is in the level, and the whole is one undo step. While a
+//! row is dragged, the row or the list it would be dropped on is ringed. A drop the level
+//! cannot take, an object under what is under it, is asked of the core all the same and
+//! refused by it in words.
 
 use std::collections::BTreeSet;
 
@@ -14,7 +22,7 @@ use bevy::{
     feathers::{
         containers::{pane, pane_body, pane_header},
         controls::{FeathersDisclosureToggle, FeathersListRow, FeathersListView},
-        theme::{ThemeBackgroundColor, ThemedText},
+        theme::{ThemeBackgroundColor, ThemedText, UiTheme},
         tokens,
     },
     picking::pointer::PointerButton,
@@ -36,7 +44,81 @@ pub struct HierarchyPanel;
 
 /// The node the list is rebuilt in.
 #[derive(Component, Default, Clone)]
-pub(crate) struct HierarchyBody;
+pub struct HierarchyBody;
+
+/// Where a dragged row would be dropped.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum DropPlace {
+    /// On the row of the object with this stable ID.
+    Row(String),
+    /// On the list where no row is.
+    Top,
+}
+
+/// The row that is being dragged, and where the pointer has it now.
+#[derive(Resource, Default, Clone, PartialEq, Eq, Debug)]
+pub struct RowDrag {
+    /// The stable ID of the dragged row's object.
+    pub dragged: Option<String>,
+    pub over: Option<DropPlace>,
+}
+
+/// What a drop means.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Dropped {
+    /// These objects go under `parent`, or to the top of the level, in this order.
+    Move {
+        objects: Vec<ObjectId>,
+        parent: Option<ObjectId>,
+    },
+    /// Nothing would change: the row was dropped on itself, or everything dragged is there
+    /// already.
+    Stays,
+    /// The place is under one of the dragged objects. The level cannot take that; the core
+    /// is asked and says so.
+    Inside {
+        objects: Vec<ObjectId>,
+        parent: ObjectId,
+    },
+}
+
+/// What dropping the row of `dragged` on the row of `onto`, or on the list (`None`), means.
+///
+/// What is moved is the dragged object, or every selected object if it is one of them: in the
+/// order of the list, and without those under another moved one, which go with that one.
+pub fn dropped(snapshot: &ViewSnapshot, dragged: &ObjectId, onto: Option<&ObjectId>) -> Dropped {
+    let with_selection = snapshot.selection.contains(dragged);
+    let wanted =
+        |id: &ObjectId| id == dragged || (with_selection && snapshot.selection.contains(id));
+    let mut moved: Vec<&HierarchyRow> = Vec::new();
+    let mut inside = false;
+    // The rows are in the core's order: each is followed by everything under it. Rows before
+    // this one are under a moved row.
+    let mut moved_until = 0;
+    for (index, row) in snapshot.hierarchy.iter().enumerate() {
+        if index < moved_until {
+            inside |= onto == Some(&row.id);
+        } else if wanted(&row.id) {
+            moved_until = row.subtree_end_exclusive;
+            moved.push(row);
+        }
+    }
+    let objects: Vec<ObjectId> = moved.iter().map(|row| row.id.clone()).collect();
+    match onto {
+        Some(parent) if inside => Dropped::Inside {
+            objects,
+            parent: parent.clone(),
+        },
+        Some(parent) if objects.contains(parent) => Dropped::Stays,
+        _ if moved.is_empty() || moved.iter().all(|row| row.parent.as_ref() == onto) => {
+            Dropped::Stays
+        }
+        _ => Dropped::Move {
+            objects,
+            parent: onto.cloned(),
+        },
+    }
+}
 
 /// A row and the stable ID of the object it shows.
 #[derive(Component, Default, Clone)]
@@ -87,8 +169,166 @@ pub fn hierarchy_panel() -> impl Scene {
                 pane_body()
                 HierarchyBody
                 Node { flex_grow: 1.0, min_height: px(0), padding: px(0) }
+                on(begin_row_drag)
+                on(drag_over)
+                on(drag_away)
+                on(drop_row)
+                on(end_row_drag)
             ),
         ]
+    }
+}
+
+/// The row an event belongs to: the row itself, or the row a part of it is in.
+fn row_of(target: Entity, rows: &Query<&RowObject>, parents: &Query<&ChildOf>) -> Option<String> {
+    std::iter::once(target)
+        .chain(parents.iter_ancestors(target))
+        .find_map(|entity| rows.get(entity).ok())
+        .map(|row| row.0.clone())
+}
+
+/// Where on the list an event is: on a row, or where no row is.
+fn place_of(target: Entity, rows: &Query<&RowObject>, parents: &Query<&ChildOf>) -> DropPlace {
+    row_of(target, rows, parents).map_or(DropPlace::Top, DropPlace::Row)
+}
+
+fn begin_row_drag(
+    start: On<Pointer<DragStart>>,
+    rows: Query<&RowObject>,
+    parents: Query<&ChildOf>,
+    mut drag: ResMut<RowDrag>,
+) {
+    if start.button != PointerButton::Primary {
+        return;
+    }
+    // A drag that begins where no row is drags nothing.
+    drag.dragged = row_of(start.original_event_target(), &rows, &parents);
+    drag.over = None;
+}
+
+fn drag_over(
+    over: On<Pointer<DragOver>>,
+    rows: Query<&RowObject>,
+    parents: Query<&ChildOf>,
+    mut drag: ResMut<RowDrag>,
+) {
+    if drag.dragged.is_none() {
+        return;
+    }
+    let place = Some(place_of(over.original_event_target(), &rows, &parents));
+    if drag.over != place {
+        drag.over = place;
+    }
+}
+
+/// The pointer left what it was over. If that was the last place noted, the row is over
+/// nothing now; a place it has come to since stays.
+fn drag_away(
+    leave: On<Pointer<DragLeave>>,
+    rows: Query<&RowObject>,
+    parents: Query<&ChildOf>,
+    mut drag: ResMut<RowDrag>,
+) {
+    let left = place_of(leave.original_event_target(), &rows, &parents);
+    if drag.over.as_ref() == Some(&left) {
+        drag.over = None;
+    }
+}
+
+fn drop_row(
+    drop: On<Pointer<DragDrop>>,
+    rows: Query<&RowObject>,
+    parents: Query<&ChildOf>,
+    mut drag: ResMut<RowDrag>,
+    mut collapsed: ResMut<Collapsed>,
+    mut editor: NonSendMut<Editor>,
+) {
+    let Some(dragged) = drag.dragged.take() else {
+        return;
+    };
+    drag.over = None;
+    if drop.button != PointerButton::Primary {
+        return;
+    }
+    let onto = row_of(drop.original_event_target(), &rows, &parents).map(StableId);
+    match dropped(&editor.snapshot(), &StableId(dragged), onto.as_ref()) {
+        Dropped::Move { objects, parent } => {
+            // What was dropped shows: its new parent is unfolded.
+            if let Some(parent) = &parent {
+                collapsed.objects.remove(&parent.0);
+            }
+            editor.move_under(objects, parent);
+        }
+        // Asked of the core, which refuses it and says why.
+        Dropped::Inside { objects, parent } => editor.move_under(objects, Some(parent)),
+        Dropped::Stays => {}
+    }
+}
+
+/// The drag is over, wherever it ended: outside the list nothing is dropped.
+fn end_row_drag(_: On<Pointer<DragEnd>>, mut drag: ResMut<RowDrag>) {
+    if drag.dragged.is_some() || drag.over.is_some() {
+        *drag = RowDrag::default();
+    }
+}
+
+/// The width of the ring round the place a dragged row would be dropped on, in logical
+/// pixels, drawn inside it.
+const DROP_RING_WIDTH: f32 = 2.0;
+
+/// A row, or the list, that carries the ring of a place to drop on. Only what this panel
+/// ringed is un-ringed by it.
+#[derive(Component, Default, Clone)]
+pub struct DropRing;
+
+/// The place a dragged row would be dropped on and moved by it, if it is over one.
+pub fn drop_target(snapshot: &ViewSnapshot, drag: &RowDrag) -> Option<DropPlace> {
+    let dragged = StableId(drag.dragged.clone()?);
+    let over = drag.over.clone()?;
+    let onto = match &over {
+        DropPlace::Row(id) => Some(StableId(id.clone())),
+        DropPlace::Top => None,
+    };
+    matches!(
+        dropped(snapshot, &dragged, onto.as_ref()),
+        Dropped::Move { .. }
+    )
+    .then_some(over)
+}
+
+/// Rings the row, or the list, that the dragged row would be dropped on. A place a drop
+/// would change nothing at, or that the level cannot take, is not ringed.
+pub(crate) fn show_drop_target(
+    mut commands: Commands,
+    editor: NonSend<Editor>,
+    drag: Res<RowDrag>,
+    theme: Res<UiTheme>,
+    rows: Query<(Entity, &RowObject, Has<DropRing>)>,
+    body: Query<(Entity, Has<DropRing>), With<HierarchyBody>>,
+    added: Query<(), Added<RowObject>>,
+) {
+    if !drag.is_changed() && added.is_empty() {
+        return;
+    }
+    let target = drop_target(&editor.snapshot(), &drag);
+    let ring = Outline {
+        width: px(DROP_RING_WIDTH),
+        offset: px(-DROP_RING_WIDTH),
+        color: theme.color(&tokens::FOCUS_RING),
+    };
+    let mut show = |entity: Entity, wanted: bool, ringed: bool| {
+        if wanted && !ringed {
+            commands.entity(entity).insert((ring, DropRing));
+        } else if !wanted && ringed {
+            commands.entity(entity).remove::<(Outline, DropRing)>();
+        }
+    };
+    for (entity, row, ringed) in &rows {
+        let wanted = target == Some(DropPlace::Row(row.0.clone()));
+        show(entity, wanted, ringed);
+    }
+    for (entity, ringed) in &body {
+        show(entity, target == Some(DropPlace::Top), ringed);
     }
 }
 
@@ -367,6 +607,173 @@ mod tests {
 
     fn set(names: &[&str]) -> BTreeSet<String> {
         names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// The game's map as the core shows it, with the objects of these rows selected.
+    fn map_with_selected(selected: &[usize]) -> ViewSnapshot {
+        use editor_core::{Command, CommandRequest, EditorSession};
+        let mut session = EditorSession::new(scene_data::current_map()).unwrap();
+        let before = session.snapshot();
+        let selection = selected
+            .iter()
+            .map(|row| before.hierarchy[*row].id.clone())
+            .collect();
+        session
+            .submit(CommandRequest {
+                request: 1,
+                session: before.session,
+                expected_revision: before.document_revision,
+                expected_inspector_revision: None,
+                command: Command::Select(selection),
+            })
+            .outcome
+            .unwrap();
+        (*session.snapshot()).clone()
+    }
+
+    fn id_of(snapshot: &ViewSnapshot, row: usize) -> ObjectId {
+        snapshot.hierarchy[row].id.clone()
+    }
+
+    #[test]
+    fn a_row_dropped_on_another_goes_under_it_and_on_the_list_to_the_top() {
+        let snapshot = map_with_selected(&[]);
+        let (wall, tall) = (id_of(&snapshot, 10), id_of(&snapshot, 11));
+        assert_eq!(
+            dropped(&snapshot, &tall, Some(&wall)),
+            Dropped::Move {
+                objects: vec![tall.clone()],
+                parent: Some(wall.clone()),
+            }
+        );
+        // Everything in the map is at the top already: dropped on the list, it stays.
+        assert_eq!(dropped(&snapshot, &tall, None), Dropped::Stays);
+        // And a row dropped on itself stays: a click that slipped is no drag.
+        assert_eq!(dropped(&snapshot, &tall, Some(&tall)), Dropped::Stays);
+    }
+
+    #[test]
+    fn a_selected_row_takes_the_other_selected_rows_with_it_in_the_lists_order() {
+        // Selected in another order than the list's.
+        let snapshot = map_with_selected(&[13, 11, 12]);
+        let wall = id_of(&snapshot, 10);
+        let moved = dropped(&snapshot, &id_of(&snapshot, 12), Some(&wall));
+        assert_eq!(
+            moved,
+            Dropped::Move {
+                objects: vec![
+                    id_of(&snapshot, 11),
+                    id_of(&snapshot, 12),
+                    id_of(&snapshot, 13)
+                ],
+                parent: Some(wall.clone()),
+            }
+        );
+        // A row that is not selected goes alone, and the selection is left as it is.
+        assert_eq!(
+            dropped(&snapshot, &id_of(&snapshot, 9), Some(&wall)),
+            Dropped::Move {
+                objects: vec![id_of(&snapshot, 9)],
+                parent: Some(wall.clone()),
+            }
+        );
+        // Dropped on one of the rows that are dragged: nothing changes.
+        assert_eq!(
+            dropped(
+                &snapshot,
+                &id_of(&snapshot, 12),
+                Some(&id_of(&snapshot, 13))
+            ),
+            Dropped::Stays
+        );
+    }
+
+    /// Rows as the core gives them for a small tree: a with b under it and c under b, and d.
+    fn tree() -> ViewSnapshot {
+        let mut snapshot = map_with_selected(&[]);
+        let row = |name: &str, depth: u32, parent: Option<&str>, end: usize| HierarchyRow {
+            id: StableId(name.to_owned()),
+            parent: parent.map(|parent| StableId(parent.to_owned())),
+            name: name.to_owned(),
+            depth,
+            child_count: 0,
+            subtree_end_exclusive: end,
+        };
+        snapshot.hierarchy = vec![
+            row("a", 0, None, 3),
+            row("b", 1, Some("a"), 3),
+            row("c", 2, Some("b"), 3),
+            row("d", 0, None, 4),
+        ]
+        .into();
+        snapshot.selection = Vec::new().into();
+        snapshot
+    }
+
+    fn named(name: &str) -> ObjectId {
+        StableId(name.to_owned())
+    }
+
+    #[test]
+    fn a_drop_under_what_is_dragged_is_left_to_the_core_to_refuse() {
+        let snapshot = tree();
+        assert_eq!(
+            dropped(&snapshot, &named("a"), Some(&named("c"))),
+            Dropped::Inside {
+                objects: vec![named("a")],
+                parent: named("c"),
+            }
+        );
+        // Under where it is already: nothing changes. Out of it to the top: a move.
+        assert_eq!(
+            dropped(&snapshot, &named("b"), Some(&named("a"))),
+            Dropped::Stays
+        );
+        assert_eq!(
+            dropped(&snapshot, &named("c"), None),
+            Dropped::Move {
+                objects: vec![named("c")],
+                parent: None,
+            }
+        );
+    }
+
+    #[test]
+    fn of_two_dragged_rows_one_under_the_other_only_the_upper_is_moved() {
+        let mut snapshot = tree();
+        snapshot.selection = vec![named("a"), named("c")].into();
+        assert_eq!(
+            dropped(&snapshot, &named("c"), Some(&named("d"))),
+            Dropped::Move {
+                objects: vec![named("a")],
+                parent: Some(named("d")),
+            }
+        );
+    }
+
+    #[test]
+    fn only_a_place_a_drop_would_move_something_to_is_ringed() {
+        let snapshot = tree();
+        let drag = |dragged: &str, over: Option<DropPlace>| RowDrag {
+            dragged: Some(dragged.to_owned()),
+            over,
+        };
+        let row = |name: &str| Some(DropPlace::Row(name.to_owned()));
+        assert_eq!(drop_target(&snapshot, &drag("c", row("d"))), row("d"));
+        assert_eq!(
+            drop_target(&snapshot, &drag("c", Some(DropPlace::Top))),
+            Some(DropPlace::Top)
+        );
+        // On itself, where it is already, under itself, and over nothing: no ring.
+        assert_eq!(drop_target(&snapshot, &drag("c", row("c"))), None);
+        assert_eq!(drop_target(&snapshot, &drag("c", row("b"))), None);
+        assert_eq!(drop_target(&snapshot, &drag("a", row("c"))), None);
+        assert_eq!(
+            drop_target(&snapshot, &drag("d", Some(DropPlace::Top))),
+            None
+        );
+        assert_eq!(drop_target(&snapshot, &drag("c", None)), None);
+        assert_eq!(drop_target(&snapshot, &RowDrag::default()), None);
     }
 
     #[test]

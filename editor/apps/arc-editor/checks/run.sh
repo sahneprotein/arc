@@ -389,6 +389,45 @@ check_sized "$narrow" narrow-pivot 'click-row=11,shift-click-row=12,inspector,cl
 check_sized "$narrow" narrow-active 'click-row=11,shift-click-row=12,shift-click-row=11' 'window=621x' 'active=Some\("Tall box"\)' 'gizmo_row=Some\("Tall box"\)' "$tall" "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-dash 'click-row=11,shift-click-row=12,inspector,type-field=translation.0:5' 'window=621x' 'places=\[\[5\.0, 0\.5, -8\.0\], \[5\.0, 0\.15, -8\.0\]\]' 'dashes=Some\(\[false, true, false\]\)' 'problem=none'
 
+# A row of the hierarchy is dragged to put its object under another. Dropped on a row it goes
+# under that row's object and stays where it is in the level: the Tall box under the Wall has
+# another position under it, and the same place. One undo step.
+check drag-under      'click-row=11,drag-row=11:10'       'selected=Some\("Tall box"\)' 'under=\["Wall"\]' 'worlds=\[\[0\.0, 0\.5, -8\.0\]\]' 'position=Some\(\[8\.5, -2\.5, -8\.0\]\)' 'kids=\["Tall box"\]' 'undo=Some\("reparent"\)' 'rows_shown=22' 'drop_target=None' 'problem=none'
+check drag-under-undo 'click-row=11,drag-row=11:10,key=ctrl+z' 'under=\["top"\]' "$home" 'redo=Some\("reparent"\)' 'problem=none'
+# A row that is not selected goes alone and leaves the selection as it is.
+check drag-unselected 'click-row=13,drag-row=11:10'       'selection=1' 'selected=Some\("Pillar"\)' 'under=\["top"\]' 'undo=Some\("reparent"\)' 'problem=none'
+# Where it went is read by selecting it directly: a click played the moment the drop is over
+# would be aimed at a list that is being built anew.
+check drag-unselected-went 'click-row=13,drag-row=11:10,select=11' 'selected=Some\("Tall box"\)' 'under=\["Wall"\]' 'worlds=\[\[0\.0, 0\.5, -8\.0\]\]' 'position=Some\(\[8\.5, -2\.5, -8\.0\]\)'
+# A selected row takes the other selected rows with it, in the list's order whichever was
+# clicked or dragged, as one undo step.
+both_under='under=\["Wall", "Wall"\]'
+both_placed='worlds=\[\[0\.0, 0\.5, -8\.0\], \[3\.0, 0\.15, -8\.0\]\]'
+check drag-two        'click-row=11,shift-click-row=12,drag-row=12:10' "$two" "$both_under" "$both_placed" 'kids=\["Tall box", "Low box"\]' 'undo=Some\("reparent"\)' 'problem=none'
+check drag-two-other  'click-row=12,shift-click-row=11,drag-row=11:10' "$two" "$both_under" "$both_placed" 'kids=\["Tall box", "Low box"\]'
+check drag-two-undo   'click-row=11,shift-click-row=12,drag-row=12:10,key=ctrl+z' "$two" 'under=\["top", "top"\]' "$both_home" 'undo=None' 'redo=Some\("reparent"\)'
+# Dropped on the list where no row is, a row goes to the top of the level and stays where it
+# is in the level. The Tall box is first put under the Wall as it is, which moves it.
+check drag-top        'reparent=11:10,click-row=11,drag-row=11:top' 'under=\["top"\]' 'worlds=\[\[-8\.5, 3\.5, -8\.0\]\]' 'position=Some\(\[-8\.5, 3\.5, -8\.0\]\)' 'undo=Some\("reparent"\)' 'problem=none'
+# A row dropped on itself, and a row at the top dropped on the list, change nothing.
+check drag-self       'click-row=11,drag-row=11:11'       'under=\["top"\]' "$home" 'undo=None' 'problem=none'
+check drag-top-stays  'click-row=11,drag-row=11:top'      'under=\["top"\]' "$home" 'undo=None' 'problem=none'
+# An object cannot go under what is under it: the core refuses, in a notice, and nothing moves.
+check drag-inside     'reparent=11:10,click-row=10,drag-row=10:11' 'selected=Some\("Wall"\)' 'under=\["top"\]' 'problem=hierarchy\.cycle' 'notice=true' 'worlds=\[\[-8\.5, 3\.0, 0\.0\]\]'
+# While a row is dragged, the place a drop would move it to is ringed: a row, or the list for
+# a row that is under something. Where a drop would change nothing, nothing is ringed.
+check drag-ring-row   'click-row=11,hold-row=11:10'       'drop_target=Some\(Row\(' 'under=\["top"\]' 'undo=None'
+check drag-ring-top   'reparent=11:10,click-row=11,hold-row=11:top' 'drop_target=Some\(Top\)' 'under=\["Wall"\]'
+check drag-ring-none  'click-row=11,hold-row=11:top'      'drop_target=None' 'under=\["top"\]'
+check drag-ring-drop  'click-row=11,hold-row=11:10,release' 'drop_target=None' 'under=\["Wall"\]' 'undo=Some\("reparent"\)'
+# A row dropped on a folded row unfolds it, so that what was dropped is seen.
+check drag-unfolds    'reparent=11:10,click-toggle=10,drag-row=12:10' 'folded=0' 'rows_shown=22' 'problem=none'
+check drag-folded     'reparent=11:10,click-toggle=10'    'folded=1' 'rows_shown=21'
+# The same in a wide and in a narrow window.
+check_sized "$wide" wide-drag     'click-row=11,drag-row=11:10' 'window=1261x' 'under=\["Wall"\]' 'worlds=\[\[0\.0, 0\.5, -8\.0\]\]' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-drag 'click-row=11,drag-row=11:10' 'window=621x' 'under=\["Wall"\]' 'worlds=\[\[0\.0, 0\.5, -8\.0\]\]' "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-drag-top 'reparent=11:10,click-row=11,drag-row=11:top' 'window=621x' 'under=\["top"\]' 'worlds=\[\[-8\.5, 3\.5, -8\.0\]\]'
+
 # Duplicate copies the selection: with Ctrl+D and from the Add menu. The copy stands a metre
 # beside what it was copied from, is called after it, is what is selected afterwards, and is
 # one undo step. What is under an object is copied with it.

@@ -18,7 +18,8 @@ use crate::{
         closing::{drive_shutdown, shutdown_dialog, Shutdown},
         empty::{empty_hint, show_empty_hint},
         hierarchy::{
-            fold_rows, hierarchy_panel, show_hierarchy, show_selection, Collapsed, HierarchyPanel,
+            fold_rows, hierarchy_panel, show_drop_target, show_hierarchy, show_selection,
+            Collapsed, HierarchyPanel, RowDrag,
         },
         inspector::{
             commit_name, fill_names, fill_new_inputs, fill_snap_steps, inspector_panel,
@@ -308,6 +309,7 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<PaintLayer>()
             .init_resource::<ChosenRule>()
             .init_resource::<Collapsed>()
+            .init_resource::<RowDrag>()
             .init_resource::<Unsaved>()
             .init_resource::<Shutdown>()
             .add_observer(leave_or_ask)
@@ -324,7 +326,7 @@ impl Plugin for EditorUiPlugin {
                 (
                     fit_panels,
                     show_hierarchy,
-                    show_selection.after(show_hierarchy),
+                    (show_selection, show_drop_target).after(show_hierarchy),
                     fold_rows.after(show_hierarchy),
                     (
                         show_inspector,

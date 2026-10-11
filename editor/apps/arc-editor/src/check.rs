@@ -37,6 +37,8 @@
 //! | `type-name=TEXT` | a click into the name field, select all, TEXT, Enter |
 //! | `close` | the desktop asks the window to close |
 //! | `click-toggle=N` | a click on the fold toggle of hierarchy row N |
+//! | `drag-row=A:B` | a drag of hierarchy row A onto row B, or with `top` for B onto the list where no row is |
+//! | `hold-row=A:B` | the same without the release; `release` ends it |
 //! | `click-rule=N` | a click on the Nth rule of the landscape tool's list |
 //! | `step-rule-layer=P` | a click on the chosen rule's layer button: `grows-on`, `kept-out-by`, `fills` |
 //! | `type-rule=S:TEXT` | a click into setting S of the chosen rule (counted from 0), select all, TEXT, Enter |
@@ -78,7 +80,10 @@ use bevy::{
     render::view::screenshot::{save_to_disk, Screenshot},
     window::{PrimaryWindow, RequestRedraw},
 };
-use editor_ui::{panels::hierarchy::RowObject, Brush, BrushAim, Editor, PanelChoice, Tool};
+use editor_ui::{
+    panels::hierarchy::{RowDrag, RowObject},
+    Brush, BrushAim, Editor, PanelChoice, Tool,
+};
 
 use crate::{
     brush::Stroke,
@@ -270,6 +275,15 @@ type Dialogs<'w, 's> = (
     Res<'w, GameWakes>,
 );
 
+/// What the check reads of the tools and of a row that is dragged in the hierarchy.
+type Tools<'w> = (
+    Res<'w, Tool>,
+    Res<'w, Brush>,
+    Res<'w, BrushAim>,
+    Res<'w, Stroke>,
+    Res<'w, RowDrag>,
+);
+
 /// Saves the first frames as pictures into the folder named by `ARC_EDITOR_CHECK_EARLY`, to
 /// see what the window shows before the level is drawn.
 fn early_frames(mut commands: Commands, mut frame: Local<u32>) {
@@ -350,7 +364,7 @@ fn scripted(
     gizmo: Res<TransformGizmoSettings>,
     gizmo_state: Res<TransformGizmoState>,
     (shown, ground, closing): (Res<Shown>, Res<GroundShown>, Dialogs),
-    (tool, brush, aim, stroke): (Res<Tool>, Res<Brush>, Res<BrushAim>, Res<Stroke>),
+    (tool, brush, aim, stroke, row_drag): Tools,
     mut redraw: MessageWriter<RequestRedraw>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -473,7 +487,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -674,6 +688,45 @@ fn scripted(
                         .map(|degrees| (degrees * 10.0).round() / 10.0 + 0.0)
                 })
                 .collect::<Vec<_>>(),
+            // The hierarchy: what each selected object is under ("top" for none), where each
+            // is in the level whatever it is under, to the millimetre, the names of what is
+            // under the first selected object's parent, in the list's order, and the place a
+            // dragged row would be dropped on.
+            snapshot
+                .selection
+                .iter()
+                .filter_map(|id| snapshot.document.object(id))
+                .map(|object| {
+                    object
+                        .parent
+                        .as_ref()
+                        .and_then(|parent| snapshot.document.object(parent))
+                        .map_or("top", |parent| parent.name.as_str())
+                })
+                .collect::<Vec<_>>(),
+            scene_data::world_transforms(&snapshot.document)
+                .map(|worlds| {
+                    snapshot
+                        .selection
+                        .iter()
+                        .filter_map(|id| worlds.get(id))
+                        .map(|world| {
+                            world
+                                .translation_m
+                                .map(|v| (v * 1000.0).round() / 1000.0 + 0.0)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+            selected.map_or(Vec::new(), |first| {
+                snapshot
+                    .hierarchy
+                    .iter()
+                    .filter(|row| row.parent == first.parent)
+                    .map(|row| row.name.as_str())
+                    .collect::<Vec<_>>()
+            }),
+            editor_ui::panels::hierarchy::drop_target(&snapshot, &row_drag),
         );
         exit.write(AppExit::Success);
     }
@@ -724,6 +777,24 @@ fn play(
                 .row(&row_id(argument)?)
                 .ok_or("the row is not on screen")?;
             click(input, at, name.starts_with("shift-"));
+        }
+        "drag-row" | "hold-row" => {
+            let (dragged, onto) = argument
+                .split_once(':')
+                .ok_or("expected ROW:ROW or ROW:top")?;
+            let from = screen
+                .row(&row_id(dragged)?)
+                .ok_or("the dragged row is not on screen")?;
+            let to = if onto == "top" {
+                screen
+                    .hierarchy_blank()
+                    .ok_or("the list has no place without a row")?
+            } else {
+                screen
+                    .row(&row_id(onto)?)
+                    .ok_or("the row to drop on is not on screen")?
+            };
+            input.drag(from, to - from, MouseButton::Left, name == "drag-row");
         }
         "click-toggle" => {
             let at = screen

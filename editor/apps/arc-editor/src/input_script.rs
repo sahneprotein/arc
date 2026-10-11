@@ -29,7 +29,7 @@ use bevy::{
     },
 };
 use editor_ui::panels::{
-    hierarchy::{RowObject, RowToggle},
+    hierarchy::{HierarchyBody, RowObject, RowToggle},
     inspector::{FieldInput, NameInput},
     paint::{LayerNameInput, LayerRow},
     rules::{RuleField, RuleLayerButton, RuleRow},
@@ -495,6 +495,8 @@ pub struct Screen<'w, 's> {
     >,
     objects: Query<'w, 's, (&'static Projected, &'static GlobalTransform)>,
     gizmo_focus: Query<'w, 's, &'static GlobalTransform, With<TransformGizmoFocus>>,
+    hierarchy:
+        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<HierarchyBody>>,
     camera: Single<'w, 's, (&'static Camera, &'static GlobalTransform), With<ViewCamera>>,
     gizmo: Res<'w, TransformGizmoSettings>,
 }
@@ -510,6 +512,25 @@ impl Screen<'_, '_> {
             .iter()
             .find(|(row, node, _)| row.0 == id && !node.is_empty())
             .map(|(_, node, transform)| centre(node, transform))
+    }
+
+    /// A point of the hierarchy's list where no row is: under the last row, a row's height
+    /// above the list's lower edge. `None` when the list is not laid out, or is full of rows.
+    pub fn hierarchy_blank(&self) -> Option<Vec2> {
+        let (node, at) = self.hierarchy.single().ok()?;
+        if node.is_empty() {
+            return None;
+        }
+        let scale = node.inverse_scale_factor;
+        let lower_edge = (at.translation.y + node.size.y / 2.0) * scale;
+        let point = Vec2::new(at.translation.x * scale, lower_edge - 12.0);
+        let lowest_row = self
+            .rows
+            .iter()
+            .filter(|(_, node, _)| !node.is_empty())
+            .map(|(_, node, at)| (at.translation.y + node.size.y / 2.0) * node.inverse_scale_factor)
+            .fold(f32::MIN, f32::max);
+        (lowest_row < point.y - 2.0).then_some(point)
     }
 
     /// How many hierarchy rows are laid out, folded ones not counted.
