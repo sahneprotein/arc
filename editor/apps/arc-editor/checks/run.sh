@@ -966,6 +966,10 @@ check project-setup 'click-button=Set up project,click-button=Close settings' \
     'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'objects=22' 'question=No' 'problem=none'
 [ -s "$work/project-setup/project/arc-project.json" ] && [ -s "$work/project-setup/project/levels/first-level.level.json" ] \
     || { wanted project-setup && { echo "project-setup: FAILED, the project file or the starter level was not written"; failed=1; }; }
+# First-run setup must make more than a readable level: the starter has to cook into a
+# package that passes the same check Play requires before opening the game window.
+check project-starter-cooks 'click-button=Set up project,click-button=Close settings,choose=Level>Cook,click-button=Play,click-item=Check cooked level' \
+    'project=Ready' 'has_file=true' 'cook_needed=false' 'play_check=passed' 'problem=none'
 check project-setup-again 'click-row=11' 'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'selected=Some\("Tall box"\)'
 if wanted project-convert; then
     mkdir -p "$work/project-convert/project"
