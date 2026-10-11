@@ -306,7 +306,7 @@ these up.]
    model placed as an object (steps 6 and 7 of 2.5).
 
 Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `0589bd7a7`
-and the game's `codex/play-readiness` at `626ec45`; both are pushed and merged nowhere. A
+and the game's `codex/play-readiness` at `7dd510d`; both are pushed and merged nowhere. A
 project's settings can now be changed in the editor, what is saved is a manifest the game
 can play with, and the editor does not close over changes that were not saved.
 
@@ -428,6 +428,22 @@ What was run, each of a different kind, and nothing more:
     for an exit, each run by its name and by itself: 1 of 1 and 1 of 1. They were built in
     the workspace's usual incremental way, from what was built already: only the
     application was compiled, no other crate.
+- The client's first try to be accepted, mended in the game (`7dd510d`, "let netcode own
+  timed-out hello cleanup"), as the game's side reports it and not run by the writer of
+  this note:
+  - Room was made first by clearing the game's own development build
+    (`cargo clean --profile dev --offline`); the cooked levels beside it were kept.
+  - The focused UDP tests of the protocol crate, under nextest: 5 of 5. These are the tests
+    that could not be built before.
+  - The game's client and server built anew: status 0.
+  - One run of the real game from the editor after that: it reached Running and was
+    stopped, the client's first try was accepted, both processes left with status 0, the
+    cleanup had nothing to say, and the server's log was clean.
+  - That run was made with the display kept awake for its two minutes
+    (`caffeinate -d -u -t 120`). Runs before it, with the display asleep, had not reached
+    Running or had not ended cleanly, and that was the display and not the game: a client
+    counts as running only once it has shown a frame, and it shows none to a display that
+    sleeps.
 - For the starter level a setup makes, a scripted case that stays in the checks
   (`project-starter-cooks`, `0589bd7a7`): 1 of 1, run once with the editor as it was built
   and its window hidden, as the one who ran it reports. A folder is set up as a project;
@@ -477,23 +493,16 @@ What that does not show:
   there already, or cannot be written, is covered by unit tests of the save and of the
   words, not through the window: no scripted case saves a level with such a file in the
   way.
-- **The first try of a client to be accepted can time out.** It did in the first of the two
-  real runs, with an error in the server's log, before the next try went through. It is not
-  shown to be mended. Where the follow-up on the game's side stands, as that side reports
-  it:
-  - A change meant for it is in the game's working copy on `codex/play-readiness`, in the
-    protocol crate. It is not committed.
-  - It is narrower than it first was: it covers only a link whose first hello ran out of
-    time. A link that was refused and is kept for a moment before it goes is still taken
-    away by the general clean-up, as before.
-  - What passes: the formatter, the check of the diff, and
-    `cargo check --offline --locked -p protocol --test udp`, which says that the crate and
-    its UDP test compile. Compiling is all that this shows.
-  - What was not run: the focused UDP test itself, the strict one that would show the
-    link being taken away once. Building it made the dependencies be compiled again for the
-    test profile, which used up the disk, and the build was stopped safely.
-  - What was not done at all: the first real run repeated. So neither the test nor a run
-    says that a client's first try is accepted now or that the server's log stays clean.
+- **The mended first try is shown by one run.** Before the change the first try timed out
+  in one real run and was accepted in another, so one clean run after it does not show how
+  often it would have failed. The focused tests are what say that a link whose first hello
+  ran out of time is taken away once. A link that was refused and is kept for a moment is
+  still taken away by the general clean-up, as it was when the change was narrowed; nothing
+  was run about that.
+- **A real run needs the display awake.** With the display asleep the client shows no
+  frame, the run does not count as running, and a check of it fails though nothing is wrong
+  with the game. A run that is to prove something keeps the display awake, and a failure
+  with the display asleep proves nothing. The editor does not tell the two apart.
 - **What the two real runs do not show.** That a run starts, is accepted, counts as running
   and ends cleanly on such a project. Not that the key or the look profile took effect in
   the game, and not that the emitter was drawn: nobody moved the character or took a
@@ -517,23 +526,17 @@ Known and left as it is:
 
 Proposed next, in this order, none decided:
 
-1. The client's first try to be accepted. The change in the game's working copy compiles
-   and is narrowed to a first hello that ran out of time; what is left is its proof: room on
-   the disk for the test profile's build, the focused UDP test run and passing, the change
-   committed, and the first real run repeated until its first try is accepted and the
-   server's log is clean. Until then the timeout stands as a known fault of a start, though
-   the run recovers from it.
-2. A person looks at the Project settings and at the question on closing: once shown from a
+1. A person looks at the Project settings and at the question on closing: once shown from a
    scripted run with `ARC_EDITOR_CHECK_VISIBLE=1`, at the default width and at 621 pixels,
    against the design's Dialog page; what is found is mended.
-3. The full checks in both repositories on the tips named above: the linter, each package's
+2. The full checks in both repositories on the tips named above: the linter, each package's
    tests, the application's unit tests among them, and the editor's whole scripted suite,
    with hidden windows. Then the two branches are merged and the game's pins of the
    editor's crates moved to the merged commit. This needs room on the disk first.
-4. Game look takes a newly saved profile without a restart.
-5. The first planned setting made real: the number of clients, in the manifest, in the
+3. Game look takes a newly saved profile without a restart.
+4. The first planned setting made real: the number of clients, in the manifest, in the
    Project settings and in the launch (1.9).
-6. Parity by picture, the adapter's refused fields and published models, as the fourth note
+5. Parity by picture, the adapter's refused fields and published models, as the fourth note
    has them.
 
 Sources:
@@ -552,7 +555,7 @@ Sources:
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
-  (commit `626ec45`), which continues it. Both are pushed; neither is merged into the game's
+  (commit `7dd510d`), which continues it. Both are pushed; neither is merged into the game's
   `main`.
 
 Words used here. The **open level** is the level as it is in the editor now, with every
