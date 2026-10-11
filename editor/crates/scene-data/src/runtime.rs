@@ -186,8 +186,17 @@ pub struct VisualPayload {
 struct VisualPayloadFields {
     schema: u32,
     terrain: Vec<VisualTerrain>,
-    #[serde(default)]
+    /// `None` only when the payload has no `emitters` key at all. A key that is there must
+    /// hold a list: `null` is not "no key", and is refused as any other wrong value is.
+    #[serde(default, deserialize_with = "emitters_that_are_there")]
     emitters: Option<Vec<CookedEmitter>>,
+}
+/// Reads an `emitters` key that is present. An absent key never comes here: it is the
+/// field's default. So what is read is a list or nothing the payload may hold.
+fn emitters_that_are_there<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<CookedEmitter>>, D::Error> {
+    Vec::<CookedEmitter>::deserialize(deserializer).map(Some)
 }
 impl TryFrom<VisualPayloadFields> for VisualPayload {
     type Error = &'static str;

@@ -171,6 +171,27 @@ fn a_payload_with_emitters_is_of_the_second_schema_and_has_exactly_its_fields() 
 }
 
 #[test]
+fn an_emitters_key_that_holds_no_list_is_not_taken_for_no_key() {
+    let refused = |json: &str| serde_json::from_str::<VisualPayload>(json).is_err();
+    // The first schema has no such key, whatever the key holds.
+    assert!(refused(r#"{"schema":1,"terrain":[],"emitters":null}"#));
+    assert!(refused(r#"{"schema":1,"terrain":[],"emitters":[]}"#));
+    // The second must have a list there.
+    assert!(refused(r#"{"schema":2,"terrain":[],"emitters":null}"#));
+    assert!(refused(r#"{"schema":2,"terrain":[],"emitters":{}}"#));
+    assert!(refused(r#"{"schema":2,"terrain":[],"emitters":0}"#));
+    // And each still reads what it always read.
+    assert!(!refused(r#"{"schema":1,"terrain":[]}"#));
+    let empty: VisualPayload =
+        serde_json::from_str(r#"{"schema":2,"terrain":[],"emitters":[]}"#).unwrap();
+    // Read, and then refused for what it holds: the second schema places something.
+    assert_eq!(
+        empty.validate(&[]).unwrap_err().code,
+        "payload.visual_invalid"
+    );
+}
+
+#[test]
 fn a_payload_has_one_form_for_one_content() {
     let valid = VisualPayload {
         schema: VISUAL_SCHEMA_EMITTERS,
