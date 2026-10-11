@@ -114,14 +114,10 @@ impl EmissionSchedule {
     fn spawned_through(&self, time: f64) -> u64 {
         if self.looping {
             let cycles = (time / self.duration_seconds).floor() as u64;
-            let within_cycle = time - cycles as f64 * self.duration_seconds;
-            cycles
-                .saturating_mul(
-                    self.burst_count as u64
-                        + (self.rate_per_second * self.duration_seconds).floor() as u64,
-                )
-                .saturating_add(self.burst_count as u64)
-                .saturating_add((self.rate_per_second * within_cycle).floor() as u64)
+            let bursts = cycles
+                .saturating_add(1)
+                .saturating_mul(self.burst_count as u64);
+            bursts.saturating_add((self.rate_per_second * time).floor() as u64)
         } else {
             let active_time = time.min(self.duration_seconds);
             self.burst_count as u64 + (self.rate_per_second * active_time).floor() as u64
@@ -204,6 +200,7 @@ pub fn build_effect(spec: &EmitterSpec, seed: u32) -> Result<BuiltEffect, Adapte
             ))
             .expr()
     });
+    let initial_position = expressions.lit(bevy::prelude::Vec3::ZERO).expr();
     let module = expressions.finish();
     let spawner = bevy_hanabi::SpawnerSettings::once(1.0_f32.into());
     let mut asset = bevy_hanabi::EffectAsset::new(spec.limits.max_particles, spawner, module)
@@ -213,6 +210,10 @@ pub fn build_effect(spec: &EmitterSpec, seed: u32) -> Result<BuiltEffect, Adapte
             Blend::Alpha => bevy_hanabi::AlphaMode::Blend,
             Blend::Additive => bevy_hanabi::AlphaMode::Add,
         })
+        .init(bevy_hanabi::SetAttributeModifier::new(
+            bevy_hanabi::Attribute::POSITION,
+            initial_position,
+        ))
         .init(bevy_hanabi::SetAttributeModifier::new(
             bevy_hanabi::Attribute::LIFETIME,
             lifetime,
@@ -290,7 +291,9 @@ impl bevy::app::Plugin for ParticleRuntimePlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.add_plugins(bevy_hanabi::HanabiPlugin).add_systems(
             bevy::app::PostUpdate,
-            drive_emission_schedules.after(bevy_hanabi::EffectSystems::TickSpawners),
+            drive_emission_schedules
+                .after(bevy_hanabi::EffectSystems::CompileEffects)
+                .after(bevy_hanabi::EffectSystems::TickSpawners),
         );
     }
 }
@@ -298,11 +301,29 @@ impl bevy::app::Plugin for ParticleRuntimePlugin {
 #[cfg(feature = "hanabi-3d")]
 fn drive_emission_schedules(
     time: bevy::prelude::Res<bevy::prelude::Time<bevy_hanabi::EffectSimulation>>,
-    mut emitters: bevy::prelude::Query<(&mut EmissionSchedule, &mut bevy_hanabi::EffectSpawner)>,
+    mut emitters: bevy::prelude::Query<(
+        &bevy_hanabi::CompiledParticleEffect,
+        &mut EmissionSchedule,
+        &mut bevy_hanabi::EffectSpawner,
+    )>,
 ) {
     let dt = time.delta_secs_f64();
-    for (mut schedule, mut spawner) in &mut emitters {
-        spawner.spawn_count = schedule.advance(dt);
+    for (compiled, mut schedule, mut spawner) in &mut emitters {
+        schedule_when_ready(&mut schedule, &mut spawner, compiled.is_ready(), dt);
+    }
+}
+
+#[cfg(feature = "hanabi-3d")]
+fn schedule_when_ready(
+    schedule: &mut EmissionSchedule,
+    spawner: &mut bevy_hanabi::EffectSpawner,
+    ready: bool,
+    delta_seconds: f64,
+) {
+    if ready {
+        spawner.spawn_count = schedule.advance(delta_seconds);
+    } else {
+        spawner.spawn_count = 0;
     }
 }
 
@@ -323,6 +344,10 @@ mod tests {
             built.asset.simulation_space,
             bevy_hanabi::SimulationSpace::Global
         );
+        assert!(built
+            .asset
+            .particle_layout()
+            .contains(bevy_hanabi::Attribute::POSITION));
     }
 
     #[test]
@@ -352,6 +377,43 @@ mod tests {
         assert_eq!(schedule.advance(0.1), 0);
         schedule.restart();
         assert_eq!(schedule.advance(0.01), 3);
+    }
+
+    #[test]
+    fn looping_rate_accumulates_fractional_counts_across_cycles() {
+        let mut spec = particle_spec::default_emitter();
+        spec.emission.rate_per_second = 10.0;
+        spec.emission.duration_seconds = 0.25;
+        spec.emission.burst_count = 0;
+        let mut schedule = EmissionSchedule::from_spec(&spec);
+
+        let counts = [
+            schedule.advance(0.25),
+            schedule.advance(0.25),
+            schedule.advance(0.25),
+            schedule.advance(0.25),
+        ];
+        assert_eq!(counts, [2, 3, 2, 3]);
+        assert_eq!(counts.into_iter().sum::<u32>(), 10);
+    }
+
+    #[test]
+    fn initial_burst_waits_until_compiled_effect_is_ready() {
+        let mut spec = particle_spec::default_emitter();
+        spec.emission.rate_per_second = 0.0;
+        spec.emission.burst_count = 5;
+        let mut schedule = EmissionSchedule::from_spec(&spec);
+        let mut spawner = bevy_hanabi::EffectSpawner::default();
+
+        schedule_when_ready(&mut schedule, &mut spawner, false, 0.1);
+        assert_eq!(spawner.spawn_count, 0);
+        assert_eq!(schedule.elapsed_seconds, 0.0);
+        assert!(!schedule.started);
+
+        schedule_when_ready(&mut schedule, &mut spawner, true, 0.1);
+        assert_eq!(spawner.spawn_count, 5);
+        assert_eq!(schedule.elapsed_seconds, 0.1);
+        assert!(schedule.started);
     }
 
     #[test]
