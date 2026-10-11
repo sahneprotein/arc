@@ -72,8 +72,12 @@
 //! `ARC_EDITOR_CHECK_PARTICLES` names a folder that stands in the game's place for the
 //! particle emitters; what the result line says of them is at `emitters_words`.
 //!
+//! The result line ends with how the processes of the last run left (`play_exit_words`).
+//!
 //! `wait-run=STATE` plays nothing: the script waits until the game the editor started is in
-//! that state (`none`, `starting`, `running`, `stopping`). A game runs on its own time, and
+//! that state (`none`, `starting`, `running`, `stopping`). A wait for a state of a run that
+//! there is none of fails at once, with how the last run ended: a game that did not start,
+//! or that ended before it got there, is not waited for. A game runs on its own time, and
 //! the editor does not count it as work it waits for, so a step that follows a start or a
 //! stop says what it waits for. A run that is being stopped to be cooked and played again is
 //! in none of them (`restarting`), so that `wait-run=running` after "Cook and play again"
@@ -370,6 +374,7 @@ impl Plugin for CheckPlugin {
                 failed: Vec::new(),
                 last_frame: Instant::now(),
                 waiting_for: None,
+                no_run_frames: 0,
             })
             .init_resource::<InputScript>()
             .init_resource::<Picture>()
@@ -593,6 +598,8 @@ struct Scripted {
     last_frame: Instant,
     /// The state of the game's run a `wait-run` step waits for, and the frame it gives up at.
     waiting_for: Option<(String, u32)>,
+    /// For how many frames in a row a wait has found no run.
+    no_run_frames: u32,
 }
 
 /// What a `wait-gpu` step waits for: the GPU preview being anything but starting.
@@ -600,6 +607,134 @@ const GPU_SETTLED: &str = "gpu-settled";
 
 /// How many frames a `wait-run` step waits before it counts as failed.
 const WAIT_FOR_THE_GAME: u32 = 20_000;
+
+/// How many frames in a row there may be no run before a `wait-run` step for a state of a
+/// run gives up. A request to play and the run it makes are not told of in the same frame.
+const NO_RUN_GRACE: u32 = 30;
+
+/// What a `wait-run` or `wait-gpu` step does in a frame.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Wait {
+    /// What was waited for is there.
+    Reached,
+    /// Not yet.
+    GoOn,
+    /// It is not waited for any longer, and the step failed for this reason.
+    Failed(String),
+}
+
+/// What a wait does in a frame. `wanted` is what is waited for and `now` what there is, as
+/// the check names the states. `frames_without_a_run` is for how many frames in a row there
+/// has been no run, `ended` how the last run ended if one did, and `timed_out` whether the
+/// wait has gone on for as long as it may.
+///
+/// A wait for no run only ends when there is none, or times out. A wait for a state of a
+/// run fails once there has been no run for [`NO_RUN_GRACE`] frames: the game did not
+/// start, or ended before it got there, and waiting longer would not bring it.
+fn wait_for_run(
+    wanted: &str,
+    now: &str,
+    frames_without_a_run: u32,
+    ended: Option<&str>,
+    timed_out: bool,
+) -> Wait {
+    if now.eq_ignore_ascii_case(wanted) {
+        return Wait::Reached;
+    }
+    let no_run = now.eq_ignore_ascii_case("none");
+    if no_run && frames_without_a_run >= NO_RUN_GRACE {
+        return Wait::Failed(match ended {
+            Some(ended) => format!("wait-run={wanted}: the run ended as {ended}"),
+            None => format!("wait-run={wanted}: no run was started"),
+        });
+    }
+    if timed_out {
+        return Wait::Failed(format!("wait-run={wanted}: the game stayed {now}"));
+    }
+    Wait::GoOn
+}
+
+/// How a process of a run left, in one word: `none` if it was never seen to end, its exit
+/// code, or `signal` and the signal's number; `,forced` after it if the editor had to end it.
+/// `exit` is the code, the signal and whether it was forced.
+fn exit_word(exit: Option<(Option<i32>, Option<i32>, bool)>) -> String {
+    let Some((code, signal, forced)) = exit else {
+        return "none".to_owned();
+    };
+    let how = match (code, signal) {
+        (_, Some(signal)) => format!("signal{signal}"),
+        (Some(code), None) => code.to_string(),
+        (None, None) => "unknown".to_owned(),
+    };
+    if forced {
+        format!("{how},forced")
+    } else {
+        how
+    }
+}
+
+/// What went wrong with cleaning up after a run, in one word: the code, and the reason it
+/// gives if it gives one.
+fn cleanup_word(code: &str, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("{code}:{reason}"),
+        None => code.to_owned(),
+    }
+}
+
+/// What the result line says of how the last run ended and its processes left:
+///
+/// `play_cause=none play_server_exit=0 play_client_exit=0 play_cleanup=[]`
+///
+/// `play_cause` is the reason behind `play_end`, if the coordinator gave one. The two exits
+/// are as [`exit_word`] says them: a clean stop is `0` for both. `play_cleanup` lists what
+/// the coordinator said of the cleanup, which is empty when both left by themselves.
+/// Without a run that has ended, all four say `none`.
+fn play_exit_words(editor: &Editor) -> String {
+    let Some(end) = editor.last_end() else {
+        return "play_cause=none play_server_exit=none play_client_exit=none play_cleanup=none"
+            .to_owned();
+    };
+    let cleanup: Vec<String> = end
+        .cleanup
+        .diagnostics
+        .iter()
+        .map(|said| {
+            cleanup_word(
+                &said.code,
+                said.parameters.get("reason").map(String::as_str),
+            )
+        })
+        .collect();
+    format!(
+        "play_cause={} play_server_exit={} play_client_exit={} play_cleanup=[{}]",
+        end.cause
+            .as_ref()
+            .map_or("none", |cause| cause.code.as_str()),
+        exit_word(
+            end.cleanup
+                .server
+                .as_ref()
+                .map(|exit| (exit.code, exit.signal, exit.forced))
+        ),
+        exit_word(
+            end.cleanup
+                .client
+                .as_ref()
+                .map(|exit| (exit.code, exit.signal, exit.forced))
+        ),
+        cleanup.join(",")
+    )
+}
+
+/// How the last run ended, for a wait that fails because there is no run: the outcome, and
+/// the reason behind it in brackets if there is one.
+fn ended_words(editor: &Editor) -> Option<String> {
+    editor.last_end().map(|end| match &end.cause {
+        Some(cause) => format!("{} ({})", end.primary.code, cause.code),
+        None => end.primary.code.clone(),
+    })
+}
 
 #[expect(
     clippy::too_many_arguments,
@@ -659,16 +794,30 @@ fn scripted(
         } else {
             format!("{:?}", editor_ui::panels::play::PlayView::of(&editor).run)
         };
-        if now.eq_ignore_ascii_case(&wanted) {
-            script.waiting_for = None;
-            script.next_step_at = script.frame + BETWEEN_STEPS;
-        } else if script.frame >= give_up_at {
-            script.waiting_for = None;
-            script
-                .failed
-                .push(format!("wait-run={wanted}: the game stayed {now}"));
+        script.no_run_frames = if now.eq_ignore_ascii_case("none") {
+            script.no_run_frames + 1
         } else {
-            redraw.write(RequestRedraw);
+            0
+        };
+        let ended = ended_words(&editor);
+        match wait_for_run(
+            &wanted,
+            &now,
+            script.no_run_frames,
+            ended.as_deref(),
+            script.frame >= give_up_at,
+        ) {
+            Wait::Reached => {
+                script.waiting_for = None;
+                script.next_step_at = script.frame + BETWEEN_STEPS;
+            }
+            Wait::Failed(reason) => {
+                script.waiting_for = None;
+                script.failed.push(reason);
+            }
+            Wait::GoOn => {
+                redraw.write(RequestRedraw);
+            }
         }
         return;
     }
@@ -685,6 +834,7 @@ fn scripted(
         }
         if let Some(wanted) = step.strip_prefix("wait-run=") {
             script.waiting_for = Some((wanted.to_owned(), script.frame + WAIT_FOR_THE_GAME));
+            script.no_run_frames = 0;
             redraw.write(RequestRedraw);
             return;
         }
@@ -777,7 +927,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} project={} project_dialog={} picture={} window_shown={} {}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} project={} project_dialog={} picture={} window_shown={} {} {}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -1064,6 +1214,8 @@ fn scripted(
             window_shown(),
             // The project's settings as the dialog shows them.
             settings_words(&project),
+            // How the last run of the game ended and its processes left.
+            play_exit_words(&editor),
         );
         exit.write(AppExit::Success);
     }
@@ -1450,6 +1602,89 @@ fn log_clicks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wait_for_a_state_of_a_run_fails_at_once_when_there_is_no_run() {
+        // What is waited for is there, whatever else is so.
+        assert_eq!(
+            wait_for_run("running", "Running", 0, None, false),
+            Wait::Reached
+        );
+        assert_eq!(
+            wait_for_run("none", "None", 99, Some("play.stopped"), true),
+            Wait::Reached
+        );
+        // A run that is on its way is waited for.
+        assert_eq!(
+            wait_for_run("running", "Starting", 0, None, false),
+            Wait::GoOn
+        );
+        assert_eq!(
+            wait_for_run("running", "Restarting", 0, None, false),
+            Wait::GoOn
+        );
+        // No run for a few frames is no failure yet: the request and its run are not told
+        // of in one frame.
+        assert_eq!(
+            wait_for_run("running", "None", NO_RUN_GRACE - 1, None, false),
+            Wait::GoOn
+        );
+        // A run that ended before it got there, with how it ended and why.
+        assert_eq!(
+            wait_for_run(
+                "running",
+                "None",
+                NO_RUN_GRACE,
+                Some("play.start_failed (play.protocol_mismatch)"),
+                false
+            ),
+            Wait::Failed(
+                "wait-run=running: the run ended as play.start_failed (play.protocol_mismatch)"
+                    .into()
+            )
+        );
+        // Nothing was started at all.
+        assert_eq!(
+            wait_for_run("starting", "None", NO_RUN_GRACE, None, false),
+            Wait::Failed("wait-run=starting: no run was started".into())
+        );
+        // A wait for the run to be over is not cut short by a run that is under way, and
+        // times out as before; so does a run that stays where it is.
+        assert_eq!(wait_for_run("none", "Running", 0, None, false), Wait::GoOn);
+        assert_eq!(
+            wait_for_run("none", "Stopping", 0, None, true),
+            Wait::Failed("wait-run=none: the game stayed Stopping".into())
+        );
+        assert_eq!(
+            wait_for_run("running", "Starting", 0, None, true),
+            Wait::Failed("wait-run=running: the game stayed Starting".into())
+        );
+        // The wait for the GPU preview is never without a run: it only times out.
+        assert_eq!(
+            wait_for_run(GPU_SETTLED, "Starting", 0, None, false),
+            Wait::GoOn
+        );
+        assert_eq!(
+            wait_for_run(GPU_SETTLED, GPU_SETTLED, 0, None, false),
+            Wait::Reached
+        );
+    }
+
+    #[test]
+    fn how_a_process_left_is_one_word_with_its_code_signal_and_whether_it_was_forced() {
+        assert_eq!(exit_word(None), "none");
+        assert_eq!(exit_word(Some((Some(0), None, false))), "0");
+        assert_eq!(exit_word(Some((Some(101), None, false))), "101");
+        assert_eq!(exit_word(Some((None, Some(15), false))), "signal15");
+        assert_eq!(exit_word(Some((None, Some(9), true))), "signal9,forced");
+        assert_eq!(exit_word(Some((Some(0), None, true))), "0,forced");
+        assert_eq!(exit_word(Some((None, None, false))), "unknown");
+        assert_eq!(
+            cleanup_word("play.server_cleanup_failed", Some("grace_deadline")),
+            "play.server_cleanup_failed:grace_deadline"
+        );
+        assert_eq!(cleanup_word("play.wait_failed", None), "play.wait_failed");
+    }
 
     #[test]
     fn a_window_is_hidden_only_in_a_scripted_check_that_does_not_ask_to_be_seen() {

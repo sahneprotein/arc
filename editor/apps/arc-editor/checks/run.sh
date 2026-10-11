@@ -42,6 +42,16 @@ wanted() {
     case "$1" in *"$only"*) return 0 ;; *) return 1 ;; esac
 }
 
+# What every case expects besides what it names: that each of its steps could be played.
+no_failed_steps='failed_steps=\[\]'
+# check_failing <name> <steps> <expected>...: the same for a case one of whose steps is meant
+# to fail. It says itself which failure it expects.
+check_failing() {
+    no_failed_steps='failed_steps='
+    check "$@"
+    no_failed_steps='failed_steps=\[\]'
+}
+
 # check <name> <steps> <expected part of the result>...
 check() {
     name="$1"; steps="$2"; shift 2
@@ -73,7 +83,7 @@ check() {
         fi
     fi
     verdict=ok
-    for expected in "$@" 'failed_steps=\[\]'; do
+    for expected in "$@" "$no_failed_steps"; do
         if ! printf '%s\n' "$result" | grep -Eq -- "$expected"; then
             verdict="FAILED, no '$expected'"
         fi
@@ -593,6 +603,36 @@ with_game server-stays check game-server-stays "$PLAY,wait-run=running,click-but
 with_game needs-kill check game-killed-server "$PLAY,wait-run=running,click-button=Stop,wait-run=none" 'play_end=play\.stopped' 'run_notice=false' 'left_notice=false'
 # The game cannot be launched: it did not start, and the notice says so. It was never running.
 with_game unavailable check game-unavailable "$PLAY,wait-run=none" 'play_run=None' 'play_end=play\.start_failed' 'run_notice=true' 'play_check=passed' 'problem=none'
+# The result says how the two processes of a run left, so that a run that ended as asked is
+# also seen to have ended cleanly. Stopped on request, both leave with status 0 and the
+# cleanup has nothing to say. A client that ends by itself leaves with its own status, and
+# the reason for the end is named. A server that goes only when it is killed is said to have
+# been ended by a signal, forced; one that does not go at all has no exit, and the cleanup
+# says twice that it failed.
+STOPPED="$PLAY,wait-run=running,click-button=Stop,wait-run=none"
+with_game runs check play-proof-stopped "$STOPPED" 'play_end=play\.stopped' \
+    'play_cause=none play_server_exit=0 play_client_exit=0 play_cleanup=\[\]'
+with_game crashes check play-proof-crashed "$PLAY,wait-run=running,wait-run=none" 'play_end=play\.crashed' \
+    'play_cause=play\.unexpected_exit play_server_exit=0 play_client_exit=101 play_cleanup=\[\]'
+with_game needs-kill check play-proof-killed "$STOPPED" 'play_end=play\.stopped' \
+    'play_server_exit=signal9,forced play_client_exit=0 play_cleanup=\[play\.server_cleanup_failed:grace_deadline\]'
+with_game server-stays check play-proof-stayed "$STOPPED" 'play_end=play\.stopped' \
+    'play_server_exit=none play_client_exit=0 play_cleanup=\[play\.server_cleanup_failed:grace_deadline,play\.server_cleanup_failed:reap_deadline\]'
+check play-proof-none 'click-row=11' 'play_end=none' 'play_cause=none play_server_exit=none play_client_exit=none play_cleanup=none'
+# A wait for a run to be running fails at once when there is no run to wait for, and says
+# why: the game could not be started, the run ended by itself before, or nothing was started
+# because no game is set up. Before, such a wait went on for as long as a wait may, minutes.
+# Each case must be over well within a minute.
+wait_begun="$(date +%s)"
+with_game unavailable check_failing play-proof-wait-failed "$PLAY,wait-run=running" 'play_run=None' 'play_end=play\.start_failed' \
+    'failed_steps=\["wait-run=running: the run ended as play\.start_failed'
+with_game crashes check_failing play-proof-wait-crashed "$PLAY,wait-run=running,wait-run=none,wait-run=running" 'play_end=play\.crashed' \
+    'failed_steps=\["wait-run=running: the run ended as play\.crashed \(play\.unexpected_exit\)"\]'
+check_failing play-proof-wait-nothing 'key=f5,wait-run=running' 'play_run=None' 'play_end=none' \
+    'failed_steps=\["wait-run=running: no run was started"\]'
+if wanted play-proof-wait && [ "$(( $(date +%s) - wait_begun ))" -gt 60 ]; then
+    echo "play-proof-wait: FAILED, the waits took $(( $(date +%s) - wait_begun )) seconds"; failed=1
+fi
 # A cooked level the core refuses is not played.
 with_game runs check game-refused-package 'cook,spoil-cooked,click-button=Play,click-item=Open Game Window' 'play_run=None' 'play_end=none' 'play_check=refused:payload\.hash_mismatch' 'notice=true'
 # In the narrow window the word is a dot and Stop stays; the row is still one row.
