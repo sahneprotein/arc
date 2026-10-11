@@ -522,17 +522,29 @@ workspace's "what did this change do" is this table applied to the last edit.
 
 | Order | Step | Waits for |
 |---|---|---|
-| 1 | Play P1: built, on local branches (see the progress note) | merging `codex/play-backend` and the game's `codex/play-readiness` |
-| 2 | Objects: several selected, snapping, duplicate and reparent by drag are built (see the second and third progress notes). Left: turn to slope | nothing outside the editor |
-| 3 | Review: the problems list is built (third progress note). Left: change summary | the core providing what changed |
-| 4 | Gameplay: zone exit, safe area, trigger as cooked volumes | the game's multi-zone and gateway work giving them a meaning; the format can come first |
-| 5 | Assets: browser, import, models as objects, ground textures | the art pipeline and an asset format in the core |
-| 6 | Combat overlays | editor only; most useful once Play with several clients exists |
-| 7 | Landscape at scale: tiles around the view, import, erosion | the owner's answer on world size and ground detail |
-| 8 | Prefabs with overrides | the core's reference and override model |
+| 1 | Play P1: implemented on `codex/play-backend`; game runtime support is on `codex/play-readiness` | integrate both branches into their respective main lines |
+| 2 | Objects: multi-selection, snapping, duplicate and drag reparenting implemented. Left: turn to slope | nothing outside the editor |
+| 3 | Review: core problems listed. Left: change summary | the core providing what changed |
+| 4 | Rendered viewport: Game Look now consumes the shared game look profile; compare captures with the client while the display is awake, then add published models and cooked-scene parity | shared presentation contract, capture verification and a real level/model asset path |
+| 5 | Assets: browser, import and reimport, models as objects, ground textures | the art pipeline and an asset reference in the scene/cooked format |
+| 6 | Particles: shared v1 emitter spec is committed; build asset services and editor authoring/preview, then add the Hanabi runtime adapter and place/cook emitters | pin and compile Hanabi in editor and client; prove GPU preview and runtime parity |
+| 7 | Render tools: material and lighting preview modes, then scene lighting controls | the Game view and asset/material references |
+| 8 | Gameplay: zone exit, safe area, trigger as cooked volumes | the game's multi-zone and gateway work giving them a meaning; the format can come first |
+| 9 | Combat overlays | editor only; most useful once Play with several clients exists |
+| 10 | Landscape at scale: tiles around the view, import, erosion | the owner's answer on world size and ground detail |
+| 11 | Prefabs with overrides | the core's reference and override model |
 
-Steps 2, 3 and 6 need nothing from the game and little from the core, so they are what the
-UI side can do next.
+Steps 1–3 are implemented on their feature branches. Game Look is implemented in both the
+client and editor from `assets/render/look-v1.json`; package-scoped editor checks and the
+`view-game-look` scripted state check passed. Image parity has not yet been inspected: recent
+captures were taken while macOS had the display asleep, and both current and pre-A0 editor
+captures were uniformly black. Capture with the display awake before claiming visual parity.
+The current Game Look is an open-level preview: it uses the editor camera and retains editor
+overlays, spawn markers and authored decorations. The profile is loaded at startup, so edits
+require restarting the editor. The shared particle contract is now in
+`editor/crates/particle-spec`, with a 16 KiB closed JSON schema, canonical writer, validation,
+stable ID/path helpers, and conservative live-particle estimate. Hanabi compatibility has only
+been checked from package metadata so far; compile and GPU pipeline validation remain open.
 
 ### 2.6 Not proposed
 
@@ -550,3 +562,55 @@ first four are tools of their own rather than parts of a level editor.
   spawn points and collision alone.
 - How large a zone is and how fine its ground: still the question that gates landscape at
   scale.
+
+## Part 3: Render and effects authoring
+
+The next editor phase adds art iteration to the level workflow. “Rendered” means the actual
+game presentation path, not a second editor-only approximation: a level should look the same
+in the editor's Game view and in the client, including its published meshes, materials,
+lighting, sky, shadows, exposure and tone mapping. Keep the current editor view for selection,
+collision and painting. Game view and later material/lighting previews are view modes over the
+same scene, with editor overlays available in both.
+
+The work is staged so each step has a usable result:
+
+1. **Game view parity.** Continue the render contract for the game's level meshes and terrain,
+   using the shared look profile already consumed by the client and editor. Compare a deterministic
+   editor capture with a client capture when the display is awake. Add published GLB models to the editor after scene data and cooking can carry asset references. Do not call a
+   view “Game” while it silently substitutes editor materials or lighting. The first Game-look
+   view renders the open editor draft, so label it as a preview; it is not proof of the cooked
+   package or a running client's final image. Keep selection and editing overlays legible without
+   replacing the authored material.
+2. **Assets workspace.** Browse the game's published assets, show load/validation problems,
+   and place a model into a level. Keep authored sources and export tools separate from runtime
+   assets; cooked levels refer to published asset identities rather than machine-specific
+   source paths.
+3. **Particle workspace.** The shared renderer-independent v1 emitter document and validation
+   crate now exist at `editor/crates/particle-spec`; the editor and game must depend on that same
+   source. Its defined semantics cover point, sphere, cone and box emission, uniform speed and
+   lifetime, billboard width, linear colour/size interpolation and world-space simulation after
+   spawn. Build reusable asset services and authoring UI, then a dedicated preview with play,
+   pause, restart, fixed seed and speed control. Keep texture dependencies out of v1. Translate
+   the shared spec through one Hanabi adapter used by preview and runtime. A later step
+   places emitters in levels and adds their references to the cooked visual payload. GPU
+   preview requires a rendering-capable editor; headless checks validate and round-trip the
+   asset without opening a window.
+4. **Material and lighting previews.** Add material-ball/material-swatch previews and a small
+   lighting stage, followed by view modes such as Lit, Unlit and Wireframe in the level viewport.
+   Scene-authored lights and environment settings come only after the scene/cook schema can
+   represent them and the client consumes that same data.
+
+The editor and game both use Bevy 0.19.1, and the foundation plan already names `bevy_hanabi`
+0.19.0 for the particle sub-project. Metadata indicates the matching Bevy generation, but the
+custom Arc Bevy fork has not yet been proven to compile with Hanabi. Hanabi is the rendering backend, while the authored
+contract stays smaller and renderer-independent so file stability does not depend on registered
+engine modifier types. Verify its Bevy/wgpu/naga dependency graph against the pinned engine
+before integration. This does not settle texture/material references, GPU feature support,
+asset digest rules, or how the level cook includes effect dependencies; those are gates before
+emitters can be placed in a shipped level.
+
+For editor layout, keep authoring domains as workspaces rather than adding permanent toolbar
+buttons. The Particles workspace owns the emitter list, preview controls and selected-emitter
+properties; the shared viewport can switch between Level/Game and asset preview. Assets remain
+a bottom browser, and Level/Play/Review keep their existing roles. Defer a general-purpose
+material graph: the first material tools are preview and a constrained set of authored values.
