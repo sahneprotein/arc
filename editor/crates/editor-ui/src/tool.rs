@@ -117,6 +117,27 @@ impl Snap {
         )
     }
 
+    /// Where the middle of several objects goes that began at `start` and has been dragged
+    /// to `now`: by a whole number of grid steps along every axis it moved on, and nowhere
+    /// along the others. The middle itself is on no grid line; what was on one stays on one.
+    pub fn shifted(&self, start: Vec3, now: Vec3) -> Vec3 {
+        if !self.on {
+            return now;
+        }
+        let axis = |start: f32, now: f32| {
+            if (now - start).abs() > MOVED {
+                start + self.on_grid(now - start)
+            } else {
+                start
+            }
+        };
+        Vec3::new(
+            axis(start.x, now.x),
+            axis(start.y, now.y),
+            axis(start.z, now.z),
+        )
+    }
+
     /// The half size of a box of `half_extents` scaled by `scale`. With snapping on, the whole
     /// size along every scaled axis is a whole number of grid steps, at least one.
     pub fn half_extents(&self, half_extents: [f32; 3], scale: Vec3) -> [f32; 3] {
@@ -297,6 +318,16 @@ mod tests {
             on: true,
             ..default()
         }
+    }
+
+    #[test]
+    fn a_middle_is_moved_by_whole_steps_and_stays_off_the_grid_where_it_was() {
+        let start = Vec3::new(1.765, 0.985, -1.03);
+        let dragged = start + Vec3::new(1.17, 0.0, -0.2);
+        let to = snapping().shifted(start, dragged);
+        // 1.17 m is nearest to two steps of half a metre and one, 0.2 m to none.
+        assert!(to.distance(start + Vec3::new(1.0, 0.0, 0.0)) < 1e-5, "{to}");
+        assert_eq!(Snap::default().shifted(start, dragged), dragged);
     }
 
     #[test]

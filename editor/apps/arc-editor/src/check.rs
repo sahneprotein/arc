@@ -473,7 +473,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {})",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -638,6 +638,42 @@ fn scripted(
             editor_ui::session::duplicate_offer(&snapshot),
             snapshot.snap.translation_m,
             snapshot.snap.rotation_degrees,
+            // The object the core calls active, where the gizmo of several is wanted, where
+            // the gizmo is in the level, to the millimetre, and which row carries its dot.
+            snapshot
+                .active
+                .as_ref()
+                .and_then(|id| snapshot.document.object(id))
+                .map(|object| object.name.as_str()),
+            snapshot.pivot,
+            screen
+                .gizmo_origin()
+                .map(|at| at.to_array().map(|v| (v * 1000.0).round() / 1000.0 + 0.0)),
+            editor_ui::panels::hierarchy::marked_object(&snapshot)
+                .and_then(|id| snapshot.document.object(id))
+                .map(|object| object.name.as_str()),
+            // Of every selected object, in the selection's order: its half size if it is a
+            // box, and its turns in degrees about X, Y and Z.
+            snapshot
+                .selection
+                .iter()
+                .filter_map(|id| snapshot.document.object(id))
+                .filter_map(|object| match &object.data {
+                    scene_data::ObjectData::Box { half_extents_m } => {
+                        Some(half_extents_m.map(|v| (v * 1000.0).round() / 1000.0))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            snapshot
+                .selection
+                .iter()
+                .filter_map(|id| snapshot.document.object(id))
+                .map(|object| {
+                    editor_ui::panels::inspector::euler_degrees(&object.local.rotation_xyzw)
+                        .map(|degrees| (degrees * 10.0).round() / 10.0 + 0.0)
+                })
+                .collect::<Vec<_>>(),
         );
         exit.write(AppExit::Success);
     }
@@ -676,13 +712,6 @@ fn play(
             .get(index)
             .map(|row| row.id.0.clone())
             .ok_or_else(|| "no such row".to_owned())
-    };
-    let selected = || {
-        snapshot
-            .selection
-            .first()
-            .map(|id| id.0.clone())
-            .ok_or_else(|| "nothing is selected".to_owned())
     };
     let pixels = |argument: &str| {
         argument
@@ -730,7 +759,7 @@ fn play(
         }
         "drag-gizmo" | "hold-gizmo" => {
             let (from, direction) = screen
-                .gizmo_x_handle(&selected()?)
+                .gizmo_x_handle()
                 .ok_or("the gizmo is not in the view")?;
             input.drag(
                 from,
@@ -741,7 +770,7 @@ fn play(
         }
         "rotate-gizmo" => {
             let (from, to) = screen
-                .gizmo_y_ring(&selected()?, pixels(argument)?)
+                .gizmo_y_ring(pixels(argument)?)
                 .ok_or("the gizmo is not in the view")?;
             input.drag(from, to - from, MouseButton::Left, true);
         }

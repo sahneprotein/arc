@@ -22,7 +22,7 @@ use crate::{
         },
         inspector::{
             commit_name, fill_names, fill_new_inputs, fill_snap_steps, inspector_panel,
-            show_inspector, InspectorPanel,
+            show_inspector, show_mixed_marks, InspectorPanel,
         },
         levels::{
             confirm_level_name, forget_name_problem, level_dialog, level_dialog_keys,
@@ -326,7 +326,13 @@ impl Plugin for EditorUiPlugin {
                     show_hierarchy,
                     show_selection.after(show_hierarchy),
                     fold_rows.after(show_hierarchy),
-                    (show_inspector, fill_new_inputs, fill_snap_steps).chain(),
+                    (
+                        show_inspector,
+                        fill_new_inputs,
+                        fill_snap_steps,
+                        show_mixed_marks,
+                    )
+                        .chain(),
                     show_status,
                     show_brush_mode,
                     show_notice,

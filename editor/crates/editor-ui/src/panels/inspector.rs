@@ -6,9 +6,13 @@
 //!
 //! With several objects selected the panel says how many, and the core says which fields
 //! differ between them. Of such a field the numbers the objects share are still fields, and
-//! each number that differs is a dash, as the design's PropertyRow has it. A number typed into
-//! a field goes to every selected object, as one undo step. The name is shown and cannot be
-//! changed for several at once.
+//! each number that differs is a dash, as the design's PropertyRow has it. The dash stands in
+//! a field too: a number typed there, or into any field, goes to every selected object, as
+//! one undo step, and the objects then share it. The name is shown and cannot be changed for
+//! several at once.
+//!
+//! The panel also says where the gizmo of several objects is: on one of them, which a
+//! Shift-click on another selected object moves, or at their middle. Two buttons choose.
 //!
 //! At the foot of the panel are the two steps of snapping, the grid in metres and the turn in
 //! degrees: settings of the object tools, which this panel is the place of. The core keeps
@@ -24,8 +28,8 @@ use bevy::{
         constants::fonts,
         containers::{pane, pane_body, pane_header},
         controls::{
-            FeathersNumberInput, FeathersTextInput, FeathersTextInputContainer, NumberInputValue,
-            UpdateNumberInput,
+            ButtonVariant, FeathersButton, FeathersNumberInput, FeathersTextInput,
+            FeathersTextInputContainer, NumberInputValue, UpdateNumberInput,
         },
         display::{label, label_dim},
         theme::{ThemeBorderColor, ThemeTextColor, ThemeToken, ThemedText},
@@ -34,10 +38,11 @@ use bevy::{
     input_focus::InputFocus,
     prelude::*,
     text::{EditableText, FontSourceTemplate, TextEdit},
-    ui_widgets::ValueChange,
+    ui_widgets::{Activate, ValueChange},
 };
 use editor_core::{
-    Command, FieldDescriptor, FieldKind, FieldValue, Mutation, SnapSettings, ViewSnapshot,
+    Command, FieldAssignment, FieldDescriptor, FieldKind, FieldValue, GizmoPivot, Mutation,
+    SnapSettings, ViewSnapshot,
 };
 use scene_data::{ObjectData, ObjectRecord, RigidTransform};
 
@@ -68,7 +73,14 @@ pub struct FieldInput {
     pub field: String,
     pub axis: usize,
     pub value: f32,
+    /// Whether the selected objects differ in this number. The input then shows a dash and no
+    /// value, and whatever is typed into it is new.
+    pub mixed: bool,
 }
+
+/// The dash over a number input whose objects differ in that number.
+#[derive(Component, Default, Clone)]
+pub struct MixedMark;
 
 const AXES: [(&str, ThemeToken); 3] = [
     ("X", tokens::TEXT_INPUT_X_AXIS),
@@ -234,29 +246,75 @@ fn number_input(field: &str, axis: usize, value: f32) -> impl Scene {
     }
 }
 
-/// What stands in a number field's place when the selected objects differ in that number.
+/// What a number field shows when the selected objects differ in that number.
 const MIXED: &str = "\u{2014}";
 
-fn mixed_number() -> impl Scene {
+/// A number field for a number the selected objects differ in: empty, with the dash over it
+/// until it is typed in. The dash takes no click; what is under it is the field.
+fn mixed_number(field: &str, axis: usize) -> impl Scene {
+    let (letter, color) = AXES[axis % AXES.len()].clone();
+    let field = field.to_owned();
     bsn! {
-        Node {
-            flex_grow: 1.0,
-            flex_basis: px(0),
-            min_width: px(0),
-            justify_content: JustifyContent::Center,
-        }
-        Children [ label_dim(MIXED) ]
+        @FeathersNumberInput { @sigil_color: {color}, @label_text: {Some(letter)} }
+        FieldInput { field: {field}, axis: {axis}, mixed: true }
+        Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0) }
+        on(commit_field)
+        Children [(
+            MixedMark
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                right: px(0),
+                top: px(0),
+                bottom: px(0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+            }
+            Pickable { should_block_lower: false, is_hoverable: false }
+            Children [(
+                label_dim(MIXED)
+                Pickable { should_block_lower: false, is_hoverable: false }
+            )]
+        )]
     }
 }
 
-/// The three numbers of a field: a number field each, or a dash where the objects differ.
+/// Shows the dash of a number the objects differ in while its field is empty and not being
+/// typed in, and hides it otherwise.
+pub(crate) fn show_mixed_marks(
+    focus: Res<InputFocus>,
+    inputs: Query<(&FieldInput, &Children)>,
+    texts: Query<&EditableText>,
+    mut marks: Query<&mut Node, With<MixedMark>>,
+) {
+    for (input, children) in &inputs {
+        if !input.mixed {
+            continue;
+        }
+        let in_use = children.iter().any(|child| {
+            texts.get(child).is_ok_and(|text| {
+                focus.get() == Some(child) || !text.value().to_string().is_empty()
+            })
+        });
+        let wanted = if in_use { Display::None } else { Display::Flex };
+        for child in children.iter() {
+            if let Ok(mut node) = marks.get_mut(child)
+                && node.display != wanted
+            {
+                node.display = wanted;
+            }
+        }
+    }
+}
+
+/// The three numbers of a field: a number field each, with a dash where the objects differ.
 fn numbers(field: &str, values: &[f32], mixed: [bool; 3]) -> Vec<Box<dyn SceneList>> {
     values
         .iter()
         .enumerate()
         .map(|(axis, value)| -> Box<dyn SceneList> {
             if mixed[axis % 3] {
-                Box::new(bsn_list![mixed_number()])
+                Box::new(bsn_list![mixed_number(field, axis)])
             } else {
                 Box::new(bsn_list![number_input(field, axis, *value)])
             }
@@ -314,7 +372,130 @@ pub fn several(count: usize) -> Option<String> {
 }
 
 /// The line under it.
-const SEVERAL_HINT: &str = "A change here goes to all of them. A dash is a value they differ in.";
+const SEVERAL_HINT: &str =
+    "A change here goes to all of them. A dash is a value they differ in; type over it to give \
+     them one.";
+
+/// Where the gizmo of several selected objects is, in the panel's words. `on` is the name of
+/// the object the gizmo is on; `None` when it can hold none of them, as with landscapes only.
+pub fn gizmo_line(pivot: GizmoPivot, on: Option<&str>, at_middle: bool) -> String {
+    match (pivot, on) {
+        (GizmoPivot::Center, _) if at_middle => {
+            "The gizmo is at the middle of the selected objects and turns them about it.".into()
+        }
+        (_, Some(name)) => {
+            format!("The gizmo is on {name}. Shift-click another selected object to put it there.")
+        }
+        (_, None) => "None of the selected objects can hold the gizmo.".into(),
+    }
+}
+
+/// The selected objects the gizmo moves by themselves: boxes and spawn points that are not
+/// under another selected object. A landscape is not moved by the gizmo, and an object under
+/// a selected one goes where that one goes.
+pub fn gizmo_roots(snapshot: &ViewSnapshot) -> Vec<&ObjectRecord> {
+    let document = &snapshot.document;
+    let under_a_selected = |object: &ObjectRecord| {
+        let mut above = object.parent.as_ref();
+        while let Some(parent) = above {
+            if snapshot.selection.contains(parent) {
+                return true;
+            }
+            above = document
+                .object(parent)
+                .and_then(|parent| parent.parent.as_ref());
+        }
+        false
+    };
+    snapshot
+        .selection
+        .iter()
+        .filter_map(|id| document.object(id))
+        .filter(|object| {
+            matches!(
+                object.data,
+                ObjectData::Box { .. } | ObjectData::Spawn { .. }
+            ) && !under_a_selected(object)
+        })
+        .collect()
+}
+
+/// The name of the object the gizmo is on: the one the core calls active if it can hold the
+/// gizmo, else the first selected one that can.
+pub fn gizmo_object(snapshot: &ViewSnapshot) -> Option<&ObjectRecord> {
+    let holds = |object: &&ObjectRecord| {
+        matches!(
+            object.data,
+            ObjectData::Box { .. } | ObjectData::Spawn { .. }
+        )
+    };
+    let document = &snapshot.document;
+    snapshot
+        .active
+        .as_ref()
+        .and_then(|id| document.object(id))
+        .filter(holds)
+        .or_else(|| {
+            snapshot
+                .selection
+                .iter()
+                .filter_map(|id| document.object(id))
+                .find(holds)
+        })
+}
+
+/// One of the two buttons that choose where the gizmo of several objects is: on one of them,
+/// or (`middle`) at the middle of them all.
+#[derive(Component, Default, Clone)]
+pub struct PivotSwitch {
+    pub middle: bool,
+}
+
+fn pivot_button(middle: bool, chosen: bool) -> impl Scene {
+    let caption = if middle { "Their middle" } else { "One object" };
+    let variant = if chosen {
+        ButtonVariant::Primary
+    } else {
+        ButtonVariant::Normal
+    };
+    bsn! {
+        @FeathersButton {
+            @caption: bsn! { Text(caption) ThemedText },
+            @variant: {variant},
+        }
+        PivotSwitch { middle: {middle} }
+        on(|activate: On<Activate>,
+            switches: Query<&PivotSwitch>,
+            mut editor: NonSendMut<Editor>| {
+            if let Ok(switch) = switches.get(activate.entity) {
+                editor.set_pivot(if switch.middle {
+                    GizmoPivot::Center
+                } else {
+                    GizmoPivot::Active
+                });
+            }
+        })
+    }
+}
+
+/// What the panel says of the gizmo when several objects are selected: the two buttons and
+/// the line under them.
+fn gizmo_rows(snapshot: &ViewSnapshot) -> Box<dyn SceneList> {
+    let middle = snapshot.pivot == GizmoPivot::Center;
+    let line = gizmo_line(
+        snapshot.pivot,
+        gizmo_object(snapshot).map(|object| object.name.as_str()),
+        gizmo_roots(snapshot).len() > 1,
+    );
+    Box::new(bsn_list![
+        row(bsn_list![
+            field_label("Gizmo at"),
+            pivot_button(false, !middle),
+            pivot_button(true, middle)
+        ]),
+        label_dim(line)
+    ])
+}
 
 /// The scenes of one field: a label and its editor, or its value as text. `mixed` says which
 /// of its numbers differ between the selected objects, and `alone` whether one object is
@@ -428,6 +609,9 @@ pub struct InspectorShape {
     /// Which numbers are dashes: a number the objects come to share, or to differ in, changes
     /// what is built and not only what a field shows.
     mixed: Vec<[bool; 3]>,
+    /// With several objects selected, what the panel says of the gizmo: the object it is on
+    /// and whether it is at their middle. Nothing with one object or none.
+    gizmo: Option<(Option<String>, bool)>,
 }
 
 fn shape(snapshot: &ViewSnapshot) -> InspectorShape {
@@ -444,6 +628,12 @@ fn shape(snapshot: &ViewSnapshot) -> InspectorShape {
             .iter()
             .map(|field| mixed_axes(snapshot, field))
             .collect(),
+        gizmo: (snapshot.selection.len() > 1).then(|| {
+            (
+                gizmo_object(snapshot).map(|object| object.id.0.clone()),
+                snapshot.pivot == GizmoPivot::Center,
+            )
+        }),
     }
 }
 
@@ -467,6 +657,10 @@ pub(crate) fn show_inspector(
         Some((seen, before)) if *seen == revision && before.session == now.session => return,
         Some((_, before)) if *before == now => {
             for (entity, mut input) in &mut inputs {
+                // A number the objects differ in has no value to show.
+                if input.mixed {
+                    continue;
+                }
                 let Some(value) = component(&snapshot, &input.field, input.axis).map(shown_number)
                 else {
                     continue;
@@ -505,6 +699,7 @@ pub(crate) fn show_inspector(
                     row(bsn_list![label(count)]),
                     label_dim(SEVERAL_HINT)
                 ]));
+                scenes.push(gizmo_rows(&snapshot));
             }
             let alone = snapshot.selection.len() == 1;
             scenes.extend(
@@ -570,6 +765,10 @@ pub(crate) fn fill_new_inputs(
     inputs: Query<(Entity, &FieldInput), Added<FieldInput>>,
 ) {
     for (entity, input) in &inputs {
+        // A number the objects differ in stays empty: its dash is what it shows.
+        if input.mixed {
+            continue;
+        }
         commands.trigger(UpdateNumberInput {
             entity,
             value: NumberInputValue::F32(input.value),
@@ -632,7 +831,27 @@ pub fn edit_mutations(
         .collect()
 }
 
-/// Sends a committed number to the core as one edit of every selected object.
+/// What the core is asked for when a number is typed into component `axis` of `field`, where
+/// it has a request of its own for that: one position along an axis, or one size along an
+/// axis, for every selected object. The panel shows half sizes and the core takes whole ones.
+/// `None` for a rotation, which is worked out object by object ([`edit_mutations`]).
+pub fn assignment(field: &str, axis: usize, value: f32) -> Option<FieldAssignment> {
+    let mut axes = [None; 3];
+    match field {
+        "translation" => {
+            axes[axis % 3] = Some(value);
+            Some(FieldAssignment::Translation(axes))
+        }
+        "half_extents" => {
+            axes[axis % 3] = Some(value * 2.0);
+            Some(FieldAssignment::Size(axes))
+        }
+        _ => None,
+    }
+}
+
+/// Sends a committed number to the core as one edit of every selected object, checked against
+/// the inspector's revision: a number typed for one selection never reaches another.
 fn commit_field(
     change: On<ValueChange<f32>>,
     inputs: Query<&FieldInput>,
@@ -644,7 +863,12 @@ fn commit_field(
     let Ok(input) = inputs.get(change.source) else {
         return;
     };
-    if input.value == change.value {
+    // A number the objects differ in is new whatever it is: it has no value to equal.
+    if !input.mixed && input.value == change.value {
+        return;
+    }
+    if let Some(assignment) = assignment(&input.field, input.axis, change.value) {
+        editor.assign(assignment);
         return;
     }
     let mutations = edit_mutations(&editor.snapshot(), &input.field, input.axis, change.value);
@@ -679,6 +903,57 @@ mod tests {
         );
         assert_eq!(snap_step_of(coarser, SNAP_GRID), 0.25);
         assert_eq!(snap_step_of(coarser, SNAP_TURN), 45.0);
+    }
+
+    #[test]
+    fn a_typed_position_or_size_is_one_request_for_all_and_a_size_is_asked_for_whole() {
+        assert_eq!(
+            assignment("translation", 1, 0.5),
+            Some(FieldAssignment::Translation([None, Some(0.5), None]))
+        );
+        // The panel's field is half a size.
+        assert_eq!(
+            assignment("half_extents", 2, 1.5),
+            Some(FieldAssignment::Size([None, None, Some(3.0)]))
+        );
+        assert_eq!(assignment("rotation", 0, 90.0), None);
+    }
+
+    #[test]
+    fn the_panel_says_where_the_gizmo_of_several_objects_is() {
+        let on_one = gizmo_line(GizmoPivot::Active, Some("Wall"), true);
+        assert!(on_one.contains("on Wall") && on_one.contains("Shift-click"));
+        let middle = gizmo_line(GizmoPivot::Center, Some("Wall"), true);
+        assert!(middle.contains("middle") && !middle.contains("Wall"));
+        // The middle was asked for, but only one of the objects can be moved by the gizmo:
+        // it is on that one.
+        let one_root = gizmo_line(GizmoPivot::Center, Some("Wall"), false);
+        assert!(one_root.contains("on Wall"));
+        assert!(gizmo_line(GizmoPivot::Active, None, false).contains("None of"));
+    }
+
+    #[test]
+    fn the_gizmo_is_on_the_object_the_core_calls_active_and_moves_the_roots() {
+        let snapshot = two_selected(|document| {
+            // The second selected object is under the first.
+            let above = document.objects[1].id.clone();
+            document.objects[2].parent = Some(above);
+        });
+        let active = snapshot
+            .active
+            .clone()
+            .expect("a selection has an active object");
+        assert_eq!(
+            gizmo_object(&snapshot).map(|object| &object.id),
+            Some(&active)
+        );
+        // Of the two, only the upper one is moved by itself.
+        let roots = gizmo_roots(&snapshot);
+        assert_eq!(roots.len(), 1);
+        assert!(!roots[0]
+            .parent
+            .as_ref()
+            .is_some_and(|parent| snapshot.selection.contains(parent)));
     }
 
     #[test]

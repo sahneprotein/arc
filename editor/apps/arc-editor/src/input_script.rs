@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 
 use bevy::{
     ecs::system::SystemParam,
-    gizmos::transform_gizmo::TransformGizmoSettings,
+    gizmos::transform_gizmo::{TransformGizmoFocus, TransformGizmoSettings},
     input::{
         keyboard::{Key, KeyboardInput},
         mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel},
@@ -494,6 +494,7 @@ pub struct Screen<'w, 's> {
         ),
     >,
     objects: Query<'w, 's, (&'static Projected, &'static GlobalTransform)>,
+    gizmo_focus: Query<'w, 's, &'static GlobalTransform, With<TransformGizmoFocus>>,
     camera: Single<'w, 's, (&'static Camera, &'static GlobalTransform), With<ViewCamera>>,
     gizmo: Res<'w, TransformGizmoSettings>,
 }
@@ -695,11 +696,19 @@ impl Screen<'_, '_> {
         self.project(transform.translation())
     }
 
-    /// A point on the gizmo's X handle of the object with this stable ID, and the direction
-    /// on the window in which that handle points.
-    pub fn gizmo_x_handle(&self, id: &str) -> Option<(Vec2, Vec2)> {
-        let (_, transform) = self.objects.iter().find(|(object, _)| object.0 .0 == id)?;
-        let origin = transform.translation();
+    /// Where the gizmo is in the level: at the object it is on, or at the middle of several.
+    /// `None` when it holds nothing.
+    pub fn gizmo_origin(&self) -> Option<Vec3> {
+        self.gizmo_focus
+            .single()
+            .ok()
+            .map(GlobalTransform::translation)
+    }
+
+    /// A point on the gizmo's X handle, and the direction on the window in which that handle
+    /// points.
+    pub fn gizmo_x_handle(&self) -> Option<(Vec2, Vec2)> {
+        let origin = self.gizmo_origin()?;
         let (_, camera) = *self.camera;
         let scale = (camera.translation() - origin).length() * self.gizmo.screen_scale_factor;
         let on_handle = self.project(origin + Vec3::X * scale * 0.6)?;
@@ -707,11 +716,10 @@ impl Screen<'_, '_> {
         Some((on_handle, (further - on_handle).normalize_or_zero()))
     }
 
-    /// Two points on the gizmo's rotation ring about Y of the object with this stable ID,
-    /// `degrees` apart and away from the other two rings.
-    pub fn gizmo_y_ring(&self, id: &str, degrees: f32) -> Option<(Vec2, Vec2)> {
-        let (_, transform) = self.objects.iter().find(|(object, _)| object.0 .0 == id)?;
-        let origin = transform.translation();
+    /// Two points on the gizmo's rotation ring about Y, `degrees` apart and away from the
+    /// other two rings.
+    pub fn gizmo_y_ring(&self, degrees: f32) -> Option<(Vec2, Vec2)> {
+        let origin = self.gizmo_origin()?;
         let (_, camera) = *self.camera;
         let radius = (camera.translation() - origin).length()
             * self.gizmo.screen_scale_factor

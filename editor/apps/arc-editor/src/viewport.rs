@@ -43,9 +43,12 @@ use bevy::{
     ui::{ComputedNode, IsDefaultUiCamera, UiGlobalTransform},
     window::{CursorGrabMode, CursorOptions, PrimaryWindow, RequestRedraw},
 };
-use editor_core::{Mutation, ObjectId, SceneDocument};
+use editor_core::{GizmoPivot, Mutation, ObjectId, SceneDocument, ViewSnapshot};
 use editor_ui::{
-    panels::hierarchy::adds_to_selection,
+    panels::{
+        hierarchy::adds_to_selection,
+        inspector::{gizmo_object, gizmo_roots},
+    },
     theme::{color, feathers::to_color},
     Editor, Modal, PlaceAt, Snap, Tool, ViewportSlot,
 };
@@ -201,6 +204,11 @@ impl Orbit {
 #[derive(Component)]
 pub struct Projected(pub ObjectId);
 
+/// What the gizmo holds when it is at the middle of several selected objects: a place in the
+/// view with nothing drawn at it. It is no object of the level.
+#[derive(Component)]
+pub struct MiddleHandle;
+
 /// Identifies what the view was built from.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct ShownKey {
@@ -344,6 +352,8 @@ fn setup(
         },
         RenderLayers::none(),
     ));
+
+    commands.spawn((MiddleHandle, Transform::IDENTITY));
 
     commands.spawn((
         DirectionalLight {
@@ -543,7 +553,7 @@ fn show_level(
     gizmo: Res<TransformGizmoState>,
     (tool, modal): (Res<Tool>, Res<Modal>),
     mut meshes: ResMut<Assets<Mesh>>,
-    mut shown: ResMut<Shown>,
+    (mut shown, middle): (ResMut<Shown>, Single<Entity, With<MiddleHandle>>),
 ) {
     let snapshot = editor.snapshot();
     let preview = snapshot.preview.as_ref();
@@ -562,6 +572,22 @@ fn show_level(
     shown.ready = true;
     let document = preview.map_or(&snapshot.document, |preview| &preview.document);
     let dragged = gizmo.active.then_some(gizmo.entity).flatten();
+    // What the gizmo holds, unless the landscape tool is chosen or a dialog is open.
+    let target = gizmo_target(&snapshot).filter(|_| key.gizmo_allowed);
+    // At the middle of several objects it holds the handle, which is put there unless it is
+    // being dragged: the gizmo moves it then.
+    match target {
+        Some(GizmoTarget::Middle(at)) => {
+            let mut handle = commands.entity(*middle);
+            handle.insert(TransformGizmoFocus);
+            if dragged != Some(*middle) {
+                handle.insert(Transform::from_translation(at));
+            }
+        }
+        _ => {
+            commands.entity(*middle).remove::<TransformGizmoFocus>();
+        }
+    }
 
     let ids: Vec<ObjectId> = match scope {
         Scope::Objects(ids) => ids,
@@ -646,9 +672,7 @@ fn show_level(
                 entity
             }
         };
-        // The gizmo holds the first selected object that is drawn, unless the landscape tool
-        // is chosen.
-        if key.gizmo_allowed && held(document, &snapshot.selection) == Some(&object.id) {
+        if target == Some(GizmoTarget::Object(&object.id)) {
             commands.entity(entity).insert(TransformGizmoFocus);
         } else {
             commands.entity(entity).remove::<TransformGizmoFocus>();
@@ -819,17 +843,34 @@ fn choose(
     );
 }
 
-/// The selected object the gizmo holds: the first that is drawn, in the order the core gives
-/// the selection in. A landscape and a group have nothing for the gizmo to hold on to.
-fn held<'a>(document: &SceneDocument, selection: &'a [ObjectId]) -> Option<&'a ObjectId> {
-    selection.iter().find(|id| {
-        document.object(id).is_some_and(|object| {
-            matches!(
-                object.data,
-                ObjectData::Box { .. } | ObjectData::Spawn { .. }
-            )
-        })
-    })
+/// What the gizmo holds.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum GizmoTarget<'a> {
+    /// One object of the level: the gizmo moves it, and the other selected objects with it.
+    Object(&'a ObjectId),
+    /// The middle of several selected objects, at this place in the level.
+    Middle(Vec3),
+}
+
+/// What the gizmo holds for this selection.
+///
+/// It is on the object the core calls active, or on the first selected one that is drawn if
+/// that one is not: a landscape and a group have nothing for the gizmo to hold on to. With
+/// the middle chosen it is at the middle of the selected boxes and spawn points that are not
+/// under another selected object, which is the mean of where they are in the level; its axes
+/// are the level's. One such object has no middle but itself.
+fn gizmo_target(snapshot: &ViewSnapshot) -> Option<GizmoTarget<'_>> {
+    if snapshot.pivot == GizmoPivot::Center {
+        let roots = gizmo_roots(snapshot);
+        if roots.len() > 1 {
+            let sum: Vec3 = roots
+                .iter()
+                .map(|object| world_transform(&snapshot.document, object).translation)
+                .sum();
+            return Some(GizmoTarget::Middle(sum / roots.len() as f32));
+        }
+    }
+    gizmo_object(snapshot).map(|object| GizmoTarget::Object(&object.id))
 }
 
 /// Whether an object above `object` in the hierarchy, however far up, is selected too. Such an
@@ -892,16 +933,9 @@ fn snapped(
     to
 }
 
-/// What a drag on the gizmo means for the document. `held` is the object under the gizmo and
-/// `world` where the gizmo has put it; `document` is the level as it was when the drag began.
-///
-/// Every selected object goes with it as one rigid group: moved by as much as the held object
-/// was moved, and turned by as much about the held object's place. The distances between them
-/// stay what they were. An object under another selected one is left to follow that one. A
-/// landscape is not moved by the gizmo.
-///
-/// A scale makes every selected box bigger or smaller by the same factors, each about its own
-/// middle: the document has no scale, and a scaled box is a bigger box.
+/// What a drag on the gizmo means for the document, when the gizmo is on the object `held`
+/// and has put it at `world`. See [`group_mutations`].
+#[cfg(test)]
 fn drag_mutations(
     document: &SceneDocument,
     selection: &[ObjectId],
@@ -910,6 +944,28 @@ fn drag_mutations(
     snap: &Snap,
 ) -> Vec<Mutation> {
     let start = world_transform(document, held);
+    group_mutations(document, selection, Some(&held.id), &start, world, snap)
+}
+
+/// What a drag on the gizmo means for the document. The gizmo began at `start` and is at
+/// `world` now; `held` is the object it is on, or `None` when it is at the middle of several.
+/// `document` is the level as it was when the drag began.
+///
+/// Every selected object goes as part of one rigid group: moved by as much as the gizmo was
+/// moved, and turned by as much about the gizmo's place. The distances between them stay
+/// what they were. An object under another selected one is left to follow that one. A
+/// landscape is not moved by the gizmo.
+///
+/// A scale makes every selected box bigger or smaller by the same factors, each about its own
+/// middle: the document has no scale, and a scaled box is a bigger box.
+fn group_mutations(
+    document: &SceneDocument,
+    selection: &[ObjectId],
+    held: Option<&ObjectId>,
+    start: &Transform,
+    world: &Transform,
+    snap: &Snap,
+) -> Vec<Mutation> {
     // One move and one turn for the whole group. A drag that does not turn leaves every
     // rotation exactly as it was.
     let moved = world.translation - start.translation;
@@ -923,7 +979,7 @@ fn drag_mutations(
         {
             continue;
         }
-        let to = if object.id == held.id {
+        let to = if held == Some(&object.id) {
             *world
         } else {
             let was = world_transform(document, object);
@@ -967,10 +1023,14 @@ fn snap_turns(snap: Res<Snap>, mut gizmo: ResMut<TransformGizmoSettings>) {
     }
 }
 
+/// What the gizmo can hold: an object of the level as the view shows it, or the handle at
+/// the middle of several.
+type GizmoHeld = Or<(With<Projected>, With<MiddleHandle>)>;
+
 /// What the gizmo drag has done so far.
 #[derive(Default)]
 struct GizmoDrag {
-    /// The object under the gizmo and the transform last sent to the core.
+    /// What the gizmo holds and the transform last sent to the core.
     held: Option<(Entity, Transform)>,
 }
 
@@ -1007,7 +1067,7 @@ fn cancel_reason(
 fn drag_with_gizmo(
     mut gizmo: ResMut<TransformGizmoState>,
     mut cancel: CancelInput,
-    mut objects: Query<(&Projected, &mut Transform, &mut GlobalTransform)>,
+    mut objects: Query<(Option<&Projected>, &mut Transform, &mut GlobalTransform), GizmoHeld>,
     (snap, mut editor): (Res<Snap>, NonSendMut<Editor>),
     mut shown: ResMut<Shown>,
     mut drag: Local<GizmoDrag>,
@@ -1047,19 +1107,34 @@ fn drag_with_gizmo(
                 editor.begin_drag();
             }
             let snapshot = editor.snapshot();
-            let Some(object) = snapshot.document.object(&projected.0) else {
-                return;
+            // What the gizmo is on: an object of the level, or the middle of several.
+            let held = match projected {
+                Some(projected) => match snapshot.document.object(&projected.0) {
+                    Some(object) => Some(object),
+                    None => return,
+                },
+                None => None,
             };
             // With snapping the object is put on the grid before it is drawn. The gizmo works
             // each frame from where the drag began, so what is written here does not add up.
             // The object has no parent in the view, and this runs after the engine has worked
-            // out where things are: what is drawn is set here as well.
+            // out where things are: what is drawn is set here as well. A middle is on no grid
+            // line: it goes by whole steps, so that what was on the grid stays on it.
             if snap.on {
-                let half = match &object.data {
-                    ObjectData::Box { half_extents_m } => Some(*half_extents_m),
-                    _ => None,
+                let to = match held {
+                    Some(object) => {
+                        let half = match &object.data {
+                            ObjectData::Box { half_extents_m } => Some(*half_extents_m),
+                            _ => None,
+                        };
+                        snapped(&snap, &gizmo.start_transform, &transform, half)
+                    }
+                    None => Transform {
+                        translation: snap
+                            .shifted(gizmo.start_transform.translation, transform.translation),
+                        ..*transform
+                    },
                 };
-                let to = snapped(&snap, &gizmo.start_transform, &transform, half);
                 if *transform != to {
                     *transform = to;
                     *global = GlobalTransform::from(to);
@@ -1067,10 +1142,14 @@ fn drag_with_gizmo(
             }
             if drag.held.map(|(_, sent)| sent) != Some(*transform) {
                 drag.held = Some((entity, *transform));
-                editor.preview_drag(drag_mutations(
+                let start = held.map_or(gizmo.start_transform, |object| {
+                    world_transform(&snapshot.document, object)
+                });
+                editor.preview_drag(group_mutations(
                     &snapshot.document,
                     &snapshot.selection,
-                    object,
+                    held.map(|object| &object.id),
+                    &start,
                     &transform,
                     &snap,
                 ));
@@ -1282,12 +1361,110 @@ mod tests {
         assert_eq!(sized, 3);
     }
 
+    /// The level as the core shows it with these objects selected, in this order, and the
+    /// gizmo wanted there.
+    fn shown_with(
+        document: SceneDocument,
+        selection: Vec<ObjectId>,
+        pivot: GizmoPivot,
+    ) -> ViewSnapshot {
+        use editor_core::{Command, CommandRequest, EditorSession};
+        let mut session = EditorSession::new(document).unwrap();
+        let commands = [Command::Select(selection), Command::SetGizmoPivot(pivot)];
+        for (number, command) in commands.into_iter().enumerate() {
+            let before = session.snapshot();
+            session
+                .submit(CommandRequest {
+                    request: number as u64 + 1,
+                    session: before.session,
+                    expected_revision: before.document_revision,
+                    expected_inspector_revision: None,
+                    command,
+                })
+                .outcome
+                .unwrap();
+        }
+        (*session.snapshot()).clone()
+    }
+
     #[test]
-    fn the_gizmo_holds_the_first_selected_object_that_is_drawn() {
+    fn the_gizmo_is_on_the_object_selected_last_and_on_nothing_without_a_selection() {
         let (document, ids) = off_grid();
-        assert_eq!(held(&document, &ids), Some(&ids[0]));
-        assert_eq!(held(&document, &[]), None);
-        assert_eq!(held(&document, &[ObjectId::from_u128(0xdead)]), None);
+        // The core puts the gizmo on the last object it is given, whatever its ID.
+        let order = vec![ids[2].clone(), ids[0].clone(), ids[1].clone()];
+        let snapshot = shown_with(document.clone(), order, GizmoPivot::Active);
+        assert_eq!(gizmo_target(&snapshot), Some(GizmoTarget::Object(&ids[1])));
+        let nothing = shown_with(document, Vec::new(), GizmoPivot::Active);
+        assert_eq!(gizmo_target(&nothing), None);
+    }
+
+    #[test]
+    fn the_middle_is_the_mean_of_where_the_selected_objects_are_and_one_object_has_none() {
+        let (document, ids) = off_grid();
+        let snapshot = shown_with(document.clone(), ids.clone(), GizmoPivot::Center);
+        let Some(GizmoTarget::Middle(at)) = gizmo_target(&snapshot) else {
+            panic!("three objects have a middle");
+        };
+        // The three places of `off_grid`, summed and divided by three.
+        let mean = Vec3::new(0.2 + 3.33 - 5.71, 1.37 + 0.6 + 2.2, -4.11 + 2.05 + 0.49) / 3.0;
+        assert!(at.distance(mean) < 1e-5, "{at}");
+        // One object: the gizmo is on it, whatever was chosen.
+        let one = shown_with(document.clone(), vec![ids[0].clone()], GizmoPivot::Center);
+        assert_eq!(gizmo_target(&one), Some(GizmoTarget::Object(&ids[0])));
+        // An object under another selected one is no part of the middle: it goes where that
+        // one goes.
+        let mut nested = document;
+        nested.object_mut(&ids[2]).unwrap().parent = Some(ids[0].clone());
+        let snapshot = shown_with(nested, ids.clone(), GizmoPivot::Center);
+        let Some(GizmoTarget::Middle(at)) = gizmo_target(&snapshot) else {
+            panic!("two objects are left that have a middle");
+        };
+        let mean = Vec3::new(0.2 + 3.33, 1.37 + 0.6, -4.11 + 2.05) / 2.0;
+        assert!(at.distance(mean) < 1e-5, "{at}");
+    }
+
+    #[test]
+    fn a_turn_about_the_middle_keeps_the_middle_and_a_move_of_it_moves_all_alike() {
+        let (document, ids) = off_grid();
+        let before = places(&document, &ids, &[]);
+        let middle = before.iter().map(|place| place.translation).sum::<Vec3>() / 3.0;
+        let start = Transform::from_translation(middle);
+
+        // Half a turn about Y: each object goes to the other side of the middle.
+        let turned = start.with_rotation(Quat::from_rotation_y(std::f32::consts::PI));
+        let mutations = group_mutations(&document, &ids, None, &start, &turned, &Snap::default());
+        assert_eq!(mutations.len(), 3);
+        let after = places(&document, &ids, &mutations);
+        let middle_after = after.iter().map(|place| place.translation).sum::<Vec3>() / 3.0;
+        assert!(middle_after.distance(middle) < 1e-4, "{middle_after}");
+        for (was, is) in before.iter().zip(&after) {
+            let mirrored = middle - (was.translation - middle) * Vec3::new(1.0, -1.0, 1.0);
+            assert!(
+                is.translation.distance(mirrored) < 1e-4,
+                "{}",
+                is.translation
+            );
+        }
+
+        // A move of the middle by whole steps: every object by exactly as much, so that the
+        // fractions each stood at are the fractions it stands at.
+        let dragged = Transform::from_translation(middle + Vec3::new(1.17, 0.0, 0.0));
+        let to = Transform {
+            translation: snapping().shifted(start.translation, dragged.translation),
+            ..dragged
+        };
+        let mutations = group_mutations(&document, &ids, None, &start, &to, &snapping());
+        let after = places(&document, &ids, &mutations);
+        for (was, is) in before.iter().zip(&after) {
+            let moved = is.translation - was.translation;
+            assert!(moved.distance(Vec3::new(1.0, 0.0, 0.0)) < 1e-4, "{moved}");
+            // Each rotation is written back as a unit quaternion, a rounding away from what
+            // it was.
+            assert!(
+                is.rotation.angle_between(was.rotation) < 1e-4,
+                "a move turns nothing"
+            );
+        }
     }
 
     #[test]

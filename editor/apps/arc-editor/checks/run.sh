@@ -244,14 +244,17 @@ check multi-row-active-off 'click-row=11,shift-click-row=12,shift-click-row=11,s
 # gizmo. The Low box and the Pillar are seen behind the X and Y handles of the gizmo on the
 # Tall box, and a click on a handle is a hold on the gizmo and no choice. The core gives a
 # selection in the order of the objects' IDs, so the Wall is its first whichever was clicked
-# first, and the gizmo is on the Wall. One more Shift-click on the Tall box takes it out.
+# first; the gizmo is on the one clicked last. One more Shift-click on that one takes it out.
 wall_and_box='places=\[\[-8\.5, 3\.0, 0\.0\], \[0\.0, 0\.5, -8\.0\]\]'
 check multi-objects   'click-object=11,shift-click-object=10' "$two" 'selected=Some\("Wall"\)' "$wall_and_box" 'several=Some\("2 objects"\)'
 check multi-objects-other 'click-object=10,shift-click-object=11' "$two" 'selected=Some\("Wall"\)' "$wall_and_box"
-check multi-object-off 'click-object=10,shift-click-object=11,shift-click-object=11' 'selection=1' 'selected=Some\("Wall"\)' 'several=None'
+# The Tall box, clicked last, has the gizmo, and the middle of an object that has the gizmo is
+# behind the gizmo's handles: a click there is a hold on a handle. Its row takes it out.
+check multi-object-off 'click-object=10,shift-click-object=11,shift-click-row=11' 'selection=1' 'selected=Some\("Wall"\)' 'active=Some\("Wall"\)' 'several=None'
+check multi-object-held 'click-object=10,shift-click-object=11,shift-click-object=11' "$two" 'active=Some\("Tall box"\)' 'gizmo_hover=Some' 'undo=None'
 check multi-plain     'click-row=11,shift-click-row=12,click-row=13' 'selection=1' 'selected=Some\("Pillar"\)' 'several=None'
-# The gizmo holds the first of them and the other goes with it: one move, so that they stand
-# to each other as before, and one undo step that takes both back.
+# The gizmo holds the one clicked last and the other goes with it: one move, so that they
+# stand to each other as before, and one undo step that takes both back.
 check multi-move      'click-row=11,shift-click-row=12,drag-gizmo=-60' "$two" "$moved" "$apart" 'undo=Some\("drag"\)' 'dragging=false'
 check multi-undo      'click-row=11,shift-click-row=12,drag-gizmo=-60,key=ctrl+z' "$two" "$both_home" 'undo=None' 'redo=Some\("drag"\)'
 check multi-cancel    'click-row=11,shift-click-row=12,hold-gizmo=-60,key=escape,release' "$both_home" 'undo=None' 'dragging=false'
@@ -275,14 +278,21 @@ check snap-move       'click-row=11,inspector,type-field=translation.0:0.2,click
 check snap-move-undo  'click-row=11,inspector,type-field=translation.0:0.2,click-button=Snap,drag-gizmo=-60,key=ctrl+z' \
                       'position=Some\(\[0\.2, 0\.5, -8\.0\]\)' 'redo=Some\("drag"\)'
 # With a second object selected, the held one goes to the grid and the other moves by exactly
-# as much. The Wall is put 8.3 m from the Tall box along X, on no grid line, and is the one
-# the gizmo holds: after the drag it is on the grid, and the Tall box is still 8.3 m from it,
+# as much. The Wall is put 8.3 m from the Tall box along X, on no grid line. A Shift-click on
+# the Tall box adds it and puts the gizmo there; one more on the Wall puts the gizmo on the
+# Wall again. After the drag the Wall is on the grid, and the Tall box is still 8.3 m from it,
 # so it has left the grid by as much as the Wall came onto it. One undo step puts both back.
-check snap-group      'click-row=10,inspector,type-field=translation.0:-8.3,shift-click-object=11,click-button=Snap,drag-gizmo=-60' \
-                      "$two" 'selected=Some\("Wall"\)' 'position=Some\(\[-[0-9]+\.[05], 3\.0, 0\.0\]\)' \
+SG='click-row=10,inspector,type-field=translation.0:-8.3,shift-click-object=11,shift-click-object=10,click-button=Snap,drag-gizmo=-60'
+check snap-group      "$SG" \
+                      "$two" 'selected=Some\("Wall"\)' 'active=Some\("Wall"\)' 'position=Some\(\[-[0-9]+\.[05], 3\.0, 0\.0\]\)' \
                       'offsets=\[\[0\.0, 0\.0, 0\.0\], \[8\.3, -2\.5, -8\.0\]\]' 'undo=Some\("drag"\)'
-check snap-group-undo 'click-row=10,inspector,type-field=translation.0:-8.3,shift-click-object=11,click-button=Snap,drag-gizmo=-60,key=ctrl+z' \
+check snap-group-undo "$SG,key=ctrl+z" \
                       "$two" 'places=\[\[-8\.3, 3\.0, 0\.0\], \[0\.0, 0\.5, -8\.0\]\]' 'redo=Some\("drag"\)'
+# Left on the Tall box, which was clicked last, the gizmo puts that one on the grid, where it
+# was already: the Wall goes by as many whole steps and stays 8.3 m off.
+check snap-group-other 'click-row=10,inspector,type-field=translation.0:-8.3,shift-click-object=11,click-button=Snap,drag-gizmo=-60' \
+                      "$two" 'active=Some\("Tall box"\)' 'places=\[\[-[0-9]+\.[38], 3\.0, 0\.0\], \[-[0-9]+\.[05], 0\.5, -8\.0\]\]' \
+                      'offsets=\[\[0\.0, 0\.0, 0\.0\], \[8\.3, -2\.5, -8\.0\]\]' 'undo=Some\("drag"\)'
 # A turn goes in steps of fifteen degrees.
 check snap-rotate     'click-button=Snap,click-row=11,key=e,rotate-gizmo=60' 'tool=Rotate' "$home" \
                       'rotation=Some\(\[0\.0, -?(15|30|45|60|75|90)\.0, 0\.0\]\)' 'undo=Some\("drag"\)'
@@ -295,7 +305,9 @@ check snap-scale      'click-button=Snap,click-row=11,key=r,drag-gizmo=-30' 'too
 check_sized "$wide" wide-snap     'click-button=Snap'     'window=1261x' 'toolbar_folded=false' 'snap=true' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$wide" wide-multi    'click-row=11,shift-click-row=12,drag-gizmo=-60' 'window=1261x' "$two" "$moved" "$apart" "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-snap 'choose=Tool>Snap'      'window=621x' 'toolbar_folded=true' 'snap=true' 'menu_open=false' "$row" 'toolbar_fits=Some\(true\)'
-check_sized "$narrow" narrow-multi 'click-row=11,shift-click-row=12,drag-gizmo=-60' 'window=621x' 'toolbar_folded=true' "$two" "$apart" 'undo=Some\("drag"\)' "$row" 'toolbar_fits=Some\(true\)'
+# In the narrow window the Low box's X handle reaches past the view's edge, so the gizmo is
+# put on the Tall box, in the middle of the view, by clicking that one last.
+check_sized "$narrow" narrow-multi 'click-row=12,shift-click-row=11,drag-gizmo=-60' 'window=621x' 'toolbar_folded=true' "$two" 'active=Some\("Tall box"\)' "$moved" "$apart" 'undo=Some\("drag"\)' "$row" 'toolbar_fits=Some\(true\)'
 
 # The Play control. It is in the toolbar at every width. Its foot names the cooked level and
 # offers to cook; a cooked level can be checked on disk by the editor's core. Started without
@@ -321,6 +333,61 @@ check play-older-check 'cook,click-row=11,drag-gizmo=-60,click-button=Play,click
 check_sized "$wide" wide-play     'click-button=Play'     'window=1261x' 'menu_open=true' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-play 'click-button=Play'     'window=621x' 'menu_open=true' 'toolbar_folded=true' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-play-check 'cook,click-button=Play,click-item=Check cooked level' 'window=621x' 'play_check=passed' 'problem=none'
+
+# Of several selected objects the gizmo is on the one clicked last, and its row carries the
+# dot. A Shift-click on another selected one moves the gizmo there; with one object selected
+# no row carries a dot.
+tall='gizmo_at=Some\(\[0\.0, 0\.5, -8\.0\]\)'
+low='gizmo_at=Some\(\[3\.0, 0\.15, -8\.0\]\)'
+check active-last     'click-row=11,shift-click-row=12'   "$two" 'active=Some\("Low box"\)' 'gizmo_row=Some\("Low box"\)' "$low" 'pivot=Active'
+check active-moved    'click-row=11,shift-click-row=12,shift-click-row=11' "$two" 'active=Some\("Tall box"\)' 'gizmo_row=Some\("Tall box"\)' "$tall" 'undo=None'
+check active-one      'click-row=11'                      'active=Some\("Tall box"\)' 'gizmo_row=None' "$tall"
+check active-view     'click-object=10,shift-click-object=11,shift-click-object=10' "$two" 'active=Some\("Wall"\)' 'gizmo_row=Some\("Wall"\)' 'gizmo_at=Some\(\[-8\.5, 3\.0, 0\.0\]\)'
+check active-left     'click-row=11,shift-click-row=12,shift-click-row=12' 'selection=1' 'active=Some\("Tall box"\)' 'gizmo_row=None' "$tall"
+# The inspector's two buttons put the gizmo on one object or at the middle of them all: the
+# mean of where they are. It is a setting: no undo step.
+M='click-row=11,shift-click-row=12,click-button=Their middle'
+middle='gizmo_at=Some\(\[1\.5, 0\.325, -8\.0\]\)'
+check pivot-middle    "$M"                                "$two" 'pivot=Center' "$middle" 'gizmo_row=None' 'undo=None' 'problem=none'
+check pivot-back      "$M,click-button=One object"        "$two" 'pivot=Active' "$low" 'gizmo_row=Some\("Low box"\)'
+# It stays chosen for the next selection, and one object has no middle but itself.
+check pivot-kept      "$M,click-row=13,shift-click-row=11" 'pivot=Center' 'gizmo_at=Some\(\[-1\.5, 1\.0, -10\.0\]\)' 'gizmo_row=None'
+check pivot-one       "$M,click-row=13"                   'selection=1' 'pivot=Center' 'gizmo_at=Some\(\[-3\.0, 1\.5, -12\.0\]\)'
+# A drag at the middle moves both alike, as one undo step.
+check pivot-move      "$M,drag-gizmo=-60"                 "$two" "$moved" "$apart" 'undo=Some\("drag"\)' 'dragging=false' 'gizmo_at=Some\(\[-?[0-9]+\.[0-9]+, 0\.325, -8\.0\]\)'
+check pivot-move-undo "$M,drag-gizmo=-60,key=ctrl+z"      "$two" "$both_home" "$middle" 'redo=Some\("drag"\)'
+# A turn at the middle is about the middle: both objects are turned and are elsewhere, and
+# their middle is where it was. About one of them it would not be.
+check pivot-turn      "$M,key=e,rotate-gizmo=60"          "$two" 'tool=Rotate' "$middle" 'turns=\[\[0\.0, -?[1-9][0-9]*\.[0-9], 0\.0\], \[0\.0, -?[1-9][0-9]*\.[0-9], 0\.0\]\]' 'undo=Some\("drag"\)'
+check pivot-turn-one  'click-row=11,shift-click-row=12,key=e,rotate-gizmo=60' "$two" 'tool=Rotate' "$low" 'turns=\[\[0\.0, -?[1-9][0-9]*\.[0-9], 0\.0\], \[0\.0, -?[1-9][0-9]*\.[0-9], 0\.0\]\]'
+# With snapping, the middle goes by whole steps: a box that stood 0.2 m off the grid stands
+# 0.2 m off it afterwards, and the box that was on the grid is on it.
+check pivot-snap      'click-row=11,type-field=translation.0:0.2,shift-click-row=12,click-button=Their middle,click-button=Snap,drag-gizmo=-60' \
+                      "$two" 'places=\[\[-?[0-9]+\.[2378], 0\.5, -8\.0\], \[-?[0-9]+\.[05], 0\.15, -8\.0\]\]' \
+                      'offsets=\[\[0\.0, 0\.0, 0\.0\], \[2\.8, -0\.35, 0\.0\]\]' 'undo=Some\("drag"\)'
+# A dash is a field: a number typed over it goes to every selected object, which then share
+# it, as one undo step. The other numbers of each stay its own.
+check dash-type       'click-row=11,shift-click-row=12,type-field=translation.0:5' \
+                      'places=\[\[5\.0, 0\.5, -8\.0\], \[5\.0, 0\.15, -8\.0\]\]' 'dashes=Some\(\[false, true, false\]\)' 'undo=Some\("edit"\)' 'problem=none'
+check dash-type-undo  'click-row=11,shift-click-row=12,type-field=translation.0:5,key=ctrl+z' "$both_home" 'dashes=Some\(\[true, true, false\]\)' 'undo=None'
+check dash-type-two   'click-row=11,shift-click-row=12,type-field=translation.0:5,type-field=translation.1:1' \
+                      'places=\[\[5\.0, 1\.0, -8\.0\], \[5\.0, 1\.0, -8\.0\]\]' 'dashes=Some\(\[false, false, false\]\)'
+# Nothing typed over a dash changes nothing.
+check dash-empty      'click-row=11,shift-click-row=12,type-field=translation.0:' "$both_home" 'dashes=Some\(\[true, true, false\]\)' 'undo=None' 'problem=none'
+# A size: the boxes differ in height, and get one. A turn: one box is tilted, and both get
+# the same tilt.
+check dash-size       'click-row=11,shift-click-row=12,type-field=half_extents.1:1' \
+                      'sizes=\[\[0\.5, 1\.0, 0\.5\], \[[0-9.]+, 1\.0, [0-9.]+\]\]' 'undo=Some\("edit"\)' 'problem=none'
+check dash-turn       'tilt=12:30,click-row=11,shift-click-row=12,type-field=rotation.0:10' \
+                      'turns=\[\[10\.0, 0\.0, 0\.0\], \[10\.0, 0\.0, 0\.0\]\]' 'undo=Some\("edit"\)' 'problem=none'
+# The same in a wide and in a narrow window. In the narrow one the inspector takes the
+# hierarchy's place once the two are selected.
+check_sized "$wide" wide-pivot   "$M"                     'window=1261x' 'pivot=Center' "$middle" "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$wide" wide-active  'click-row=11,shift-click-row=12,shift-click-row=11' 'window=1261x' 'active=Some\("Tall box"\)' "$tall" "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$wide" wide-dash    'click-row=11,shift-click-row=12,type-field=translation.0:5' 'window=1261x' 'places=\[\[5\.0, 0\.5, -8\.0\], \[5\.0, 0\.15, -8\.0\]\]' 'problem=none'
+check_sized "$narrow" narrow-pivot 'click-row=11,shift-click-row=12,inspector,click-button=Their middle' 'window=621x' 'pivot=Center' "$middle" "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-active 'click-row=11,shift-click-row=12,shift-click-row=11' 'window=621x' 'active=Some\("Tall box"\)' 'gizmo_row=Some\("Tall box"\)' "$tall" "$row" 'toolbar_fits=Some\(true\)'
+check_sized "$narrow" narrow-dash 'click-row=11,shift-click-row=12,inspector,type-field=translation.0:5' 'window=621x' 'places=\[\[5\.0, 0\.5, -8\.0\], \[5\.0, 0\.15, -8\.0\]\]' 'dashes=Some\(\[false, true, false\]\)' 'problem=none'
 
 # Duplicate copies the selection: with Ctrl+D and from the Add menu. The copy stands a metre
 # beside what it was copied from, is called after it, is what is selected afterwards, and is

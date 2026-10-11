@@ -2,7 +2,8 @@
 //!
 //! The rows come from the core's snapshot and are rebuilt when its hierarchy region changes.
 //! Choosing a row asks the core to select that object; with Shift held the object joins the
-//! selection or leaves it. The highlight follows the snapshot, never the click.
+//! selection or leaves it. The highlight follows the snapshot, never the click. Of several
+//! selected rows, the one whose object the gizmo is on carries a dot.
 //!
 //! An object with children has a toggle that folds them away. What is folded is the panel's
 //! own business: it is not part of the level and is forgotten with the session.
@@ -13,16 +14,18 @@ use bevy::{
     feathers::{
         containers::{pane, pane_body, pane_header},
         controls::{FeathersDisclosureToggle, FeathersListRow, FeathersListView},
-        theme::ThemedText,
+        theme::{ThemeBackgroundColor, ThemedText},
+        tokens,
     },
     picking::pointer::PointerButton,
     prelude::*,
     ui::{Checked, Selected},
     ui_widgets::ValueChange,
 };
-use editor_core::{HierarchyRow, StableId};
+use editor_core::{GizmoPivot, HierarchyRow, ObjectId, StableId, ViewSnapshot};
 
 use crate::{
+    panels::inspector::{gizmo_object, gizmo_roots},
     session::Editor,
     theme::{size, spacing},
 };
@@ -38,6 +41,10 @@ pub(crate) struct HierarchyBody;
 /// A row and the stable ID of the object it shows.
 #[derive(Component, Default, Clone)]
 pub struct RowObject(pub String);
+
+/// The dot of a row, shown while the gizmo of several selected objects is on its object.
+#[derive(Component, Default, Clone)]
+pub struct GizmoMark(pub String);
 
 /// The toggle of a row whose object has children, and that object's stable ID.
 #[derive(Component, Default, Clone)]
@@ -87,6 +94,7 @@ pub fn hierarchy_panel() -> impl Scene {
 
 fn row(row: &HierarchyRow) -> impl Scene {
     let id = row.id.0.clone();
+    let mark = id.clone();
     let name = row.name.clone();
     let indent = spacing::SPACE_4 + row.depth as f32 * spacing::SPACE_5;
     let toggle: Box<dyn SceneList> = if row.child_count > 0 {
@@ -126,8 +134,37 @@ fn row(row: &HierarchyRow) -> impl Scene {
                 bottom: px(spacing::SPACE_1),
             },
         }
-        Children [ {toggle}, (Text({name}) ThemedText) ]
+        Children [
+            {toggle},
+            (Text({name}) ThemedText),
+            Node { flex_grow: 1.0 },
+            (
+                // The design's dot: eight pixels across, round, in the colour of the text.
+                GizmoMark({mark})
+                Node {
+                    width: px(spacing::SPACE_4),
+                    height: px(spacing::SPACE_4),
+                    border_radius: BorderRadius::all(px(spacing::SPACE_2)),
+                    flex_shrink: 0.0,
+                    align_self: AlignSelf::Center,
+                    display: Display::None,
+                }
+                ThemeBackgroundColor(tokens::TEXT_MAIN)
+            ),
+        ]
     }
+}
+
+/// The object whose row carries the dot: the one the gizmo is on, when several are selected
+/// and the gizmo is on one of them and not at their middle.
+pub fn marked_object(snapshot: &ViewSnapshot) -> Option<&ObjectId> {
+    if snapshot.selection.len() < 2 {
+        return None;
+    }
+    if snapshot.pivot == GizmoPivot::Center && gizmo_roots(snapshot).len() > 1 {
+        return None;
+    }
+    gizmo_object(snapshot).map(|object| &object.id)
 }
 
 fn list(rows: Vec<impl Scene>) -> impl Scene {
@@ -168,6 +205,7 @@ pub(crate) fn show_selection(
     mut commands: Commands,
     editor: NonSend<Editor>,
     rows: Query<(Entity, &RowObject, Has<Selected>)>,
+    mut marks: Query<(&GizmoMark, &mut Node)>,
     added: Query<(), Added<RowObject>>,
     mut shown: Local<Option<(u64, u64)>>,
 ) {
@@ -183,6 +221,17 @@ pub(crate) fn show_selection(
             commands.entity(entity).insert(Selected);
         } else if !selected && marked {
             commands.entity(entity).remove::<Selected>();
+        }
+    }
+    let gizmo_on = marked_object(&snapshot);
+    for (mark, mut node) in &mut marks {
+        let wanted = if gizmo_on.is_some_and(|id| id.0 == mark.0) {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != wanted {
+            node.display = wanted;
         }
     }
 }
