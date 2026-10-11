@@ -6,6 +6,7 @@
 //! - `session.rs`: the UI's end of the editor core: snapshots in, commands out.
 //! - `shell.rs`: the window's regions and the plugin.
 //! - `rules.rs`: landscape rules as the panel handles them, without drawing.
+//! - `project.rs`: the project's file as the editor found it, its setup and its conversion.
 //! - `particles.rs`: the game's particle emitters as the Particles tool handles them, and
 //!   the preview's controls, without drawing.
 //! - `tool.rs`: which tool the pointer has, and the landscape brush's settings.
@@ -25,6 +26,7 @@ pub mod look {
 pub mod panels;
 pub mod particles;
 pub mod play_script;
+pub mod project;
 pub mod rules;
 pub mod session;
 pub mod shell;
@@ -35,8 +37,10 @@ pub mod wording;
 pub use panels::closing::Shutdown;
 pub use panels::levels::LevelDialog;
 pub use panels::menu::MenuOpen;
+pub use panels::project::ProjectDialog;
 pub use panels::unsaved::{Question, Unsaved};
 pub use particles::{GpuPreview, Particles, Preview, PreviewMode};
+pub use project::{Project, ProjectState};
 pub use session::{Editor, PackageCheck};
 pub use shell::{EditorUiPlugin, Modal, PanelChoice, ViewportSlot};
 pub use tool::{

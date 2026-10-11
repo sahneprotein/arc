@@ -1,12 +1,14 @@
 //! Worker-owned editing, measured I/O and immutable runtime package publication.
 pub mod play;
 pub use play::*;
+pub use project_spec;
 mod actor;
 pub mod emitters;
 mod look;
 mod measurement;
 mod package;
 mod persistence;
+pub mod project;
 mod viewer;
 pub use actor::*;
 pub use editor_core::{review_play_payloads, ReviewProblem, ReviewScope};

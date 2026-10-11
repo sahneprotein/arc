@@ -11,7 +11,9 @@
 //!
 //! `arc-editor [--level <file>] [--package <directory>] [--game <folder>]`: the level file is
 //! opened if it exists. Otherwise the editor starts with the game's current map, converted, and
-//! saves it there. Without `--level` the file is `levels/current-map.level.json`.
+//! saves it there. Without `--level` the file is the level the game's project starts with
+//! (`arc-project.json` in the game's folder), and without a project
+//! `levels/current-map.level.json`.
 //!
 //! `--game` names the game's folder, the one its server and client are built in. With it the
 //! Play control can ask the editor's core to start the game on a cooked level; without it the
@@ -37,7 +39,7 @@ use bevy::{
 };
 use editor_ui::{
     theme::{color, feathers::to_color},
-    Editor, EditorUiPlugin, Particles,
+    Editor, EditorUiPlugin, Particles, Project,
 };
 
 /// Where the editor writes when it is not told otherwise, relative to the working directory.
@@ -45,14 +47,15 @@ const DEFAULT_LEVEL: &str = "levels/current-map.level.json";
 const DEFAULT_PACKAGE: &str = "cooked";
 
 struct Arguments {
-    level: PathBuf,
+    /// The level file, if one was named.
+    level: Option<PathBuf>,
     package: PathBuf,
     game: Option<PathBuf>,
 }
 
 fn arguments() -> Result<Arguments, String> {
     let mut parsed = Arguments {
-        level: DEFAULT_LEVEL.into(),
+        level: None,
         package: DEFAULT_PACKAGE.into(),
         game: None,
     };
@@ -66,7 +69,7 @@ fn arguments() -> Result<Arguments, String> {
                 .ok_or_else(|| format!("{name} needs a path"))
         };
         match name.as_str() {
-            "--level" => parsed.level = path()?,
+            "--level" => parsed.level = Some(path()?),
             "--package" => parsed.package = path()?,
             "--game" => parsed.game = Some(path()?),
             other => return Err(format!("unknown argument {other:?}")),
@@ -89,8 +92,19 @@ fn main() -> AppExit {
     // The editor starts with the game's current map, converted by the editor core. If the
     // level file exists it is opened in its place; if opening fails, the map stays and the
     // problem is shown.
-    let saved_level = arguments.level.exists().then(|| arguments.level.clone());
     let game = arguments.game.clone();
+    // The project of the game's folder, as it is on disk: nothing is written by looking. A
+    // folder without a project file, or with one of an older version, is the person's to
+    // set up or to convert, in the Project settings. A scripted check may name another
+    // folder.
+    let project = Project::of_folder(check::scripted_project().or_else(|| game.clone()));
+    // The level: the one that was named; without a name, the one the project starts with;
+    // without a project, the file an editor without a project always used.
+    let level = arguments
+        .level
+        .or_else(|| project.start_level())
+        .unwrap_or_else(|| DEFAULT_LEVEL.into());
+    let saved_level = level.exists().then(|| level.clone());
     // The game's look profile, which Game look in the 3D view is drawn from: looked for in
     // the game's folder, once, before the window opens. A scripted check may name a file.
     let (look_status, game_look) = look::look_status(
@@ -108,11 +122,7 @@ fn main() -> AppExit {
     let particles = emitter_game
         .clone()
         .map_or_else(Particles::default, Particles::of_game);
-    let mut editor = match Editor::new(
-        scene_data::current_map(),
-        arguments.level,
-        arguments.package,
-    ) {
+    let mut editor = match Editor::new(scene_data::current_map(), level, arguments.package) {
         Ok(mut editor) => {
             editor.set_emitter_game(emitter_game);
             if let Some(path) = saved_level {
@@ -198,6 +208,7 @@ fn main() -> AppExit {
     .insert_resource(look_status)
     .insert_resource(look::GameLook(game_look))
     .insert_resource(particles)
+    .insert_resource(project)
     .insert_non_send(editor)
     .init_resource::<check::GameWakes>()
     .add_systems(Startup, wake_for_the_game);

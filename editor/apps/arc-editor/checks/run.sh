@@ -477,12 +477,21 @@ with_look() {
 }
 printf '{"schema": 2}' > "$work/look-v2.json"
 check view-default    'click-row=11'                      'view=Editor' 'look=none' 'look_sun=None' 'ground_look=None' 'selected=Some\("Tall box"\)'
-check view-no-game    'click-button=View,click-item=Game look' 'view=Editor' 'look=none' 'look_sun=None' 'menu_open=true' 'problem=none'
-with_look "$work/absent.json" check view-missing 'click-button=View,click-item=Game look' 'view=Editor' 'look=refused:look\.missing' 'look_sun=None' 'menu_open=true' 'problem=none'
-with_look "$work/look-v2.json" check view-other-schema 'click-button=View,click-item=Game look' 'view=Editor' 'look=refused:look\.schema' 'look_sun=None' 'menu_open=true'
+check view-no-game    'click-button=View: Editor,click-item=Game look' 'view=Editor' 'look=none' 'look_sun=None' 'menu_open=true' 'problem=none'
+with_look "$work/absent.json" check view-missing 'click-button=View: Editor,click-item=Game look' 'view=Editor' 'look=refused:look\.missing' 'look_sun=None' 'menu_open=true' 'problem=none'
+with_look "$work/look-v2.json" check view-other-schema 'click-button=View: Editor,click-item=Game look' 'view=Editor' 'look=refused:look\.schema' 'look_sun=None' 'menu_open=true'
 # With the profile the row is on. Game look puts the profile's sun in the view and leaves the
 # level, the selection and what can be undone as they were; Editor takes the sun out again.
 with_look "$look" check view-game-look 'click-row=11,choose=View>Game look' 'view=GameLook' 'look=loaded:3abf9a2f' 'look_sun=Some\(130000' 'ground_look=Some\(\(\[1\.0, 1\.0, 1\.0, 1\.0\], 0\.9\)\)' 'selected=Some\("Tall box"\)' 'selection=1' 'undo=None' 'menu_open=false' 'problem=none' "$row" 'toolbar_fits=Some\(true\)'
+# The view's menu opens again after it was closed, however it was closed: by choosing a row,
+# by Escape, and by a click beside it, which closes the menu and chooses nothing.
+with_look "$look" check view-reopen    'click-button=View: Editor,key=escape,click-button=View: Editor' 'menu_open=true' 'view=Editor' 'problem=none'
+with_look "$look" check view-outside   'click-button=View: Editor,click-object=11,click-button=View: Editor' 'menu_open=true' 'selected=None' 'view=Editor'
+with_look "$look" check view-thrice    'choose=View>Game look,choose=View>Editor,choose=View>Game look' 'view=GameLook' 'look_sun=Some\(130000' 'menu_open=false' 'problem=none'
+# The Particles tool shows its stage in the editor's own picture and gives the level its
+# Game look back afterwards.
+with_look "$look" check view-game-stage 'choose=View>Game look,choose=Tool>Particles' 'workspace=Particles' 'view=Editor' 'stage=\(true, 0\)' 'look_sun=None' 'problem=none'
+with_look "$look" check view-game-stage-back 'choose=View>Game look,choose=Tool>Particles,choose=Tool>Move' 'workspace=Objects' 'view=GameLook' 'stage=\(false, 0\)' 'look_sun=Some\(130000' 'problem=none'
 with_look "$look" check view-back      'choose=View>Game look,choose=View>Editor' 'view=Editor' 'look=loaded:3abf9a2f' 'look_sun=None' 'ground_look=None' 'undo=None'
 with_look "$look" check view-game-move 'click-row=11,choose=View>Game look,drag-gizmo=-60' 'view=GameLook' "$moved" 'undo=Some\("drag"\)' 'dragging=false'
 with_look "$look" check_sized "$narrow" narrow-view 'choose=View>Game look' 'window=621x' 'view=GameLook' 'look_sun=Some\(130000' "$row" 'toolbar_fits=Some\(true\)'
@@ -886,6 +895,62 @@ check particles-place "$P,click-button=Save emitter,click-button=Place in level,
 check particles-place-unsaved "$P,click-button=Place in level" \
     'workspace=Particles' 'objects=22' 'emitter_placed=0' 'level_schema=1' 'undo=None' 'problem=none'
 unset ARC_EDITOR_CHECK_PARTICLES
+
+# The project's settings. Without a project folder they are to be had from the Level menu and
+# say that there is none. With a folder that has no project file they open by themselves:
+# setting up writes arc-project.json and a starter level, and the editor opens that level;
+# started again on the same folder the editor finds the project, opens its start level by
+# itself and shows nothing unasked. A project file of an older version is never changed by
+# looking: converting is the person's to ask for, and keeps the old file beside the new one.
+check project-none 'choose=Level>Project settings' 'project=NoFolder' 'project_dialog=true' 'objects=22' 'problem=none'
+ARC_EDITOR_CHECK_PROJECT=project; export ARC_EDITOR_CHECK_PROJECT
+check project-setup 'click-button=Set up project,click-button=Close settings' \
+    'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'objects=22' 'question=No' 'problem=none'
+[ -s "$work/project-setup/project/arc-project.json" ] && [ -s "$work/project-setup/project/levels/first-level.level.json" ] \
+    || { wanted project-setup && { echo "project-setup: FAILED, the project file or the starter level was not written"; failed=1; }; }
+check project-setup-again 'click-row=11' 'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'selected=Some\("Tall box"\)'
+if wanted project-convert; then
+    mkdir -p "$work/project-convert/project"
+    printf '%s' '{"schema":1,"project":{"name":"Old"},"startup":{"start_level":"levels/old.level.json"},"rendering":{"profile":"assets/render/look-v1.json"},"controls":{"move_forward":"W","move_backward":"S","move_left":"A","move_right":"D","jump":"Space","toggle_view":"V","release_cursor":"Escape","look":{"mouse":true,"gamepad_right_stick":true}}}' \
+        > "$work/project-convert/project/arc-project.json"
+    cp "$work/project-convert/project/arc-project.json" "$work/project-convert.before"
+fi
+check project-convert 'click-row=11' 'project=NeedsConversion' 'project_dialog=true' 'has_file=false'
+if wanted project-convert; then
+    cmp -s "$work/project-convert/project/arc-project.json" "$work/project-convert.before" \
+        || { echo "project-convert: FAILED, the old project file was changed without being asked"; failed=1; }
+fi
+check project-convert-again 'click-button=Convert project file' 'project=Ready' 'project_dialog=true' 'problem=none'
+if wanted project-convert-again; then
+    cmp -s "$work/project-convert/project/arc-project.json.schema-1.bak" "$work/project-convert.before" \
+        || { echo "project-convert-again: FAILED, the old project file was not kept as a backup"; failed=1; }
+fi
+# A folder whose only level file cannot be read is not set up over it: the button says that
+# it makes a new starter level, and the old file is as it was afterwards. A project file of
+# a newer version is refused, shown, and neither converted nor changed.
+if wanted project-legacy; then
+    mkdir -p "$work/project-legacy/project/levels"
+    printf 'not a level' > "$work/project-legacy/project/levels/current-map.level.json"
+fi
+check project-legacy 'click-button=Set up with a new starter level' 'project=Ready' 'project_dialog=true' 'has_file=true' 'objects=22' 'problem=none'
+if wanted project-legacy; then
+    [ "$(cat "$work/project-legacy/project/levels/current-map.level.json")" = 'not a level' ] \
+        && [ -s "$work/project-legacy/project/levels/first-level.level.json" ] \
+        || { echo "project-legacy: FAILED, the old level was changed or no starter was made"; failed=1; }
+fi
+if wanted project-newer; then
+    mkdir -p "$work/project-newer/project"
+    printf '%s' '{"schema":3,"project":{"name":"Newer"},"startup":{"start_level":"levels/a.level.json"},"rendering":{"profile":"assets/render/look-v1.json"},"controls":{"move_forward":"W","move_backward":"S","move_left":"A","move_right":"D","jump":"Space","toggle_view":"V","release_cursor":"Escape","look":{"mouse":true,"gamepad_right_stick":true}},"planned":{"multiplayer":{"clients":null,"bots":null,"network_conditions":null,"start_at":null,"zone":null},"gameplay":{"mode":null,"team_count":null,"respawn_seconds":null,"weapon_set":null}}}' \
+        > "$work/project-newer/project/arc-project.json"
+    cp "$work/project-newer/project/arc-project.json" "$work/project-newer.before"
+fi
+check project-newer 'click-row=11' 'project=Refused:project\.schema_unsupported' 'project_dialog=true' 'has_file=false'
+if wanted project-newer; then
+    cmp -s "$work/project-newer/project/arc-project.json" "$work/project-newer.before" \
+        && [ "$(ls "$work/project-newer/project" | wc -l | tr -d ' ')" = 1 ] \
+        || { echo "project-newer: FAILED, the newer project file was changed or something was written beside it"; failed=1; }
+fi
+unset ARC_EDITOR_CHECK_PROJECT
 
 # check_exit <name> <steps> <saved: yes|no>: the editor must end by itself before the check's
 # own end, with status 0, and the level file must or must not have been written.

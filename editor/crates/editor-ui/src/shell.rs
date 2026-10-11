@@ -41,6 +41,7 @@ use crate::{
         notice::{notice, show_notice},
         paint::{commit_layer_name, fill_layer_names, show_layers},
         play::show_play,
+        project::{fill_project_name, project_dialog, show_project, ProjectDialog},
         review::{fit_review, review_panel, show_review},
         rules::{fill_rule_fields, show_rules},
         snap::{mirror_snap, show_snap, snap_overlay},
@@ -52,6 +53,7 @@ use crate::{
         view::{show_view, view_control},
     },
     particles::{GpuPreview, Particles, Preview},
+    project::Project,
     session::{pump_editor, Editor, PumpEditor},
     theme::{feathers::ui_theme, size, spacing},
     tool::{Brush, BrushAim, ChosenRule, LookStatus, PaintLayer, PlaceAt, Snap, Tool, ViewMode},
@@ -71,14 +73,15 @@ fn mark_modal(
     levels: Res<LevelDialog>,
     menu: Res<MenuOpen>,
     shutdown: Res<Shutdown>,
-    particles: Res<Particles>,
+    (particles, project): (Res<Particles>, Res<ProjectDialog>),
     mut modal: ResMut<Modal>,
 ) {
     let open = unsaved.question == Question::Asking
         || *levels != LevelDialog::Closed
         || menu.0
         || *shutdown != Shutdown::No
-        || particles.removing().is_some();
+        || particles.removing().is_some()
+        || project.open;
     if modal.0 != open {
         modal.0 = open;
     }
@@ -171,6 +174,7 @@ fn shell() -> impl Scene {
             status_bar(),
             menu_scrim(),
             level_dialog(),
+            project_dialog(),
             unsaved_dialog(),
             remove_dialog(),
             shutdown_dialog(),
@@ -259,9 +263,14 @@ fn keep_drawing(
         Res<Collapsed>,
         Res<Modal>,
         Res<ViewMode>,
-        Res<Particles>,
-        Res<Preview>,
-        Res<GpuPreview>,
+        // The Particles tool's and the project's, as one: a tuple takes sixteen at most.
+        (
+            Res<Particles>,
+            Res<Preview>,
+            Res<GpuPreview>,
+            Res<Project>,
+            Res<ProjectDialog>,
+        ),
     ),
     mut seen: Local<Option<(u64, u64, u64, bool)>>,
     mut frames_left: Local<u8>,
@@ -288,9 +297,7 @@ fn keep_drawing(
         collapsed,
         modal,
         view_mode,
-        particles,
-        preview,
-        gpu,
+        (particles, preview, gpu, project, project_dialog),
     ) = choices;
     let chosen = tool.is_changed()
         || brush.is_changed()
@@ -305,7 +312,9 @@ fn keep_drawing(
         || view_mode.is_changed()
         || particles.is_changed()
         || preview.is_changed()
-        || gpu.is_changed();
+        || gpu.is_changed()
+        || project.is_changed()
+        || project_dialog.is_changed();
     if input || chosen || editor.busy() || *seen != Some(view) {
         *frames_left = FRAMES_AFTER_A_CHANGE;
     }
@@ -373,6 +382,8 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<Particles>()
             .init_resource::<Preview>()
             .init_resource::<GpuPreview>()
+            .init_resource::<Project>()
+            .init_resource::<ProjectDialog>()
             .add_observer(confirm_level_name)
             .add_systems(Startup, shell.spawn())
             .add_systems(PreUpdate, pump_editor.in_set(PumpEditor))
@@ -383,6 +394,7 @@ impl Plugin for EditorUiPlugin {
                     (fit_panels, fit_review, fit_emitters, fit_emitter).chain(),
                     (
                         show_review,
+                        (show_project, fill_project_name).chain(),
                         tell_emitter_assets,
                         run_preview,
                         show_preview,

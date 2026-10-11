@@ -44,6 +44,10 @@ pub struct MenuOpen(pub bool);
 /// click that closes the menu, so that the click does nothing else: it chooses no object and
 /// begins no stroke. The toolbar stays free, so that a press on another menu's button closes
 /// this menu and opens that one.
+///
+/// A menu's button must never be under this layer: it would open its menu on the press and
+/// not hear the release, and would stay pressed. A menu that is not in the toolbar is put in
+/// front of the layer (`view::view_control`).
 #[derive(Component, Default, Clone)]
 pub struct MenuScrim;
 

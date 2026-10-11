@@ -567,6 +567,129 @@ pub fn short_hash(hex: &str) -> &str {
     hex.get(..8).unwrap_or(hex)
 }
 
+/// A refusal about the project's file, in words: a setup or a conversion that could not be
+/// done, or a file that cannot be used. `parameter` returns the value of a named parameter
+/// of the diagnostic.
+pub fn project<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> Problem {
+    let detail = parameter("detail").filter(|detail| !detail.is_empty());
+    let with_detail = |words: &str| match detail {
+        Some(detail) => format!("{words} What the reader said: {detail}."),
+        None => words.to_owned(),
+    };
+    let (title, remedy): (&str, String) = match code {
+        "project.convert_required" => (
+            "The project file is of an older version",
+            "Nothing was changed. Convert it in the Project settings.".into(),
+        ),
+        "project.schema_unsupported" => (
+            "The project file is of a version this editor does not read",
+            match parameter("schema") {
+                Some(schema) => format!(
+                    "It is of version {schema}, which this editor has no way to convert: it \
+                     was written by a newer editor. Nothing was changed. Open the project \
+                     with that editor."
+                ),
+                None => "It was written by another editor, and this one has no way to \
+                         convert it. Nothing was changed."
+                    .into(),
+            },
+        ),
+        "project.locked" => (
+            "Another editor is converting the project file",
+            "Nothing was changed. Try again in a moment. If no other editor is open, one \
+             that stopped unexpectedly left arc-project.json.lock in the folder: remove \
+             that file."
+                .into(),
+        ),
+        "project.changed" => (
+            "The project file was changed while it was being converted",
+            "Another program wrote it. Nothing was replaced, and no backup was kept of the \
+             older content. Look at the file and convert again."
+                .into(),
+        ),
+        "project.outside_folder" => (
+            "A file of the project is a link to somewhere outside its folder",
+            match parameter("path") {
+                Some(path) => format!(
+                    "The editor does not read or write through {path}. Put the file itself \
+                     into the project's folder."
+                ),
+                None => "The editor does not read or write through it. Put the file itself \
+                         into the project's folder."
+                    .into(),
+            },
+        ),
+        "project.levels_rejected" => (
+            "The folder's level files cannot be read",
+            "Nothing was made. The Project settings list each file with its reason; a new \
+             starter level is made only when you choose it there."
+                .into(),
+        ),
+        "project.conflict" => (
+            "A file that would have been written is there already",
+            match parameter("path") {
+                Some(path) => format!(
+                    "Nothing was changed. The editor does not write over {path}. Move that \
+                     file away and try again."
+                ),
+                None => "Nothing was changed. Move that file away and try again.".into(),
+            },
+        ),
+        "project.value" => (
+            "The project cannot have that value",
+            with_detail("A project needs a name of 1 to 96 characters. Nothing was changed."),
+        ),
+        "project.decode" | "project.schema_missing" => (
+            "The project file is not one this editor can read",
+            with_detail("It is not changed. Put right what is wrong with it, or move it away."),
+        ),
+        "project.limit" => (
+            "The project file is larger than a project file can be",
+            "It may be another file under the project file's name.".into(),
+        ),
+        "project.read" => (
+            "The project file could not be read",
+            with_detail("Check that the folder can be read."),
+        ),
+        "project.write" | "project.create_folder" => (
+            "The project could not be written",
+            with_detail("Check that the folder can be written to."),
+        ),
+        "project.start_level_missing" => (
+            "The level the project starts with is not in the folder",
+            "Save a level under that name, or put the file back.".into(),
+        ),
+        other => return problem(other, parameter),
+    };
+    Problem {
+        title: title.into(),
+        remedy,
+    }
+}
+
+/// Why a level file of a folder cannot be what a project starts with, in words: the reader's
+/// code and what it said.
+pub fn level_rejection(code: &str, detail: &str) -> String {
+    let with = |words: &str| {
+        if detail.is_empty() {
+            words.to_owned()
+        } else {
+            format!("{words} ({detail})")
+        }
+    };
+    match code {
+        "source.decode" => with("it is not a level this editor can read"),
+        "schema.unsupported" => "it was saved by a different version of the editor".to_owned(),
+        "project.outside_folder" => {
+            "it is a link to a file outside the project's folder".to_owned()
+        }
+        "project.limit" => "it is larger than a level can be".to_owned(),
+        "project.read" => with("it could not be read"),
+        "project.not_a_file" => "it is not a file".to_owned(),
+        other => format!("it is not a valid level ({other})"),
+    }
+}
+
 /// What a number of an emitter is called in its panel, by the dotted name the shared
 /// particle format uses for it. A name this table does not know is shown as it is.
 pub fn emitter_field(field: &str) -> &str {
@@ -695,6 +818,50 @@ mod tests {
 
     fn none(_: &str) -> Option<&'static str> {
         None
+    }
+
+    #[test]
+    fn every_refusal_about_the_project_is_a_sentence_that_says_nothing_was_lost() {
+        for code in [
+            "project.convert_required",
+            "project.schema_unsupported",
+            "project.locked",
+            "project.changed",
+            "project.outside_folder",
+            "project.levels_rejected",
+            "project.conflict",
+            "project.value",
+            "project.decode",
+            "project.schema_missing",
+            "project.limit",
+            "project.read",
+            "project.write",
+            "project.create_folder",
+            "project.start_level_missing",
+        ] {
+            let words = project(code, none);
+            assert!(!words.title.contains("project."), "{code}: {}", words.title);
+            assert!(!words.title.contains("Something went wrong"), "{code}");
+            assert!(!words.remedy.is_empty(), "{code}");
+        }
+        // A backup that is there already: the file is named, and it is not written over.
+        let backup = |key: &str| (key == "path").then_some("/game/arc-project.json.schema-1.bak");
+        let words = project("project.conflict", backup);
+        assert!(words
+            .remedy
+            .contains("does not write over /game/arc-project.json.schema-1.bak"));
+        // A newer file says which version it is, and that it is not one to convert.
+        let newer = |key: &str| (key == "schema").then_some("9");
+        let words = project("project.schema_unsupported", newer);
+        assert!(words.remedy.contains("version 9") && words.remedy.contains("newer editor"));
+        // Each reason a level file is passed over for is said in words.
+        assert_eq!(
+            level_rejection("source.decode", "expected value at line 1"),
+            "it is not a level this editor can read (expected value at line 1)"
+        );
+        assert!(level_rejection("project.outside_folder", "").contains("outside"));
+        assert!(level_rejection("schema.unsupported", "x").contains("different version"));
+        assert!(level_rejection("box.extents", "").contains("box.extents"));
     }
 
     #[test]

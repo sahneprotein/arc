@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 scene-data = { path = "crates/scene-data" }
+project-spec = { path = "crates/project-spec" }
 editor-core = { path = "crates/editor-core" }
 editor-cook = { path = "crates/editor-cook" }
 editor-services = { path = "crates/editor-services" }

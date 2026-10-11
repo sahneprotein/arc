@@ -15,8 +15,9 @@ use std::path::PathBuf;
 
 use bevy::{
     asset::RenderAssetUsages,
-    camera::{Exposure, Hdr},
+    camera::{visibility::RenderLayers, Exposure, Hdr},
     core_pipeline::tonemapping::Tonemapping,
+    gizmos::transform_gizmo::TransformGizmoCamera,
     image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     light::{
         atmosphere::ScatteringMedium, Atmosphere, AtmosphereEnvironmentMapLight,
@@ -53,7 +54,7 @@ pub struct LookSun;
 
 /// The sky Game look makes from the profile.
 #[derive(Component)]
-struct LookSky;
+pub struct LookSky;
 
 /// How bright the editor's own light and its ambient light are, in the engine's units.
 pub const EDITOR_SUN_ILLUMINANCE: f32 = 8000.0;
@@ -169,12 +170,15 @@ pub fn box_mesh(full_extents: Vec3, repeat_m: f32) -> Mesh {
 
 /// Puts the game's sun, sky and camera settings on when Game look is chosen, and takes them
 /// off when the editor's own picture is. The view that was never in Game look is not touched.
-fn apply_look(
+pub(crate) fn apply_look(
     mut commands: Commands,
     (view, look): (Res<ViewMode>, Res<GameLook>),
-    camera: Single<(Entity, &mut Camera), With<ViewCamera>>,
+    camera: Single<(Entity, &mut Camera, &Transform, Option<&RenderLayers>), With<ViewCamera>>,
     mut editor_sun: Query<&mut DirectionalLight, With<EditorSun>>,
-    made: Query<Entity, Or<(With<LookSun>, With<LookSky>)>>,
+    (made, other_cameras): (
+        Query<Entity, Or<(With<LookSun>, With<LookSky>)>>,
+        Query<Entity, (With<Camera>, Without<ViewCamera>)>,
+    ),
     (mut ground, mut materials, mut media): (
         ResMut<GroundRenderer>,
         ResMut<Assets<StandardMaterial>>,
@@ -191,20 +195,43 @@ fn apply_look(
         return;
     }
     *applied = wanted;
-    let (camera_entity, mut camera) = camera.into_inner();
-    let mut on_camera = commands.entity(camera_entity);
+    // Every camera of the window is HDR or none is. Cameras that draw into one window
+    // draw over each other's picture only while they agree in this; when the level's
+    // camera alone is HDR, the camera that draws the panels has a picture of its own, in
+    // which the 3D view is the window's colour, and that picture is laid over the level's.
+    // The view was then empty in Game look, with nothing said anywhere.
+    for other in &other_cameras {
+        if wanted == ViewMode::GameLook {
+            commands.entity(other).insert(Hdr);
+        } else {
+            commands.entity(other).remove::<Hdr>();
+        }
+    }
+    let (camera_entity, mut camera, transform, layers) = camera.into_inner();
     let Some(loaded) = look.0.as_ref().filter(|_| wanted == ViewMode::GameLook) else {
-        // Back to the editor's own picture: its light, its ambient light, the engine's own
-        // camera settings, and nothing the profile asked for.
-        on_camera
-            .remove::<(
-                Hdr,
-                Bloom,
-                AtmosphereSettings,
-                AtmosphereEnvironmentMapLight,
-            )>()
-            .insert((Exposure::default(), Tonemapping::default()));
-        camera.clear_color = ClearColorConfig::Custom(to_color(color::SURFACE_SUNKEN));
+        // Back to the editor's own picture: its light, its ambient light, and a camera
+        // that has nothing the profile asked for.
+        //
+        // The camera is not stripped of the game's look: it is made anew. What the engine
+        // keeps of a camera's sky for drawing is not all taken away when the sky's settings
+        // are taken off the camera, and the sky was then still drawn, in its HDR format,
+        // into a picture that was no longer HDR. The renderer refuses that, and the editor
+        // ended. A camera that is made anew has nothing left of the sky. It is the same
+        // camera to everything else: where it looks from, its rectangle of the window, its
+        // place among the cameras, and the layer it draws.
+        let mut plain = camera.clone();
+        plain.clear_color = ClearColorConfig::Custom(to_color(color::SURFACE_SUNKEN));
+        commands.entity(camera_entity).despawn();
+        let mut again = commands.spawn((
+            ViewCamera,
+            TransformGizmoCamera,
+            Camera3d::default(),
+            plain,
+            *transform,
+        ));
+        if let Some(layers) = layers {
+            again.insert(layers.clone());
+        }
         for made in &made {
             commands.entity(made).despawn();
         }
@@ -222,6 +249,7 @@ fn apply_look(
     };
     let profile = &loaded.profile;
     let (camera_look, sky, sun) = (&profile.camera, &profile.sky, &profile.sun);
+    let mut on_camera = commands.entity(camera_entity);
 
     // Camera: exposure, tone and bloom; the sky's settings and its light on the shadows.
     on_camera.insert((

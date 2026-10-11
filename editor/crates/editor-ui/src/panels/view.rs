@@ -36,6 +36,10 @@ use crate::{
 #[derive(Component, Default, Clone)]
 pub struct ViewControl;
 
+/// Where the control is among the layers of the window: over the layer of an open menu
+/// (`menu::menu_scrim`, 90) and under a menu's popup (100).
+const VIEW_CONTROL_LAYER: i32 = 95;
+
 /// The caption of the control's button, which names the chosen way.
 #[derive(Component, Default, Clone)]
 pub struct ViewCaption;
@@ -127,6 +131,13 @@ pub fn view_control() -> impl Scene {
             left: px(spacing::SPACE_4),
             top: px(spacing::SPACE_4),
         }
+        // In front of the layer that lies over the window while a menu is open, and behind
+        // the menus' popups. A menu's button opens its menu when it is pressed, and that
+        // layer is there before the button is let go: a button under it never hears that it
+        // was let go, stays pressed, and takes no second press. The toolbar's menus are
+        // clear of the layer; this one is in the 3D view, which the layer covers. It opened
+        // once and never again, so that Game look could be chosen and not left.
+        GlobalZIndex(VIEW_CONTROL_LAYER)
         // Only the button is something to click on: what is beside it is still the view.
         Pickable { should_block_lower: false, is_hoverable: false }
         Children [(

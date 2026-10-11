@@ -59,6 +59,10 @@
 //! is no longer starting, which is when the graphics card has said that it draws the effect,
 //! or the stage has said why it does not.
 //!
+//! `ARC_EDITOR_CHECK_PROJECT` names a folder that stands in the game's place for the project
+//! file; the result line says what the editor found of it (`project=`) and whether the
+//! Project settings are open (`project_dialog=`).
+//!
 //! `ARC_EDITOR_CHECK_PARTICLES` names a folder that stands in the game's place for the
 //! particle emitters; what the result line says of them is at `emitters_words`.
 //!
@@ -213,6 +217,15 @@ pub fn scripted_particles() -> Option<PathBuf> {
         return None;
     }
     std::env::var_os("ARC_EDITOR_CHECK_PARTICLES").map(PathBuf::from)
+}
+
+/// The folder a scripted check names with `ARC_EDITOR_CHECK_PROJECT`: it stands in the
+/// game's place for the project file, `arc-project.json`, and for what a setup makes there.
+pub fn scripted_project() -> Option<PathBuf> {
+    if !is_scripted() {
+        return None;
+    }
+    std::env::var_os("ARC_EDITOR_CHECK_PROJECT").map(PathBuf::from)
 }
 
 /// The window size a scripted check asks for, if it names one.
@@ -377,6 +390,8 @@ type Emitters<'w> = (
     ResMut<'w, editor_ui::Preview>,
     Res<'w, crate::stage::Stage>,
     Res<'w, editor_ui::GpuPreview>,
+    Res<'w, editor_ui::Project>,
+    Res<'w, editor_ui::ProjectDialog>,
 );
 
 /// What the result line says of the Particles tool:
@@ -528,7 +543,7 @@ fn scripted(
     gizmo_state: Res<TransformGizmoState>,
     (shown, ground, closing): (Res<Shown>, Res<GroundShown>, Dialogs),
     (tool, brush, aim, stroke, row_drag, view, look, picture): Tools,
-    (mut particles, mut preview, stage, gpu): Emitters,
+    (mut particles, mut preview, stage, gpu, project, project_dialog): Emitters,
     mut redraw: MessageWriter<RequestRedraw>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -669,7 +684,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} picture={}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} project={} project_dialog={} picture={}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -943,6 +958,13 @@ fn scripted(
                 &screen,
                 &snapshot.document,
             ),
+            // What the editor found of the project, in one word, with the refusal's code
+            // if it was refused; and whether the Project settings are open.
+            match project.state() {
+                editor_ui::ProjectState::Refused(refusal) => format!("Refused:{}", refusal.code),
+                state => state.word().to_owned(),
+            },
+            project_dialog.open,
             // What the saved picture is: nothing is claimed of a picture that is blank.
             picture.word(),
         );

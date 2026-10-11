@@ -36,6 +36,7 @@ use crate::{
         levels::LevelDialog,
         menu::{menu_item, menu_popup, menu_popup_end},
         play::play_control,
+        project::ProjectDialog,
         snap::{snap_button, snap_item},
     },
     particles::Particles,
@@ -320,6 +321,12 @@ fn level_menu() -> impl Scene {
                     (
                         menu_item("Cook", "")
                         on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.cook())
+                    ),
+                    @FeathersMenuDivider,
+                    (
+                        // The project's settings are to be had whatever is open.
+                        menu_item("Project settings", "")
+                        on(|_: On<Activate>, mut dialog: ResMut<ProjectDialog>| dialog.open = true)
                     ),
                 ]
             ),

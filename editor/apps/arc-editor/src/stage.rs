@@ -111,7 +111,18 @@ impl Plugin for StagePlugin {
             .init_resource::<Stage>()
             .init_resource::<GpuStage>()
             .add_systems(Startup, setup)
-            .add_systems(Update, (switch_stage, drive_gpu, draw_stage).chain());
+            .add_systems(
+                Update,
+                (
+                    // After the view's look was dealt with for this frame. Leaving Game
+                    // look makes the camera anew from what the camera has; the stage's
+                    // layer is put on the camera here, and must be there by then.
+                    switch_stage.after(crate::look::apply_look),
+                    drive_gpu,
+                    draw_stage,
+                )
+                    .chain(),
+            );
     }
 }
 
