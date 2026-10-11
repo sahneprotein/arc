@@ -279,7 +279,7 @@ Claude; the services handle API was kept compatible.
 | Game `cargo check -p protocol --no-default-features --offline` | Passed without warnings; collision helpers are gated under client/server. |
 | Game `cargo fmt --all -- --check`; editor `cargo fmt -p editor-services -- --check`; scoped `git diff --check` in both worktrees | Passed. |
 | Editor `cargo clippy -p editor-services --all-targets --offline --target-dir target/play-check -- -D warnings` | **Fails on the existing `src/actor.rs:48` `clippy::large_enum_variant`**. New Play findings were fixed; the agreed concrete receipt/terminal enum shapes have local, explained allowances. The older authoring API was not changed. |
-| Actual production cook-to-stop smoke | **Did not pass.** Verified package, actual broadphase, authenticated loopback server endpoint, accepted handshake and owning simulation were observed. No prepared 3D `ViewTarget`/acquired swapchain view appeared for the extracted 1280×720 window, despite ready Pip rig, GPU meshes/images and camera extraction prerequisites. `LevelDrawn`/`FirstControllableFrame` were withheld; the run ended `play.start_failed` with `play.readiness_timeout`. Display/occlusion is suspected, not established. |
+| Actual production cook-to-stop smoke (`play_smoke` example, real server and client) | **Passed on a later run.** The run reached measured `Running`; the client reported `LevelDrawn` and `FirstControllableFrame`; Stop was graceful and both children exited 0 and were reaped. This is the smoke example driving the coordinator, not a person clicking through the editor UI. An earlier attempt did not pass: package, actual broadphase, authenticated loopback server endpoint, accepted handshake and owning simulation were observed, but no prepared 3D `ViewTarget`/acquired swapchain view appeared, the two render stages were withheld and the run ended `play.start_failed` with `play.readiness_timeout`. |
 
 Final game check:
 
@@ -288,16 +288,19 @@ cargo nextest run -p protocol -p server -p client --offline \
   -E 'test(play::) or test(play_runtime::) or test(play_tests::) or test(config::tests::) or test(scene::tests::verified_cooked) or test(pip::tests::readiness::) or (package(protocol) and kind(lib))'
 ```
 
-The latest real smoke reaped the server with exit 0; its client exceeded the
-3-second grace deadline and was killed/reaped with signal 9, retaining
-`play.client_cleanup_failed { reason: grace_deadline }` independently of the
-startup failure. An earlier attempt stopped/reaped both children with exit 0 and
-no cleanup diagnostics. Temporary gate diagnostics were removed. Native logs
-remain under `editor/target/play-smoke`; the latest coordinator trace is
-`editor/target/play-smoke-result.log`.
+The passing smoke stopped and reaped both children with exit 0 and no cleanup
+diagnostics. The failed attempt before it reaped the server with exit 0; its
+client exceeded the 3-second grace deadline and was killed/reaped with signal 9,
+retaining `play.client_cleanup_failed { reason: grace_deadline }` independently
+of the startup failure. Temporary gate diagnostics were removed. Native logs
+remain under `editor/target/play-smoke`; the coordinator trace in
+`editor/target/play-smoke-result.log` of this worktree is the failed attempt's.
 
-Remaining validation: successful cook → measured Running → graceful Stop with an
-available, visible render surface; actual game primary-window close; Claude's
-editor UI lifecycle/unsaved-close checks; full CI and resolution of the existing
-authoring clippy warning. The process adapter is Unix-only; other platforms are
-not validated. No commit or push was made for this implementation.
+The editor UI's lifecycle and unsaved-close checks ran against a scripted
+stand-in for the game: the full scripted suite passed 210/210.
+
+Remaining validation: starting and stopping the real game from the editor's own
+window, rather than through the smoke example; actual game primary-window close;
+full CI and resolution of the existing authoring clippy warning. The process
+adapter is Unix-only; other platforms are not validated. The implementation is
+committed locally and not pushed.
