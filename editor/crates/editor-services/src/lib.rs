@@ -12,5 +12,6 @@ pub use editor_core::{review_play_payloads, ReviewProblem, ReviewScope};
 pub use look::*;
 pub use measurement::*;
 pub use package::*;
+pub use particle_spec;
 pub use persistence::*;
 pub use viewer::*;

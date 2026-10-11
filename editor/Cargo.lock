@@ -2274,6 +2274,7 @@ version = "0.1.0"
 dependencies = [
  "editor-cook",
  "editor-core",
+ "particle-spec",
  "scene-data",
  "serde",
  "serde_json",
@@ -4004,6 +4005,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19ab9ace3fad1b9ed603ddac5b595e69931fc50263d7e04e4055015b77b02da5"
 dependencies = [
  "icu_properties",
+]
+
+[[package]]
+name = "particle-spec"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
