@@ -61,6 +61,14 @@ pub fn verify_package(
     expected: Option<&PackageIdentity>,
     cancel: &AtomicBool,
 ) -> Result<VerifiedPackageReceipt, Diagnostic> {
+    verify_package_payloads(path, expected, cancel).map(|(receipt, _, _)| receipt)
+}
+/// Consume decoded payloads from the same verification reads, without reopening paths.
+pub(crate) fn verify_package_payloads(
+    path: &Path,
+    expected: Option<&PackageIdentity>,
+    cancel: &AtomicBool,
+) -> Result<(VerifiedPackageReceipt, SimulationPayload, VisualPayload), Diagnostic> {
     check_cancel(cancel)?;
     let path = fs::canonicalize(path).map_err(io_error)?;
     let bytes = read_bounded(&path.join("manifest.json"), 8192, cancel).map_err(|e| {
@@ -91,9 +99,13 @@ pub fn verify_package(
             .with("found", found));
     }
     check_cancel(cancel)?;
-    load_payloads(&path, &manifest, cancel)?;
+    let (simulation, visual) = load_payloads(&path, &manifest, cancel)?;
     check_cancel(cancel)?;
-    Ok(VerifiedPackageReceipt { path, identity })
+    Ok((
+        VerifiedPackageReceipt { path, identity },
+        simulation,
+        visual,
+    ))
 }
 fn identity_difference(
     expected: &PackageIdentity,

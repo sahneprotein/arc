@@ -1,8 +1,9 @@
 # Verified packages and the Play lifecycle boundary
 
-The receipt/preflight API below is implemented. The Play coordinator contract
-is agreed documentation for a later assignment; no Play commands, running state,
-process launch, or gameplay implementation is added by this prerequisite.
+The receipt/preflight API and P1 external Play coordinator are implemented in
+`editor-services`. Game readiness/control hooks live in arc-game; no game/editor
+crate dependency is introduced. Embedded Play and multi-client modes remain later
+work. Claude owns the editor UI integration.
 
 ## Implemented package receipt API
 
@@ -96,10 +97,45 @@ through consumption. Reopening by path after verification can race an external
 writer. This prerequisite returns identity only, not a runtime-ready payload
 lease. No process-supervision loop belongs in the serial editing/job worker.
 
-## Agreed future Play lifecycle (Claude's 19:16 UTC proposal)
+## Implemented P1 Play lifecycle
 
-Accept the proposal in full; there is no reason to lock authoring for an entire
-run. The following names/codes are a documented seam, not implemented exports.
+The agreed seam is exported from `editor_services`:
+
+```rust,ignore
+let mut play = PlayHandle::start(config)?;
+play.set_waker(Box::new(move || wake_event_loop()));
+play.submit(PlayRequest {
+    id: request_id,
+    control: PlayControl::Start { mode: PlayMode::ExternalGame, receipt },
+})?;
+for event in play.poll(32) { /* PlayEvent::Answer or PlayEvent::Ended */ }
+let status: std::sync::Arc<PlayStatus> = play.snapshot();
+play.submit(PlayRequest { id: stop_id, control: PlayControl::Stop { run } })?;
+```
+
+`submit` never waits. Caller IDs are echoed in `PlayAnswer.request`; its success
+acknowledges admission, not readiness. Queue rejection (`play.queue_full` or
+`play.coordinator_closed`) means the request was not accepted. Each accepted
+control has one answer; each admitted run has a separate terminal event.
+`PlayHandle::with_backend(config, Arc<dyn PlayBackend>)` supports scripted UI and
+coordinator checks without game binaries. Injected backends still pass the common
+receipt revalidation/capability check. `PlayChild::poll/stop/kill/try_wait` must be
+nonblocking, and a returned exit means the child has been reaped.
+
+`PlayStatus { revision, run: Option<PlayRun> }` retains the latest terminal run.
+`PlayRun { id, mode, receipt, identity, state, processes }` pins native receipt and
+identity; each `PlayProcess` exposes role, optional PID/native log path, measured
+stages, listening endpoint and native exit facts. `PlayEnd { primary, cause,
+cleanup }` preserves the underlying startup/runtime cause and independent
+server/client cleanup exit facts/diagnostics. The handle is a UI-thread handle:
+`snapshot()` uses a try-read of the cached Arc and returns its last observed
+revision on contention. It never waits for the supervisor or a state lock.
+`poll(&mut self, max)` drains at most that many events. Installing a waker wakes
+once; each published revision wakes outside locks. Callback panics are contained.
+
+Only `ExternalGame` launches in P1; `InEditor` returns `play.mode_unsupported`.
+The typed Start requires a receipt; a caller without one reports
+`play.package_required` before submission. No authoring lock is held for a run.
 
 * Verification is an async job. After successful verification, `StartPlay` and
   `StopPlay` are control commands on a separate Play coordinator/handle, not
@@ -157,6 +193,111 @@ run. The following names/codes are a documented seam, not implemented exports.
   need an editing transaction committed/cancelled; the running lifetime does not
   hold that transaction or the serial worker.
 
-External launch, embedded gameplay, wake implementation and process cleanup are
-future work. Game integration remains blocked by the explicit foundation-commit
-gate. This prerequisite changes no game, engine, editor UI or app source.
+## External launch and runtime protocol
+
+`PlayConfig` requires explicit native server/client executable, working-directory,
+asset-root and log-directory paths. `from_game_worktree(root, logs)` selects
+`root/target/debug/{server,client}` and `root/assets`. No PATH discovery or implicit
+build occurs. Both children receive the same `--cooked-package` receipt path and
+`--cooked-package-hash` manifest digest. `BEVY_ASSET_ROOT` is the directory
+containing `assets/`. Local launch selects an available UDP port and passes
+`--bind 127.0.0.1:<port>`; the client uses the actual authenticated listening
+endpoint. Reservation is released before child bind; a port race fails startup.
+Metrics also bind loopback port 0. The development key is explicitly local and
+inherited `ARC_PRIVATE_KEY` is removed for this pair.
+
+Revalidation compares every pinned identity field and consumes decoded payloads
+from those same reads. Ground or visual terrain, no spawns, or runtime limits fail
+before spawning. Children independently verify the expected manifest/payload
+hashes at consumption, then their existing gameplay handshake compares package
+identity and game fingerprint. The receipt remains an attestation, not a lock.
+
+Each child gets an independent loopback TCP listener and OS-random 256-bit token
+(current process adapter supports Unix). `--play-control`, `--play-run-id` and
+`--play-token` require each other and the cooked path/hash. Without these flags,
+standalone test-level/cooked startup remains supported.
+
+Frames are newline JSON, at most 4096 bytes, with bounded reads/writes each tick.
+Unknown fields, bad version/run/token/role/hash, sequence gaps/replays and unequal
+game fingerprints fail closed. Report fields are `version: 1`, `run`, `token`,
+`role`, `package_hash`, `protocol_version`, `sequence` and tagged `event`:
+`stage { stage }`, `listening { address }`, or `expected_window_close`. Stop is
+`{ version: 1, run, token, command: "stop" }`. Tokens are not logged. DTOs are
+mirrored in game `protocol::play::wire` and editor `play::wire`, with matching exact
+JSON tests; neither repository depends on the other.
+
+Server stages are `package_verified`, then `collision_ready` (all authored level
+colliders observed in the actual broadphase), then a nonzero loopback listening
+endpoint. Client stages are `package_verified`, `collision_ready`,
+`handshake_accepted`, `simulating` (owning synced prediction has executed a tick),
+`level_drawn`, then `first_controllable_frame`. The last two require the owning
+Pip rig/dependencies, required GPU mesh/image assets, ready pipelines and render
+world confirmation after render submission/presentation. Startup does not infer
+readiness from process creation, logs, clock alignment alone or a bare window.
+
+Client primary-window close sends and bounded-flushes explicit close intent before
+engine exit. Only that intent plus a clean client exit yields `play.window_closed`;
+zero exit without intent is unexpected. Stop uses the same server graceful
+shutdown/watchdog as OS signals and client `AppExit::Success`. Parent channel loss
+or malformed commands stop the runtime. Default deadlines are startup 30s,
+graceful stop 3s, then kill/reap 2s. Forced/unreaped/unclean cleanup is reported
+separately, including `play.server_cleanup_failed`. Terminal publication waits
+for reaping or the deadline. Dropping the handle triggers emergency cleanup; it
+is not the normal editor shutdown acknowledgement. Logs remain for diagnostics.
+A cancelled verifier cannot later launch a child. One verifier thread and one
+queued preparation bound preflight work (`play.preflight_busy` fails a start if
+that slot is occupied); synchronous filesystem calls
+remain subject to the verification limitations documented above.
+
+## Smoke path and validation boundary
+
+From `editor/`, after building the game worktree's production server/client:
+
+```sh
+cargo run -p editor-services --example play_smoke -- /private/tmp/arc-game-play-readiness
+```
+
+The example cooks the current sample map, verifies its receipt, starts one pair,
+waits for measured Running, requests Stop, and requires both clean/reaped exits.
+It records native logs under `editor/target/play-smoke`. This requires a working
+window/render environment and the required game assets. Scripted real-child
+adapter tests exercise cook-to-stop, close/crash and protocol failure without a
+renderer. The results below do not represent full CI or human visual inspection.
+
+### Validation recorded 2026-10-11
+
+All commands below ran in the isolated `codex/play-backend` and
+`codex/play-readiness` worktrees. Editor UI changes and UI validation belong to
+Claude; the services handle API was kept compatible.
+
+| Check | Actual outcome |
+| --- | --- |
+| Editor `cargo nextest run -p editor-services --offline --target-dir target/play-services` | **45/45 passed**, no skipped tests. Includes fake-child deadlines/failed kill/unreaped cleanup, startup exit classification, receipt mutation, correlated controls and real subprocess/channel cook-to-stop, close/crash/fingerprint rejection. |
+| Game filtered nextest command below | **78/78 passed**, 178 skipped. Includes all **54 protocol library tests**, client/server startup config checks, cooked scene construction, measured collision/listening, authenticated Stop/EOF, close intent, owning simulation/render acknowledgement gate and the actual Pip rig/dependency readiness check. |
+| Editor `cargo check -p editor-services --all-targets --offline --target-dir target/play-check` | Passed, including the smoke example. |
+| Game `cargo build -p server -p client --offline` | Passed with production features (test clock disabled). |
+| Game `cargo check -p protocol --no-default-features --offline` | Passed without warnings; collision helpers are gated under client/server. |
+| Game `cargo fmt --all -- --check`; editor `cargo fmt -p editor-services -- --check`; scoped `git diff --check` in both worktrees | Passed. |
+| Editor `cargo clippy -p editor-services --all-targets --offline --target-dir target/play-check -- -D warnings` | **Fails on the existing `src/actor.rs:48` `clippy::large_enum_variant`**. New Play findings were fixed; the agreed concrete receipt/terminal enum shapes have local, explained allowances. The older authoring API was not changed. |
+| Actual production cook-to-stop smoke | **Did not pass.** Verified package, actual broadphase, authenticated loopback server endpoint, accepted handshake and owning simulation were observed. No prepared 3D `ViewTarget`/acquired swapchain view appeared for the extracted 1280×720 window, despite ready Pip rig, GPU meshes/images and camera extraction prerequisites. `LevelDrawn`/`FirstControllableFrame` were withheld; the run ended `play.start_failed` with `play.readiness_timeout`. Display/occlusion is suspected, not established. |
+
+Final game check:
+
+```sh
+cargo nextest run -p protocol -p server -p client --offline \
+  -E 'test(play::) or test(play_runtime::) or test(play_tests::) or test(config::tests::) or test(scene::tests::verified_cooked) or test(pip::tests::readiness::) or (package(protocol) and kind(lib))'
+```
+
+The latest real smoke reaped the server with exit 0; its client exceeded the
+3-second grace deadline and was killed/reaped with signal 9, retaining
+`play.client_cleanup_failed { reason: grace_deadline }` independently of the
+startup failure. An earlier attempt stopped/reaped both children with exit 0 and
+no cleanup diagnostics. Temporary gate diagnostics were removed. Native logs
+remain under `editor/target/play-smoke`; the latest coordinator trace is
+`editor/target/play-smoke-result.log`.
+
+Remaining validation: successful cook → measured Running → graceful Stop with an
+available, visible render surface; actual game primary-window close; Claude's
+editor UI lifecycle/unsaved-close checks; full CI and resolution of the existing
+authoring clippy warning. The process adapter is Unix-only; other platforms are
+not validated. No commit or push was made for this implementation.
