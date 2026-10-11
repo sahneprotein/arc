@@ -525,9 +525,9 @@ workspace's "what did this change do" is this table applied to the last edit.
 | 1 | Play P1: implemented on `codex/play-backend`; game runtime support is on `codex/play-readiness` | integrate both branches into their respective main lines |
 | 2 | Objects: multi-selection, snapping, duplicate and drag reparenting implemented. Left: turn to slope | nothing outside the editor |
 | 3 | Review: core problems listed. Left: change summary | the core providing what changed |
-| 4 | Rendered viewport: Game Look now consumes the shared game look profile; compare captures with the client while the display is awake, then add published models and cooked-scene parity | shared presentation contract, capture verification and a real level/model asset path |
-| 5 | Assets: browser, import and reimport, models as objects, ground textures | the art pipeline and an asset reference in the scene/cooked format |
-| 6 | Particles: shared v1 spec, emitter services and the first editor authoring/reference-preview tool are implemented; add the Hanabi runtime adapter, then place and cook emitters | pin and compile Hanabi in editor and client; prove GPU preview and runtime parity |
+| 4 | Particles in the client, and parity: the shared v1 spec, emitter services, the authoring tool, the shared Hanabi adapter and the editor's GPU preview are implemented. Next: the game client draws emitters through the same adapter, then the same emitter is compared in an editor capture and a client capture; the adapter's refused fields (non-point shapes, drag) follow; placing and cooking emitters come after that | the client adding the adapter and loading emitters; a client capture to compare with; a decision on how a level refers to an emitter and how the cook carries it |
+| 5 | Rendered viewport parity: Game Look consumes the shared game look profile; compare captures with the client while the display is awake, then add published models and cooked-scene parity | shared presentation contract, capture verification and a real level/model asset path |
+| 6 | Assets: browser, model import and reimport, models as objects, ground textures | the art pipeline and an asset reference in the scene/cooked format |
 | 7 | Render tools: material and lighting preview modes, then scene lighting controls | the Game view and asset/material references |
 | 8 | Gameplay: zone exit, safe area, trigger as cooked volumes | the game's multi-zone and gateway work giving them a meaning; the format can come first |
 | 9 | Combat overlays | editor only; most useful once Play with several clients exists |
@@ -543,15 +543,54 @@ The current Game Look is an open-level preview: it uses the editor camera and re
 overlays, spawn markers and authored decorations. The profile is loaded at startup, so edits
 require restarting the editor. The shared particle contract is now in
 `editor/crates/particle-spec`, with a 16 KiB closed JSON schema, canonical writer, validation,
-stable ID/path helpers, and conservative live-particle estimate. Hanabi compatibility has only
-been checked from package metadata so far; compile and GPU pipeline validation remain open.
+stable ID/path helpers, and conservative live-particle estimate.
 The Particles tool now lists reusable game-folder emitters, creates and duplicates them, edits
 their shared spec fields with per-emitter undo/redo, saves explicitly, and previews a fixed-seed
 CPU reference simulation on a dedicated stage. The preview is clearly labeled as a reference;
-it is not the game's renderer. Targeted service/UI tests, the app build and two particle scripts
-passed. Emitter file operations serialize cooperating editor instances with a sidecar lock;
-non-cooperating writers can still race an overwrite, and stale locks after a crash require manual
-removal. Do not call particle preview parity complete until the shared Hanabi adapter is active.
+it is not the game's renderer. Emitter file operations serialize cooperating editor instances
+with a sidecar lock; non-cooperating writers can still race an overwrite, and stale locks after
+a crash require manual removal.
+
+The shared Hanabi adapter is `editor/crates/particle-runtime` (feature `hanabi-3d`,
+`bevy_hanabi` 0.19.0 exactly). What is established as of 2026-10-11, on one machine (Apple M1,
+Metal), by focused checks only:
+
+- The adapter and Hanabi compile against the Arc Bevy fork, in the adapter's own crate and in
+  the editor application. The adapter's six focused tests pass.
+- The Particles stage can ask for a GPU preview. It reaches Running, which means that Hanabi
+  reports the effect ready on the graphics card; the stage says Starting until then, and gives
+  up after five seconds with the reason it has. The scripted case holds Running for about two
+  seconds of further steps.
+- One capture of the default point emitter, taken after those two seconds, was looked at: a
+  column of particles from the emitter downwards, each lower one smaller and fainter. That is
+  sustained emission with gravity, shrinking size and fading colour, as the settings say. It
+  is one emitter, one capture, judged by eye.
+- A renderer error the stage caused is fixed: with no reference particle alive it handed the
+  engine a mesh without vertices, and the engine logged two "use-after-free" lines for it.
+  The run log of the capture has no error line.
+
+What is not established, and must not be claimed:
+
+- **Refused fields.** The adapter draws point emitters without drag. Sphere, cone and box
+  shapes and any nonzero drag are refused, not approximated. The editor then shows the
+  reference simulation and says which setting the game's runtime does not draw; the game
+  could not show such an emitter either.
+- **The stage shows the open draft.** The preview is built from the emitter as it is being
+  edited, saved or not. It is not the saved file, a cooked package or a running client.
+- **No parity with the client.** No capture of the game client has been compared with the
+  editor's, for any emitter. The preview uses the same adapter the client is meant to use;
+  that the two pictures agree is still to be shown.
+- **Emitters are not placeable or cooked.** A level cannot refer to an emitter, and the cook
+  carries none.
+- **Smaller limits.** The graphics card reports no count of living particles, so the overlay
+  gives only the most the settings allow. The stage camera is not HDR, so colour values above
+  one are not shown as the client's HDR camera would show them. The reference simulation is
+  the picture the tool begins with; the GPU preview is chosen by hand. Ready on the graphics
+  card is Hanabi's word, not a check of the pixels.
+
+Checks so far are focused ones: the adapter's tests, the editor's particle unit tests, the
+application build and four particle scripts (after the last fix only the GPU one was run
+again). No Clippy run, workspace suite or full scripted suite includes this work yet.
 
 ### 2.6 Not proposed
 
@@ -579,42 +618,52 @@ lighting, sky, shadows, exposure and tone mapping. Keep the current editor view 
 collision and painting. Game view and later material/lighting previews are view modes over the
 same scene, with editor overlays available in both.
 
-The work is staged so each step has a usable result:
+The work is staged so each step has a usable result. The order below is the current one:
+particles first, because the adapter and the editor's preview exist and the client's half is
+what is missing.
 
-1. **Game view parity.** Continue the render contract for the game's level meshes and terrain,
+1. **Particles in the client, and parity.** The shared renderer-independent v1 emitter
+   document and validation crate exist at `editor/crates/particle-spec`; its semantics cover
+   point, sphere, cone and box emission, uniform speed and lifetime, billboard width, linear
+   colour/size interpolation and world-space simulation after spawn. The editor has reusable
+   asset services, an authoring UI with explicit save, a fixed-seed reference preview and a
+   GPU preview through the shared Hanabi adapter (`editor/crates/particle-runtime`); section
+   2.5 says what is established of it and what is not. In order:
+   1. The game client adds the same adapter and draws an emitter from the game's folder.
+   2. One emitter, the same seed and the same moment: an editor capture and a client capture
+      are compared. Until that is done the GPU preview is the game's runtime in the editor,
+      not proof of what the client shows.
+   3. The adapter learns the fields it refuses today, sphere, cone and box shapes and drag,
+      each exactly or not at all, with the reference simulation as what it is compared with.
+   4. Emitters are placed in levels and their references go into the cooked visual payload.
+      Keep texture dependencies out of v1.
+
+   GPU preview requires a rendering-capable editor; headless checks validate and round-trip
+   the asset without opening a window.
+2. **Game view parity.** Continue the render contract for the game's level meshes and terrain,
    using the shared look profile already consumed by the client and editor. Compare a deterministic
    editor capture with a client capture when the display is awake. Add published GLB models to the editor after scene data and cooking can carry asset references. Do not call a
    view “Game” while it silently substitutes editor materials or lighting. The first Game-look
    view renders the open editor draft, so label it as a preview; it is not proof of the cooked
    package or a running client's final image. Keep selection and editing overlays legible without
    replacing the authored material.
-2. **Assets workspace.** Browse the game's published assets, show load/validation problems,
-   and place a model into a level. Keep authored sources and export tools separate from runtime
-   assets; cooked levels refer to published asset identities rather than machine-specific
-   source paths.
-3. **Particle workspace.** The shared renderer-independent v1 emitter document and validation
-   crate now exist at `editor/crates/particle-spec`; the editor and game depend on that same
-   source. Its defined semantics cover point, sphere, cone and box emission, uniform speed and
-   lifetime, billboard width, linear colour/size interpolation and world-space simulation after
-   spawn. The editor has reusable asset services and authoring UI with explicit save and a
-   dedicated fixed-seed reference preview. Next, translate the shared spec through one Hanabi
-   adapter used by the game and editor preview. Keep texture dependencies out of v1. A later step
-   places emitters in levels and adds their references to the cooked visual payload. GPU
-   preview requires a rendering-capable editor; headless checks validate and round-trip the
-   asset without opening a window.
+3. **Assets workspace.** Browse the game's published assets, show load/validation problems,
+   import a model and place it into a level. Keep authored sources and export tools separate
+   from runtime assets; cooked levels refer to published asset identities rather than
+   machine-specific source paths.
 4. **Material and lighting previews.** Add material-ball/material-swatch previews and a small
    lighting stage, followed by view modes such as Lit, Unlit and Wireframe in the level viewport.
    Scene-authored lights and environment settings come only after the scene/cook schema can
    represent them and the client consumes that same data.
 
-The editor and game both use Bevy 0.19.1, and the foundation plan already names `bevy_hanabi`
-0.19.0 for the particle sub-project. Metadata indicates the matching Bevy generation, but the
-custom Arc Bevy fork has not yet been proven to compile with Hanabi. Hanabi is the rendering backend, while the authored
-contract stays smaller and renderer-independent so file stability does not depend on registered
-engine modifier types. Verify its Bevy/wgpu/naga dependency graph against the pinned engine
-before integration. This does not settle texture/material references, GPU feature support,
-asset digest rules, or how the level cook includes effect dependencies; those are gates before
-emitters can be placed in a shipped level.
+The editor and game both use Bevy 0.19.1, and the foundation plan names `bevy_hanabi` 0.19.0
+for the particle sub-project. Hanabi 0.19.0 compiles against the Arc Bevy fork in the editor
+workspace and runs an effect there on Metal; the client's own build with it is still to be
+done. Hanabi is the rendering backend, while the authored contract stays smaller and
+renderer-independent so file stability does not depend on registered engine modifier types.
+This does not settle texture/material references, GPU feature support on other devices and
+backends, asset digest rules, or how the level cook includes effect dependencies; those are
+gates before emitters can be placed in a shipped level.
 
 For editor layout, keep authoring domains as workspaces rather than adding permanent toolbar
 buttons. The Particles workspace owns the emitter list, preview controls and selected-emitter
