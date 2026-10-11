@@ -1,7 +1,9 @@
 # Play and Stop, and how the editor's features are grouped
 
-A proposal, 2026-10-09, brought up to date on 2026-10-10 and three times on 2026-10-11 with
-what has been built since. Nothing proposed in it is decided. It has two parts: how starting and stopping the game should look and behave in the editor, and how
+A proposal, 2026-10-09, brought up to date on 2026-10-10 and four times on 2026-10-11 with
+what has been built since. The first three progress notes are left as records of their
+moment; where one says what is no longer so, a bracket says it, and the fourth note has the
+present state. Nothing proposed in it is decided. It has two parts: how starting and stopping the game should look and behave in the editor, and how
 the editor's features should be grouped as it grows into the production tool for a zoned
 online game with real-time combat. Each part says first what exists today and then what is
 proposed, and the two are never mixed in one table.
@@ -14,13 +16,14 @@ level, in its own window, and Stop ends it.
 - The game's side is on the branch `codex/play-readiness`: the game's server and client
   report their readiness steps to the editor and take its Stop.
 - Both branches are local to the development machine and merged nowhere. Neither is pushed.
+  [No longer so: both are pushed. Neither is merged. See the fourth note.]
 - Checked: the editor's full scripted suite passes with a scripted stand-in in the game's
   place; its current count is in the results below. The editor core's live smoke, with the
   real server and client on a cooked level, reached Running with the client's steps "level
   drawn" and "first controllable frame" measured, then stopped on request, and both processes
   ended by themselves and were collected.
 - Not checked: the editor's own window has not been used to start the real game, and the new
-  states have not been looked at on screen.
+  states have not been looked at on screen. [The first is done since: fourth note.]
 
 Sections 1.3 to 1.8 remain the design. What of them is built is said in 1.1 and 1.11; "Preview
 in Editor" (P2), the play settings of 1.9 and all of Part 2's groupings are proposals as before.
@@ -64,11 +67,12 @@ Results on the final build of that day, each of a different kind:
   in the client's log and is known to be harmless: the engine's window code reports a
   destroyed window with an ID it no longer knows as the client exits.
 - Not checked by anyone: nobody has looked at any of this on screen, and the real game has
-  still not been started from the editor's window.
+  still not been started from the editor's window. [It has been since: fourth note.]
 - Known and left as it is:
   - The game runs none of what a landscape's rules make. Such a level is refused; its ground
     and painted layers alone cannot be played while the rules are in it.
   - Starting the game works on Unix only, and both branches are local and unmerged.
+    [Both are pushed since, and still unmerged.]
   - The gizmo is on the first selected object in the core's order, which is by the objects'
     IDs and not by which was clicked last.
   - An object seen behind a handle of the gizmo cannot be clicked there: the handle takes the
@@ -135,7 +139,7 @@ Results on the final build of that note, each of a different kind:
   from the one older finding that is allowed by name.
 - The real game: not run again for this note. What the second note says of it still holds
   and nothing more: it was started by the editor core's smoke example, never from the editor's
-  window.
+  window. [It has been since, once: fourth note.]
 - Not checked by anyone: nobody has looked at any of this on screen. "Open log" has only
   shown a file in a scripted check, where nothing is opened; the core's way to open one is
   covered by the core's own tests.
@@ -169,6 +173,135 @@ Proposed next, in this order, none decided:
    to the simulation hash, once the core provides them.
 4. Play P2 or the play settings of 1.9, whichever the owner's answer in 1.12 puts first.
 
+Progress, 2026-10-11, the fourth note. Both branches are pushed and merged nowhere: the
+editor's `codex/play-backend` at `7079e0435` in the editor's repository, the game's
+`codex/play-readiness` at `3910bc8` in the game's. The engine's `arc/0.19` and the game's
+`main` have none of it. Four things are built, and the real game has been started from the
+editor's window for the first time.
+
+- A game folder is a project.
+  - The folder describes itself in a manifest, `arc-project.json`, in a format the editor and
+    the game share (`editor/crates/project-spec`): its name, the level it starts with, its
+    look profile and the keys the game has now.
+  - A folder without a manifest is offered a setup when the editor starts. It names the
+    first level of the folder that can be read, or makes a starter level. Nothing is written
+    before the name and the whole manifest are found valid, and nothing without the person's
+    word. Level files that cannot be read are listed with their reasons and left alone.
+  - Project settings are always in the Level menu. They show the name and folder, the start
+    level, the look profile and whether the editor read it, and the keys. What the game does
+    not read yet, for multiplayer and gameplay, is shown as controls that are switched off.
+  - A manifest of the first version is converted only on request: the file as it was is kept
+    beside it, the manifest is held against another editor and read again before it is
+    replaced. One of a newer version is shown as that and offered no conversion.
+  - What is read and written stays inside the folder. A manifest, a level or a levels folder
+    that is a link to somewhere else is refused.
+  - Without `--level` the editor opens the project's start level.
+- The game's client is told where the project is. A client the editor starts gets
+  `--project-root` and the folder as the file system resolves it, after the arguments it
+  always got, and only while the folder is a ready project; a server never gets it. On the
+  game's branch the client reads the manifest from there and takes its keys from it. It
+  still loads only the checked cooked package: the start level in the manifest is validated,
+  not loaded.
+- Game look in the 3D view can be seen and left. Three defects are mended, none of which had
+  ever been seen working:
+  - The view was empty, which is the black viewport of earlier captures. Only the level's
+    camera was made HDR, and the cameras of one window share a picture only while they agree
+    in that, so the panels' camera laid its own picture over the level's. Every camera of the
+    window is HDR together now.
+  - The view's menu opened once. Its button lay under the layer that covers the window while
+    a menu is open; it is in front of it now.
+  - Choosing Editor again ended the editor: the engine went on drawing the sky into a camera
+    that was no longer HDR. The camera is made anew when the view leaves Game look.
+- Emitters go from the tool into a cooked level.
+  - Authoring and the two previews are as section 2.5 has them: reusable emitters in the
+    game's folder, a reference simulation, and a GPU preview through the shared Hanabi
+    adapter.
+  - A level places an emitter: an object that names the emitter's stable ID and holds nothing
+    of its content. "Place in level" in the Particles tool puts it where the level was last
+    looked at; when it is off it says why. An emitter the open level places is not removed.
+  - A level goes to its second source schema with its first placement and stays there. Cooked,
+    a level without placements is byte for byte what it was. One with placements has a visual
+    payload of a second, strict schema: each placement with its world transform and the
+    SHA-256 of the emitter's saved file, read at cook time. The manifest and the server's
+    payload are unchanged; an emitter is only seen.
+  - A placement the game could not show is never passed over. The review lists a placement
+    whose emitter is missing, unreadable or not drawn by the adapter, and that stops Play; the
+    cook fails with the placement named; the check before a start says when an emitter was
+    changed after the cook.
+  - Each placement has one seed, worked out the same way in the editor and in the game.
+  - On the game's branch the client reads the second schema, finds each emitter in the game's
+    folder and builds it through the same adapter.
+
+The real game from the editor's window, once. One run on 2026-10-11, in the built editor of
+`7079e0435`, with the game's server and client as built on `codex/play-readiness`, in a
+game folder made for the run:
+
+- The folder was set up as a project in the editor, with a starter level of boxes and spawn
+  points. F5 cooked the level and had the cooked level checked; the check passed.
+- The server listened, the client connected, and the server logged that it accepted the
+  client's handshake. The editor showed the run as Running.
+- Stop was pressed. The server logged its orderly stop a third of a second later, the client's
+  window went, and the editor reported the end as `play.stopped`, with no notice of a process
+  left behind and no failed step. Neither process was there afterwards.
+- The client was started with `--project-root` and the folder; the server without.
+- A first try, minutes earlier, did not start, and the editor stopped both processes eleven
+  seconds in. The server's executable was older than a change to the game's dependencies, so
+  the two were builds that refuse each other. With only the server built again, the same
+  editor, project and cooked level ran as above. The editor did not print the reason it had
+  for that first try; by its code it is a mismatch of the protocol's fingerprint.
+
+What that run does not show, and nothing else does either:
+
+- **No exit statuses.** The check's result line has no field for them, and they were not
+  recorded otherwise. That both ended cleanly is inferred: the server logged its orderly
+  stop, both were gone well inside the three seconds they are given, nothing was reported
+  left behind, and neither log has an error. An end the person asked for stays `play.stopped`
+  whatever status a process leaves with, so that word alone does not prove status 0.
+- **One run, driven by a script.** The keys and clicks were played into the editor's window by
+  the scripted check. A person has still not done it by hand, and the states have not been
+  looked at on screen beyond the picture the check takes at its end.
+- **No emitter in it.** The level of the run places none. A level with a placed emitter has
+  not been played from the editor into the real client.
+- **No picture of the client.** No capture of the client was taken or compared with the
+  editor's, for Game look or for any emitter. Parity is not shown.
+- **Focused checks only.** Everything in this note was checked by tests of single packages
+  and by scripted cases chosen by name. No Clippy run, no workspace suite and no full scripted
+  suite includes any of it, in either repository. The counts in the third note are of an
+  earlier build.
+
+Known and left as it is:
+
+- A level of the first source schema that gets its first placement is saved in the second
+  schema over the same file, and no copy of the file as it was is kept.
+- A level file the editor cannot read is named with a reason, but not with the reader's own
+  detail.
+- A scripted check that waits for Running goes on waiting, for about three minutes, after
+  the run has already ended as failed.
+- The adapter draws point emitters without drag and refuses the rest, as before. The
+  Particles stage's camera is not HDR.
+- The settings shown switched off in Project settings do nothing.
+
+Proposed next, in this order, none decided:
+
+1. Make the proof whole. The check's result line carries each process's exit status and what
+   the cleanup said; a check that waits for Running fails at once when the run ends; then the
+   same run once more, and once with a level that places an emitter.
+2. A person at the window: the project set up, F5, Stop, a log opened from a notice, Game
+   look entered and left, and the states of all four notes looked at on screen.
+3. The full checks, in both repositories: the linter, each package's tests and the editor's
+   whole scripted suite, on the tips named above. Then the two branches are merged, the
+   game's pin of the editor's crates moved to the merged commit.
+4. Parity by picture: the same cooked level and the same emitter, at the same seed and
+   moment, in an editor capture and a client capture, with the display awake.
+5. A level is never rewritten in a newer schema without the file as it was kept beside it,
+   as the project's manifest already is.
+6. The project's settings that are switched off, one at a time, each when the game reads it:
+   the number of clients first, since the game's window gives several almost for free (1.9).
+7. The adapter's refused fields, sphere, cone and box shapes and drag, each exactly or not at
+   all.
+8. Published models: a reference in the scene and the cooked level, an Assets browser, a
+   model placed as an object (steps 6 and 7 of 2.5).
+
 Sources:
 
 - `crates/editor-services/docs/play-boundary.md`: the agreed contract between the UI and the
@@ -181,12 +314,12 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend`, which continues
-  `codex/play-workflow`. Local, not merged.
+- The editor as it is on the branch `codex/play-backend` (commit `7079e0435`), which continues
+  `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
-  branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`,
-  which continues it. Neither is merged into the game's `main`; `codex/play-readiness` is
-  local.
+  branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
+  (commit `3910bc8`), which continues it. Both are pushed; neither is merged into the game's
+  `main`.
 
 Words used here. The **open level** is the level as it is in the editor now, with every
 change made to it; the **saved file** is what the last Save wrote, and the two differ while
@@ -209,11 +342,12 @@ editor, from the request to the end of its cleanup.
 | The Play control (P0 of 1.11) | editor UI | Built. At the right end of the toolbar at every width. Its menu holds the two ways to play; the foot names the cooked level, says when the level has moved on from it, and offers "Cook" or "Cook first" |
 | The game running a cooked level | game, branch `codex/cooked-level-play` | Built for levels of boxes and spawn points. Server, client and `cargo xtask run-local` take `--cooked-package <folder> --cooked-package-hash <manifest hash>`. Each process verifies the package itself before it opens a port or a window, and builds collision, spawn points and the client's boxes from it |
 | The same level on both sides | game, the same branch | Built. The client's hello carries the hash of the package's manifest, the server accepts only its own, and the client checks the hash the server answers with. A cooked level against the built-in one, or against another cooked level, is refused before a character exists |
-| Landscape in the game | game, branch `codex/play-readiness` (local, not merged) | Built for ground and painted layers, and run in the live smoke: the cooked ground is the game's collision, and the painted layers its colour. What a landscape's rules make (grass, layers a rule fills) is not run, and a level that has any is refused, in words; nothing is dropped silently |
-| Starting the game from the editor (P1) | editor core, branch `codex/play-backend` (local, not merged) | Built for the game's own window. A Play coordinator starts one server and one client on the checked cooked level, reports each step they reach, stops them on request, and says how the run ended and whether each process was seen to end. A level whose landscape has rules, or a level without a spawn point, is refused before anything is started; ground and painted layers are let through |
+| Landscape in the game | game, branch `codex/play-readiness` (pushed, not merged) | Built for ground and painted layers, and run in the live smoke: the cooked ground is the game's collision, and the painted layers its colour. What a landscape's rules make (grass, layers a rule fills) is not run, and a level that has any is refused, in words; nothing is dropped silently |
+| Starting the game from the editor (P1) | editor core, branch `codex/play-backend` (pushed, not merged) | Built for the game's own window. A Play coordinator starts one server and one client on the checked cooked level, reports each step they reach, stops them on request, and says how the run ended and whether each process was seen to end. A level whose landscape has rules, or a level without a spawn point, is refused before anything is started; ground and painted layers are let through |
 | Open Game Window in the UI (P1) | editor UI, the same branch | Built. The control reads "Starting", "Game window open" and "Stopping"; Stop is beside it and also cancels a check or a start. The status bar names the steps reached and an end the person asked for; an end nobody asked for is a notice that stays, and a process that was started and never seen to end is a second notice. Closing the editor during a run stops the game first. The editor does not redraw while a game runs; the coordinator wakes it. The game's folder is named with `--game <folder>`; without it the control says no game is set up |
-| The game reporting readiness and taking Stop | game, branch `codex/play-readiness` (local, not merged) | Built. Server and client, started by the editor, report their steps over a local connection and stop when told; the client says when its window was closed by the player |
+| The game reporting readiness and taking Stop | game, branch `codex/play-readiness` (pushed, not merged) | Built. Server and client, started by the editor, report their steps over a local connection and stop when told; the client says when its window was closed by the player |
 | Keys, and what a notice offers | editor UI, the same branch | Built (third progress note). F5 cooks, checks and plays in the game's window and Shift+F5 stops; a notice offers "Play again", "Open log" and "Cook and play again" |
+| The game folder as a project | editor and game, the same two branches | Built (fourth progress note). The editor sets a folder up, shows its settings and converts an older manifest on request; a client it starts gets `--project-root` and the folder, a server does not; the client reads its keys from the manifest |
 | Of the design below, not built | editor UI | The box in the 3D view saying a game window is open; "Try again" for a server that did not shut down |
 | Running the game inside the editor's view | editor and game | Not built. P2. "Preview in Editor" is in the menu, switched off, with the reason |
 | Design | Claude Design | Drawn: five boards and the PlayControl page. P0 follows them where it can; the Play menu is as wide as any menu, because the design has no token for the wider menu it draws |
@@ -226,9 +360,14 @@ What has been run, and this note does not claim more. The editor's scripted suit
 game's processes. The editor core's live smoke ran the real server and client on a level of
 boxes cooked for the run and on a fixture package with ground and painted layers: each run reached
 Running with "level drawn" and "first controllable frame" measured, was stopped on request,
-and both processes ended with status 0 and were collected. The two have not been put together: nobody has yet started the real game from the
-editor's window, and the new states have not been looked at on screen. Neither repository has
-been through its full checks with these branches, and the process launch works on Unix only.
+and both processes ended with status 0 and were collected. The two have since been put
+together once, by a scripted check and not by a person: on 2026-10-11 the built editor set up
+a project, cooked and checked its level with F5, started the real server and client, showed
+Running after the server had accepted the client, and ended the run as stopped on request.
+That run did not record the two processes' exit statuses; the fourth progress note says what
+it shows and what it does not. The new states have not been looked at on screen. Neither
+repository has been through its full checks with these branches, and the process launch works
+on Unix only.
 
 ### 1.2 What the contract fixes, in the UI's terms
 
@@ -415,7 +554,7 @@ editor did not cook it, does the editor show the simulation data's hash instead.
 | Step | The person gets | Needs |
 |---|---|---|
 | P0, built | The Play control with its menu and foot; "Cook first"; "Checking" against the real `VerifyPackage`; the two ways to play shown as not available yet, with the reason | nothing new from the core |
-| P1, built on `codex/play-backend` and `codex/play-readiness` (neither merged) | Open Game Window: Starting, Running, Stop, every end of 1.7, closing during a run; one key to cook, check and play and one to stop; "Open log", "Play again" and "Cook and play again" on the notices. Left for later: the box in the 3D view | merging the two branches; in the game, what a landscape's rules make |
+| P1, built on `codex/play-backend` and `codex/play-readiness` (both pushed, neither merged) | Open Game Window: Starting, Running, Stop, every end of 1.7, closing during a run; one key to cook, check and play and one to stop; "Open log", "Play again" and "Cook and play again" on the notices. Left for later: the box in the 3D view | merging the two branches; in the game, what a landscape's rules make |
 | P2 | Preview in Editor: the game in the 3D view, the pointer handed over and back | the game's client able to run inside the editor's window |
 | P3 | Play settings of 1.9, one at a time | per setting, see its row |
 
@@ -434,29 +573,35 @@ editor did not cook it, does the editor show the simulation data's hash instead.
 
 ### 2.1 What exists today
 
-Everything here is on the branch and covered by the scripted checks, except where it says
-otherwise.
+Everything here is on the branch and covered by scripted checks, except where it says
+otherwise. What the fourth progress note adds was checked by scripted cases chosen by name;
+the whole suite has not been run over it.
 
 | Group | Implemented |
 |---|---|
-| Level | New, Open, Save, Save as, Cook; unsaved-changes questions; a failed save stays visible with "Try again"; one folder of levels |
+| Level | New, Open, Save, Save as, Cook; unsaved-changes questions; a failed save stays visible with "Try again"; one folder of levels. The game folder as a project: setup with a starter level, Project settings, conversion of an older manifest on request, the start level opened by default |
 | Objects | Boxes and spawn points: add where the view looks (on the landscape if it is there), select in the list or the view, several with Shift, move, rotate and scale with the gizmo, alone or several together, on one of them or at their middle, with or without snapping to a grid and to steps of a turn that can be set, duplicate, rename, type position, rotation and size, also over a value several differ in, remove; every change one undo step |
 | Hierarchy | A foldable tree. A row is dragged onto another to put its object under that one, or onto the list to bring it to the top |
 | Review | A tool whose panel lists what the core's review of the level finds: what stops the game from running it, and what is wrong with the level |
 | Landscape | Add a landscape of four tiles; sculpt (raise, lower, smooth, flatten); layers and painting; rules: grass scattered on a layer, a layer that fills on steep ground |
+| Particles | A tool with its own stage: reusable emitters of the game's folder listed, made, duplicated, edited with their own undo and saved; a reference simulation and a GPU preview through the shared adapter; an emitter placed in the level as an object, and cooked into the level's visual payload |
+| View | The 3D view's menu: the editor's look and Game look, which uses the game's look profile with its sky and HDR. An open-level preview with the editor's camera and overlays, not the client's picture |
 | Window | One toolbar row with menus, whose tools fold into a menu when the row cannot hold them, side panels that give way in a narrow window, status bar, notices |
-| Play | The control with its menu: cook, the cooked level named and checked on disk, and the game started in its own window and stopped, also with one key each (Part 1). On `codex/play-backend`, not merged |
+| Play | The control with its menu: cook, the cooked level named and checked on disk, and the game started in its own window and stopped, also with one key each (Part 1). A client is started with the project's folder. On `codex/play-backend`, pushed, not merged |
 | Checks | Scripted cases that play input into the built editor, with a scripted stand-in for the game where a case needs one, and start-up timings in the log |
 
 Outside the editor, on the game's branches `codex/cooked-level-play` and, continuing it,
-`codex/play-readiness` (local, not merged): the game runs a cooked level of boxes and spawn
+`codex/play-readiness` (pushed, not merged): the game runs a cooked level of boxes and spawn
 points, server and client refuse each other unless they hold the same one, and both report
 their readiness to an editor that started them. A level with a landscape is played with its
 ground and its painted layers; one whose landscape has rules is not, and the editor refuses to
-start it.
+start it. The client reads a project's manifest when it is given the folder, reads the placed
+emitters of a cooked level and builds them through the shared adapter; no picture of that has
+been compared with the editor's.
 
-Not there at all: assets of any kind, materials and textures, prefabs, making an empty group
-from the UI, anything about gameplay beyond a spawn point. Play
+Not there at all: models, materials and textures, an asset browser, prefabs, making an empty
+group from the UI, anything about gameplay beyond a spawn point. Emitters are the one kind of
+asset there is. Play
 is there in part: the game in its own window is; the game inside the editor's view and the
 play settings of 1.9 are not.
 
@@ -470,13 +615,14 @@ its own right-hand panel. The hierarchy, the view, the status bar and Play are s
 
 | Workspace | Is for | Today | Proposed additions |
 |---|---|---|---|
-| **Level** (the Level menu, not a tool) | the file, its cooked package and its settings | file actions, Cook | level settings (name, zone bounds, the collision profile); a cook report; the list of cooked packages with their hashes |
+| **Level** (the Level menu, not a tool) | the file, its cooked package and its settings | file actions, Cook; the project's setup and settings | the project's settings the game does not read yet; level settings (name, zone bounds, the collision profile); a cook report; the list of cooked packages with their hashes |
 | **Objects** | what stands in the level | box, spawn point, gizmo; several selected objects; snapping to a grid; duplicate; reparenting by drag | prefabs with overrides; snapping to a surface; turning an object to the slope; empty groups |
 | **Landscape** | the ground | sculpt, paint, grass rule, steep-ground rule | mask layers; ground textures; noise and erosion brushes; height-map import and export; tiles loaded around the view |
 | **Gameplay** | what the server acts on | spawn point (as an object) | volumes and markers with a meaning: zone exit to another zone, safe area, trigger, spawner for non-player characters, resource node, patrol path; walkable-area preview |
 | **Combat** | whether a place fights well | nothing | cover and sightline overlays from chosen points; distance rings for weapon ranges; spawn-to-spawn sight check; height advantage tint |
-| **Assets** | what the level is made from | nothing | browser, import and reimport, a model placed as an object, materials |
-| **Play** (the Play control, not a tool) | running the level | cook, the cooked level named and checked; the game started in its own window and stopped, for a level of boxes and spawn points | the rest of Part 1: the game in the editor's view, play settings |
+| **Particles** | effects that are placed in a level | reusable emitters, two previews, placing, cooking | the shapes and drag the adapter refuses; textures; a count of living particles |
+| **Assets** | what the level is made from | nothing but emitters, which have their own tool | browser, import and reimport, a model placed as an object, materials |
+| **Play** (the Play control, not a tool) | running the level | cook, the cooked level named and checked; the game started in its own window and stopped, for a level of boxes, spawn points, ground and painted layers; the client told the project's folder | the rest of Part 1: the game in the editor's view, play settings |
 | **Review** | whether the level is fit to ship | status bar, notices; a problems list from the core's review | what a change did to the simulation hash; cost readouts for grass and tiles; a summary of changes since the last save for a commit message |
 
 Why these and not a list by technology: a person building a zone thinks "place things",
@@ -522,11 +668,11 @@ workspace's "what did this change do" is this table applied to the last edit.
 
 | Order | Step | Waits for |
 |---|---|---|
-| 1 | Play P1: implemented on `codex/play-backend`; game runtime support is on `codex/play-readiness` | integrate both branches into their respective main lines |
+| 1 | Play P1: implemented on `codex/play-backend`; game runtime support is on `codex/play-readiness`. Run once from the editor's window against the real game, by a scripted check | the exit statuses in the check's result, the full checks in both repositories, then both branches into their main lines |
 | 2 | Objects: multi-selection, snapping, duplicate and drag reparenting implemented. Left: turn to slope | nothing outside the editor |
 | 3 | Review: core problems listed. Left: change summary | the core providing what changed |
-| 4 | Particles in the client, and parity: the shared v1 spec, emitter services, the authoring tool, the shared Hanabi adapter and the editor's GPU preview are implemented. Next: the game client draws emitters through the same adapter, then the same emitter is compared in an editor capture and a client capture; the adapter's refused fields (non-point shapes, drag) follow; placing and cooking emitters come after that | the client adding the adapter and loading emitters; a client capture to compare with; a decision on how a level refers to an emitter and how the cook carries it |
-| 5 | Rendered viewport parity: Game Look consumes the shared game look profile; compare captures with the client while the display is awake, then add published models and cooked-scene parity | shared presentation contract, capture verification and a real level/model asset path |
+| 4 | Particles in the client, and parity: the shared v1 spec, emitter services, the authoring tool, the shared Hanabi adapter, the editor's GPU preview, placing an emitter in a level and cooking it are implemented; the game's client reads the placements and builds them through the same adapter. Next: a level with a placed emitter played from the editor, then the same emitter compared in an editor capture and a client capture; the adapter's refused fields (non-point shapes, drag) follow | a client capture to compare with |
+| 5 | Rendered viewport parity: Game Look consumes the shared game look profile and is now seen in the 3D view; compare captures with the client while the display is awake, then add published models and cooked-scene parity | shared presentation contract, capture verification and a real level/model asset path |
 | 6 | Assets: browser, model import and reimport, models as objects, ground textures | the art pipeline and an asset reference in the scene/cooked format |
 | 7 | Render tools: material and lighting preview modes, then scene lighting controls | the Game view and asset/material references |
 | 8 | Gameplay: zone exit, safe area, trigger as cooked volumes | the game's multi-zone and gateway work giving them a meaning; the format can come first |
@@ -536,9 +682,11 @@ workspace's "what did this change do" is this table applied to the last edit.
 
 Steps 1–3 are implemented on their feature branches. Game Look is implemented in both the
 client and editor from `assets/render/look-v1.json`; package-scoped editor checks and the
-`view-game-look` scripted state check passed. Image parity has not yet been inspected: recent
-captures were taken while macOS had the display asleep, and both current and pre-A0 editor
-captures were uniformly black. Capture with the display awake before claiming visual parity.
+`view-game-look` scripted state check passed. Image parity has not yet been inspected. The
+uniformly black editor captures of that time had a cause in the editor and not only in a
+sleeping display: in Game look the panels' camera drew over the level's, which the fourth
+progress note says is mended. No capture of the client has been set beside one of the editor
+since. Capture both with the display awake before claiming visual parity.
 The current Game Look is an open-level preview: it uses the editor camera and retains editor
 overlays, spawn markers and authored decorations. The profile is loaded at startup, so edits
 require restarting the editor. The shared particle contract is now in
@@ -580,8 +728,9 @@ What is not established, and must not be claimed:
 - **No parity with the client.** No capture of the game client has been compared with the
   editor's, for any emitter. The preview uses the same adapter the client is meant to use;
   that the two pictures agree is still to be shown.
-- **Emitters are not placeable or cooked.** A level cannot refer to an emitter, and the cook
-  carries none.
+- **Emitters in a running client.** A level places an emitter and the cook carries it since
+  the fourth progress note, and the client reads it. A level with a placed emitter has not
+  been played from the editor into the real client by the editor's side.
 - **Smaller limits.** The graphics card reports no count of living particles, so the overlay
   gives only the most the settings allow. The stage camera is not HDR, so colour values above
   one are not shown as the client's HDR camera would show them. The reference simulation is
@@ -590,7 +739,9 @@ What is not established, and must not be claimed:
 
 Checks so far are focused ones: the adapter's tests, the editor's particle unit tests, the
 application build and four particle scripts (after the last fix only the GPU one was run
-again). No Clippy run, workspace suite or full scripted suite includes this work yet.
+again). Placing and cooking were checked the same way: tests of the scene data, the core, the
+cook and the services, and scripted cases chosen by name. No Clippy run, workspace suite or
+full scripted suite includes this work yet.
 
 ### 2.6 Not proposed
 
@@ -619,8 +770,8 @@ collision and painting. Game view and later material/lighting previews are view 
 same scene, with editor overlays available in both.
 
 The work is staged so each step has a usable result. The order below is the current one:
-particles first, because the adapter and the editor's preview exist and the client's half is
-what is missing.
+particles first, because both halves now exist, in the editor and in the client, and what is
+missing is the two seen side by side.
 
 1. **Particles in the client, and parity.** The shared renderer-independent v1 emitter
    document and validation crate exist at `editor/crates/particle-spec`; its semantics cover
@@ -629,14 +780,15 @@ what is missing.
    asset services, an authoring UI with explicit save, a fixed-seed reference preview and a
    GPU preview through the shared Hanabi adapter (`editor/crates/particle-runtime`); section
    2.5 says what is established of it and what is not. In order:
-   1. The game client adds the same adapter and draws an emitter from the game's folder.
-   2. One emitter, the same seed and the same moment: an editor capture and a client capture
+   1. Built: the game client has the same adapter, and emitters are placed in levels with
+      their references in the cooked visual payload, which the client reads. Texture
+      dependencies stay out of v1.
+   2. A level with a placed emitter is played from the editor into the real client.
+   3. One emitter, the same seed and the same moment: an editor capture and a client capture
       are compared. Until that is done the GPU preview is the game's runtime in the editor,
       not proof of what the client shows.
-   3. The adapter learns the fields it refuses today, sphere, cone and box shapes and drag,
+   4. The adapter learns the fields it refuses today, sphere, cone and box shapes and drag,
       each exactly or not at all, with the reference simulation as what it is compared with.
-   4. Emitters are placed in levels and their references go into the cooked visual payload.
-      Keep texture dependencies out of v1.
 
    GPU preview requires a rendering-capable editor; headless checks validate and round-trip
    the asset without opening a window.
@@ -658,12 +810,13 @@ what is missing.
 
 The editor and game both use Bevy 0.19.1, and the foundation plan names `bevy_hanabi` 0.19.0
 for the particle sub-project. Hanabi 0.19.0 compiles against the Arc Bevy fork in the editor
-workspace and runs an effect there on Metal; the client's own build with it is still to be
-done. Hanabi is the rendering backend, while the authored contract stays smaller and
+workspace and runs an effect there on Metal; the client on `codex/play-readiness` builds with
+it too. Hanabi is the rendering backend, while the authored contract stays smaller and
 renderer-independent so file stability does not depend on registered engine modifier types.
-This does not settle texture/material references, GPU feature support on other devices and
-backends, asset digest rules, or how the level cook includes effect dependencies; those are
-gates before emitters can be placed in a shipped level.
+How the level cook includes an emitter is settled since: by its ID and the SHA-256 of its
+saved file. This does not settle texture/material references, GPU feature support on other
+devices and backends, or how the emitter files themselves are shipped with a cooked level;
+those are gates before emitters can be placed in a shipped level.
 
 For editor layout, keep authoring domains as workspaces rather than adding permanent toolbar
 buttons. The Particles workspace owns the emitter list, preview controls and selected-emitter
