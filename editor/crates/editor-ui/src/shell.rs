@@ -21,8 +21,8 @@ use crate::{
             fold_rows, hierarchy_panel, show_hierarchy, show_selection, Collapsed, HierarchyPanel,
         },
         inspector::{
-            commit_name, fill_names, fill_new_inputs, inspector_panel, show_inspector,
-            InspectorPanel,
+            commit_name, fill_names, fill_new_inputs, fill_snap_steps, inspector_panel,
+            show_inspector, InspectorPanel,
         },
         levels::{
             confirm_level_name, forget_name_problem, level_dialog, level_dialog_keys,
@@ -33,9 +33,9 @@ use crate::{
         paint::{commit_layer_name, fill_layer_names, show_layers},
         play::show_play,
         rules::{fill_rule_fields, show_rules},
-        snap::{show_snap, snap_overlay},
+        snap::{mirror_snap, show_snap, snap_overlay},
         status::{show_status, status_bar},
-        toolbar::{fold_toolbar, show_tool, toolbar},
+        toolbar::{fold_toolbar, show_duplicate, show_tool, toolbar},
         unsaved::{
             answer_unsaved, close_requested, leave_or_ask, unsaved_dialog, Question, Unsaved,
         },
@@ -326,8 +326,7 @@ impl Plugin for EditorUiPlugin {
                     show_hierarchy,
                     show_selection.after(show_hierarchy),
                     fold_rows.after(show_hierarchy),
-                    show_inspector,
-                    fill_new_inputs.after(show_inspector),
+                    (show_inspector, fill_new_inputs, fill_snap_steps).chain(),
                     show_status,
                     show_brush_mode,
                     show_notice,
@@ -337,7 +336,13 @@ impl Plugin for EditorUiPlugin {
                     show_empty_hint,
                     (level_dialog_keys, forget_name_problem, show_level_dialog).chain(),
                     (mark_menu_open, mark_modal).chain(),
-                    (fold_toolbar, show_tool, show_snap, show_play),
+                    (
+                        fold_toolbar,
+                        show_tool,
+                        show_duplicate,
+                        show_play,
+                        (mirror_snap, show_snap).chain(),
+                    ),
                     (keys_show_row_focus, show_row_focus).chain(),
                     hide_idle_scrollbars,
                     (

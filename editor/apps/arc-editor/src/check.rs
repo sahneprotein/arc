@@ -29,7 +29,7 @@
 //! | `hold-stroke=…` | the same without the release; `release` ends it |
 //! | `erase-stroke=…` | the same as `stroke` with Shift held throughout |
 //! | `aim-ground=X:Z` | the cursor moves to the point of the ground plane at world X, Z and rests |
-//! | `key=K` | `ctrl+z`, `ctrl+shift+z`, `ctrl+y`, `ctrl+s`, `ctrl+shift+s`, `ctrl+o`, `ctrl+n`, `escape`, `enter`, `delete`, `down`, `w`, `e`, `r`, `t`, `f5`, `shift+f5` |
+//! | `key=K` | `ctrl+z`, `ctrl+shift+z`, `ctrl+y`, `ctrl+s`, `ctrl+shift+s`, `ctrl+o`, `ctrl+n`, `escape`, `enter`, `delete`, `down`, `w`, `e`, `r`, `t`, `f5`, `shift+f5`, `ctrl+d` |
 //! | `type=TEXT` | TEXT typed into whatever has the keyboard |
 //! | `type-field=F.A:TEXT` | a click into component A of field F, select all, TEXT, Enter |
 //! | `unfocus` | the window loses the keyboard focus |
@@ -473,7 +473,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {})",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -634,6 +634,10 @@ fn scripted(
                 .and_then(|path| path.file_name())
                 .map_or("none".into(), |name| name.to_string_lossy().into_owned()),
             play.word(),
+            // Whether the selection can be duplicated, and the snap steps the core holds.
+            editor_ui::session::duplicate_offer(&snapshot),
+            snapshot.snap.translation_m,
+            snapshot.snap.rotation_degrees,
         );
         exit.write(AppExit::Success);
     }
@@ -864,6 +868,7 @@ fn play(
                 "ctrl+shift+s" => input.key(&control_shift, KeyCode::KeyS, letter("S")),
                 "ctrl+o" => input.key(&control, KeyCode::KeyO, letter("o")),
                 "ctrl+n" => input.key(&control, KeyCode::KeyN, letter("n")),
+                "ctrl+d" => input.key(&control, KeyCode::KeyD, letter("d")),
                 "enter" => input.key(&[], KeyCode::Enter, Key::Enter),
                 "delete" => input.key(&[], KeyCode::Delete, Key::Delete),
                 "escape" => input.key(&[], KeyCode::Escape, Key::Escape),

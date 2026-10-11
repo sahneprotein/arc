@@ -6,7 +6,8 @@
 
 use bevy::prelude::*;
 use editor_core::{
-    ObjectId, TerrainPaintMode, TerrainPaintRequest, TerrainSculptMode, TerrainSculptRequest,
+    ObjectId, SnapSettings, TerrainPaintMode, TerrainPaintRequest, TerrainSculptMode,
+    TerrainSculptRequest,
 };
 use scene_data::LayerId;
 
@@ -37,7 +38,9 @@ impl Tool {
 }
 
 /// Whether a drag on the gizmo keeps to a grid, and to which. A setting of the editor, not of
-/// the level: it is not saved and changes nothing until something is dragged.
+/// the level: it is not saved and changes nothing until something is dragged. The editor's
+/// core keeps it ([`editor_core::SnapSettings`]); this is what the core last said, for the 3D
+/// view and the toolbar to read without asking.
 ///
 /// Moving puts the dragged object on the grid's lines, on the axes it is moved along. Turning
 /// goes in steps of the angle from where the object was. Scaling a box gives it a size that is
@@ -52,13 +55,20 @@ pub struct Snap {
 }
 
 impl Default for Snap {
-    /// Off, as the editor was before it could snap. Half a metre and fifteen degrees: the
-    /// steps a level blocked out of boxes is usually built on.
+    /// As the core has it before anything is set: off, as the editor was before it could
+    /// snap, at half a metre and fifteen degrees, the steps a level blocked out of boxes is
+    /// usually built on.
     fn default() -> Self {
+        SnapSettings::default().into()
+    }
+}
+
+impl From<SnapSettings> for Snap {
+    fn from(settings: SnapSettings) -> Self {
         Self {
-            on: false,
-            grid_m: 0.5,
-            angle_degrees: 15.0,
+            on: settings.enabled,
+            grid_m: settings.translation_m,
+            angle_degrees: settings.rotation_degrees,
         }
     }
 }

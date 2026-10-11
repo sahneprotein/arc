@@ -3,7 +3,8 @@
 //! Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes, Ctrl+S saves, Ctrl+Shift+S saves under
 //! another name, Ctrl+O opens a level and Ctrl+N begins a new one. On macOS the Command key
 //! works as well as Control. W, E and R choose the move, rotate and scale tool and T the
-//! landscape tool, and Delete removes the selection, unless a field has the keyboard. F5
+//! landscape tool, and Delete removes the selection, unless a field has the keyboard. Ctrl+D
+//! duplicates the selection. F5
 //! cooks the level if it has changed, checks the cooked level and plays it in the game's
 //! window; Shift+F5 stops what F5 began, at whatever step it is. While a dialog or a menu is
 //! open none of them act.
@@ -89,6 +90,8 @@ fn shortcuts(
         } else {
             editor.save();
         }
+    } else if keys.just_pressed(KeyCode::KeyD) {
+        editor.duplicate_selected();
     } else if keys.just_pressed(KeyCode::KeyO) {
         *levels = LevelDialog::Open;
     } else if keys.just_pressed(KeyCode::KeyN) {

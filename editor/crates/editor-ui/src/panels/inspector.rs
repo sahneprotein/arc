@@ -10,32 +10,40 @@
 //! a field goes to every selected object, as one undo step. The name is shown and cannot be
 //! changed for several at once.
 //!
+//! At the foot of the panel are the two steps of snapping, the grid in metres and the turn in
+//! degrees: settings of the object tools, which this panel is the place of. The core keeps
+//! them and refuses a step outside what it takes.
+//!
 //! Position and half size are number fields. Rotation is three number fields in degrees
 //! (turns about X, then Y, then Z); the document keeps a quaternion. The name is shown and
 //! not yet editable here.
 
 use bevy::{
+    app::PropagateOver,
     feathers::{
+        constants::fonts,
         containers::{pane, pane_body, pane_header},
         controls::{
             FeathersNumberInput, FeathersTextInput, FeathersTextInputContainer, NumberInputValue,
             UpdateNumberInput,
         },
         display::{label, label_dim},
-        theme::{ThemeBorderColor, ThemeToken, ThemedText},
+        theme::{ThemeBorderColor, ThemeTextColor, ThemeToken, ThemedText},
         tokens,
     },
     input_focus::InputFocus,
     prelude::*,
-    text::{EditableText, TextEdit},
+    text::{EditableText, FontSourceTemplate, TextEdit},
     ui_widgets::ValueChange,
 };
-use editor_core::{Command, FieldDescriptor, FieldKind, FieldValue, Mutation, ViewSnapshot};
+use editor_core::{
+    Command, FieldDescriptor, FieldKind, FieldValue, Mutation, SnapSettings, ViewSnapshot,
+};
 use scene_data::{ObjectData, ObjectRecord, RigidTransform};
 
 use crate::{
     session::Editor,
-    theme::{feathers::BORDER, size, spacing},
+    theme::{feathers::BORDER, size, spacing, text},
     wording,
 };
 
@@ -80,7 +88,110 @@ pub fn inspector_panel() -> impl Scene {
                 InspectorBody
                 Node { flex_grow: 1.0, min_height: px(0), overflow: Overflow::clip() }
             ),
+            (
+                pane_body()
+                Node { flex_shrink: 0.0, border: UiRect::top(px(1)) }
+                ThemeBorderColor(BORDER)
+                Children [
+                    group_title("Snap"),
+                    row(bsn_list![field_label("Grid (m)"), snap_step(SNAP_GRID)]),
+                    row(bsn_list![field_label("Turn (\u{b0})"), snap_step(SNAP_TURN)]),
+                ]
+            ),
         ]
+    }
+}
+
+/// The title of a group of rows: the design's small text, in capitals.
+fn group_title(title: &str) -> impl Scene {
+    let title = title.to_uppercase();
+    bsn! {
+        Text({title})
+        TextFont {
+            font: FontSourceTemplate::Handle(fonts::REGULAR),
+            font_size: {FontSize::Px(text::SMALL.size)},
+        }
+        PropagateOver<TextFont>
+        ThemeTextColor(tokens::TEXT_DIM)
+    }
+}
+
+/// The name the two snap steps go by as a field: its first number is the grid's step in
+/// metres, its second the step of a turn in degrees.
+pub const SNAP_FIELD: &str = "snap";
+pub const SNAP_GRID: usize = 0;
+pub const SNAP_TURN: usize = 1;
+
+/// One of the two snap steps as a number field.
+fn snap_step(axis: usize) -> impl Scene {
+    let field = SNAP_FIELD.to_owned();
+    let value = snap_step_of(SnapSettings::default(), axis);
+    bsn! {
+        @FeathersNumberInput
+        FieldInput { field: {field}, axis: {axis}, value: {value} }
+        Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0) }
+        on(commit_snap_step)
+    }
+}
+
+/// The step a snap field shows.
+fn snap_step_of(snap: SnapSettings, axis: usize) -> f32 {
+    if axis == SNAP_GRID {
+        snap.translation_m
+    } else {
+        snap.rotation_degrees
+    }
+}
+
+/// The snap setting with the step of one field replaced by what was typed there.
+pub fn with_snap_step(mut snap: SnapSettings, axis: usize, value: f32) -> SnapSettings {
+    if axis == SNAP_GRID {
+        snap.translation_m = value;
+    } else {
+        snap.rotation_degrees = value;
+    }
+    snap
+}
+
+/// Asks the core for a typed snap step. A step it refuses is reported like any problem, and
+/// the setting stays.
+fn commit_snap_step(
+    change: On<ValueChange<f32>>,
+    inputs: Query<&FieldInput>,
+    mut editor: NonSendMut<Editor>,
+) {
+    if !change.is_final {
+        return;
+    }
+    let Ok(input) = inputs.get(change.source) else {
+        return;
+    };
+    if input.value == change.value {
+        return;
+    }
+    let snap = with_snap_step(editor.snapshot().snap, input.axis, change.value);
+    editor.set_snap(snap);
+}
+
+/// Shows the snap steps the core has, when they changed.
+pub(crate) fn fill_snap_steps(
+    mut commands: Commands,
+    editor: NonSend<Editor>,
+    mut inputs: Query<(Entity, &mut FieldInput)>,
+) {
+    let snap = editor.snapshot().snap;
+    for (entity, mut input) in &mut inputs {
+        if input.field != SNAP_FIELD {
+            continue;
+        }
+        let value = snap_step_of(snap, input.axis);
+        if input.value != value {
+            input.value = value;
+            commands.trigger(UpdateNumberInput {
+                entity,
+                value: NumberInputValue::F32(value),
+            });
+        }
     }
 }
 
@@ -549,6 +660,26 @@ fn commit_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_typed_snap_step_replaces_that_step_and_leaves_the_rest_of_the_setting() {
+        let snap = SnapSettings {
+            enabled: true,
+            ..SnapSettings::default()
+        };
+        let finer = with_snap_step(snap, SNAP_GRID, 0.25);
+        assert_eq!(
+            (finer.enabled, finer.translation_m, finer.rotation_degrees),
+            (true, 0.25, 15.0)
+        );
+        let coarser = with_snap_step(finer, SNAP_TURN, 45.0);
+        assert_eq!(
+            (coarser.translation_m, coarser.rotation_degrees),
+            (0.25, 45.0)
+        );
+        assert_eq!(snap_step_of(coarser, SNAP_GRID), 0.25);
+        assert_eq!(snap_step_of(coarser, SNAP_TURN), 45.0);
+    }
 
     #[test]
     fn a_number_is_shown_to_the_millimetre() {

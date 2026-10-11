@@ -317,6 +317,34 @@ check_sized "$wide" wide-play     'click-button=Play'     'window=1261x' 'menu_o
 check_sized "$narrow" narrow-play 'click-button=Play'     'window=621x' 'menu_open=true' 'toolbar_folded=true' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-play-check 'cook,click-button=Play,click-item=Check cooked level' 'window=621x' 'play_check=passed' 'problem=none'
 
+# Duplicate copies the selection: with Ctrl+D and from the Add menu. The copy stands a metre
+# beside what it was copied from, is called after it, is what is selected afterwards, and is
+# one undo step. What is under an object is copied with it.
+dup='selected=Some\("Tall box copy"\)'
+check dup-key         'click-row=11,key=ctrl+d'           'objects=23' "$dup" 'position=Some\(\[1\.0, 0\.5, -8\.0\]\)' 'selection=1' 'undo=Some\("duplicate"\)' 'problem=none'
+check dup-menu        'click-row=11,choose=Add>Duplicate' 'objects=23' "$dup" 'position=Some\(\[1\.0, 0\.5, -8\.0\]\)' 'menu_open=false' 'problem=none'
+check dup-undo        'click-row=11,key=ctrl+d,key=ctrl+z' 'objects=22' 'redo=Some\("duplicate"\)' 'problem=none'
+check dup-twice       'click-row=11,key=ctrl+d,key=ctrl+d' 'objects=24' 'selected=Some\("Tall box copy copy"\)' 'position=Some\(\[2\.0, 0\.5, -8\.0\]\)'
+check dup-two         'click-row=10,shift-click-row=11,key=ctrl+d' 'objects=24' 'selection=2' 'duplicate=Offered' 'problem=none'
+check dup-children    'reparent=11:10,click-row=10,key=ctrl+d' 'objects=24' 'selected=Some\("Wall copy"\)' 'selection=1' 'problem=none'
+# Nothing selected: the row is off and says why, and the key does nothing.
+check dup-nothing     'key=ctrl+d'                        'objects=22' 'duplicate=NothingSelected' 'problem=none' 'undo=None'
+check dup-nothing-row 'click-button=Add,click-item=Duplicate' 'objects=22' 'menu_open=true' 'problem=none'
+# A landscape is not copied. With the new landscape selected (it is the last row), the row is
+# off, and the key says why in a notice; nothing is added either way.
+check dup-landscape   'choose=Add>Landscape,click-row=22,key=ctrl+d' 'selected=Some\("Landscape"\)' 'objects=23' 'duplicate=Landscape' 'problem=duplicate\.terrain_unsupported' 'notice=true' 'undo=Some\("create"\)'
+check dup-landscape-row 'choose=Add>Landscape,click-row=22,click-button=Add,click-item=Duplicate' 'selected=Some\("Landscape"\)' 'objects=23' 'duplicate=Landscape' 'menu_open=true' 'problem=none' 'undo=Some\("create"\)'
+# With a box selected beside it, the selection still holds a landscape: still off.
+check dup-landscape-and-box 'choose=Add>Landscape,click-row=22,shift-click-row=11,key=ctrl+d' 'selection=2' 'objects=23' 'duplicate=Landscape' 'problem=duplicate\.terrain_unsupported'
+check_sized "$narrow" narrow-dup 'click-row=11,choose=Add>Duplicate' 'window=621x' 'objects=23' "$dup" "$row" 'toolbar_fits=Some\(true\)'
+# The steps of snapping are two number fields at the foot of the inspector. The core keeps
+# them; the 3D view snaps by them; a step the core does not take is refused in words.
+check snap-steps      'inspector,type-field=snap.0:0.25,type-field=snap.1:45' 'snap_steps=\(0\.25, 45\)' 'snap=false' 'problem=none' 'undo=None'
+check snap-steps-on   'inspector,type-field=snap.0:0.25,click-button=Snap' 'snap_steps=\(0\.25, 15\)' 'snap=true' 'problem=none'
+check snap-step-move  'click-row=11,inspector,type-field=translation.0:0.1,type-field=snap.0:4,click-button=Snap,drag-gizmo=-60' 'position=Some\(\[(-4\.0|0\.0), 0\.5, -8\.0\]\)' 'snap=true' 'dragging=false'
+check snap-step-refused 'inspector,type-field=snap.0:0' 'snap_steps=\(0\.5, 15\)' 'problem=snap\.range' 'notice=true'
+check snap-turn-refused 'inspector,type-field=snap.1:120' 'snap_steps=\(0\.5, 15\)' 'problem=snap\.range' 'notice=true'
+
 # Playing, with a scripted stand-in for the game. "Open Game Window" checks the cooked level
 # and starts the game from that check; the control shows it running only once it is ready.
 PLAY='cook,click-button=Play,click-item=Open Game Window'

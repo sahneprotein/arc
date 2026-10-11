@@ -43,6 +43,36 @@ pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
             "That is not a place a level can be saved",
             "Choose a file inside the project folder.",
         ),
+        // Several objects at once, and the hierarchy.
+        "snap.range" => (
+            "That step is outside what snapping takes",
+            "Give a grid step from 0.01 to 100 metres and a turn from 1 to 90 degrees.",
+        ),
+        "duplicate.terrain_unsupported" => (
+            "A landscape cannot be duplicated",
+            "Take the landscape out of the selection and duplicate the rest.",
+        ),
+        "duplicate.incomplete"
+        | "duplicate.sources"
+        | "duplicate.append_order"
+        | "duplicate.spawn_order"
+        | "duplicate.child_changed" => (
+            "The selection changed while it was being duplicated",
+            "Nothing was copied. Duplicate again.",
+        ),
+        "selection.empty" => ("Nothing is selected", "Select an object first."),
+        "selection.active_not_selected" | "inspector.revision_required" => (
+            "The selection changed while the change was on its way",
+            "Nothing was changed. Do it again.",
+        ),
+        "field.kind" => (
+            "Not every selected object has that value",
+            "A size belongs to boxes only. Select boxes alone to give them one size.",
+        ),
+        "hierarchy.order_limit" | "hierarchy.duplicate_order" => (
+            "That object has no more room for children",
+            "Put the object under another one.",
+        ),
         // Showing a file, the game's log for instance, in the desktop's program for it.
         "path.missing" => (
             "That file is no longer there",
@@ -390,6 +420,7 @@ pub fn change_label(label_key: &str) -> &str {
         "delete" => "Remove",
         "layers" => "Layers",
         "reparent" => "Move in hierarchy",
+        "duplicate" => "Duplicate",
         "rule" => "Rules",
         "paint" => "Paint",
         "sculpt" => "Sculpt",

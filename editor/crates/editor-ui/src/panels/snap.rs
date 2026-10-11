@@ -5,6 +5,10 @@
 //! view a small overlay with the snap state, so that it can be read at every window width
 //! and while the pointer is on the gizmo. The overlay shows with the object tools, which are
 //! what snapping acts on.
+//!
+//! The setting itself is the editor core's. The switch asks the core to change it, and what
+//! the core then says is copied into [`Snap`] for the view and the toolbar. The two steps are
+//! number fields at the foot of the inspector (`inspector.rs`).
 
 use bevy::{
     feathers::{
@@ -17,8 +21,11 @@ use bevy::{
     ui_widgets::Activate,
 };
 
+use editor_core::SnapSettings;
+
 use crate::{
     panels::menu::menu_item,
+    session::Editor,
     theme::{radius, spacing},
     tool::{Snap, Tool},
 };
@@ -35,8 +42,20 @@ pub struct SnapOverlay;
 #[derive(Component, Default, Clone)]
 pub struct SnapWords;
 
-fn switch_snap(_: On<Activate>, mut snap: ResMut<Snap>) {
-    snap.on = !snap.on;
+fn switch_snap(_: On<Activate>, mut editor: NonSendMut<Editor>) {
+    let now = editor.snapshot().snap;
+    editor.set_snap(SnapSettings {
+        enabled: !now.enabled,
+        ..now
+    });
+}
+
+/// Copies the core's snap setting to where the 3D view and the toolbar read it.
+pub(crate) fn mirror_snap(editor: NonSend<Editor>, mut snap: ResMut<Snap>) {
+    let wanted = Snap::from(editor.snapshot().snap);
+    if *snap != wanted {
+        *snap = wanted;
+    }
 }
 
 /// The switch as a toolbar button.

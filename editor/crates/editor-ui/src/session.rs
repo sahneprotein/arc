@@ -5,6 +5,7 @@
 //! last saw. Nothing here waits for the worker.
 
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -12,9 +13,9 @@ use std::{
 use bevy::{prelude::*, window::RequestRedraw};
 use editor_core::GeometryBinding;
 use editor_core::{
-    Command, CommandOutcome, CommandRequest, Diagnostic, Mutation, ObjectId, ReviewScope,
-    SceneDocument, TerrainPaintRequest, TerrainSculptRequest, TerrainSurfaceRay, TransactionId,
-    ViewSnapshot,
+    Command, CommandOutcome, CommandRequest, Diagnostic, DuplicateObject, FieldAssignment,
+    GizmoPivot, Mutation, ObjectId, ReviewScope, SceneDocument, SnapSettings, TerrainPaintRequest,
+    TerrainSculptRequest, TerrainSurfaceRay, TransactionId, TransformRetention, ViewSnapshot,
 };
 use editor_services::{
     DiskVersion, EditorHandle, JobKind, JobOperation, JobOutput, JobTicket, PlayConfig,
@@ -921,11 +922,87 @@ impl Editor {
     }
 
     /// A click on an object, in the hierarchy or in the 3D view. A plain click selects it
-    /// alone. With `additive`, as with Shift held, it joins the selection, or leaves it if it
-    /// was in it.
+    /// alone. With `additive`, as with Shift held, it joins the selection and is the object
+    /// the gizmo is on; a selected object that the gizmo is not on gets the gizmo, and the one
+    /// it is on leaves the selection. See [`picked`].
     pub fn pick(&mut self, object: ObjectId, additive: bool) {
-        let selection = picked(&self.snapshot().selection, object, additive);
-        self.select(selection);
+        let snapshot = self.snapshot();
+        match picked(
+            &snapshot.selection,
+            snapshot.active.as_ref(),
+            object,
+            additive,
+        ) {
+            Picked::Selection(objects) => self.select(objects),
+            Picked::Active(object) => self.set_active(object),
+        }
+    }
+
+    /// Puts the gizmo on this one of the selected objects. Not an undo step, and the level is
+    /// not changed by it.
+    pub fn set_active(&mut self, object: ObjectId) {
+        self.submit(Command::SetActiveObject(Some(object)));
+    }
+
+    /// Chooses what the gizmo of several objects turns and sizes them about: the object it is
+    /// on, or the middle of them all. A setting of the editor, like the one above.
+    pub fn set_pivot(&mut self, pivot: GizmoPivot) {
+        self.submit(Command::SetGizmoPivot(pivot));
+    }
+
+    /// Sets whether a drag on the gizmo keeps to a grid, and the grid's steps. The core keeps
+    /// the setting and refuses steps outside what it takes; that is reported like any problem.
+    pub fn set_snap(&mut self, snap: SnapSettings) {
+        self.submit(Command::SetSnap(snap));
+    }
+
+    /// Gives every selected object the same name, position along some axes, or size along
+    /// some. One undo step, checked against the inspector's revision; an axis left out keeps
+    /// each object's own value.
+    pub fn assign(&mut self, assignment: FieldAssignment) {
+        let objects = self.snapshot().selection.to_vec();
+        if objects.is_empty() {
+            return;
+        }
+        self.submit_from_inspector(Command::AssignField {
+            objects,
+            assignment,
+            label_key: "edit".into(),
+        });
+    }
+
+    /// Copies the selected objects, each with everything under it, and selects the copies.
+    /// One undo step. Nothing happens when nothing can be copied: see [`duplicate_specs`].
+    pub fn duplicate_selected(&mut self) {
+        let snapshot = self.snapshot();
+        match duplicate_specs(&snapshot, || self.fresh_id()) {
+            Some(copies) => self.submit(Command::DuplicateObjects {
+                copies,
+                label_key: "duplicate".into(),
+            }),
+            None if snapshot.selection.is_empty() => {}
+            // Asked for with the key, where no row of a menu is off to say why: said as the
+            // core would say it. Nothing was asked of the core.
+            None => self.report(
+                Source::Command,
+                Err(Diagnostic::new("duplicate.terrain_unsupported")),
+            ),
+        }
+    }
+
+    /// Puts objects under another, after that one's other children and in the order given,
+    /// or at the top of the level with `None`. Each stays where it is in the level: the core
+    /// works out what it is under its new parent. One undo step; a move the core refuses,
+    /// such as under its own descendant, is reported like any other problem.
+    pub fn move_under(&mut self, objects: Vec<ObjectId>, parent: Option<ObjectId>) {
+        if objects.is_empty() {
+            return;
+        }
+        self.submit(Command::ReparentObjects {
+            objects,
+            parent,
+            keep: TransformRetention::KeepWorld,
+        });
     }
 
     pub fn undo(&mut self) {
@@ -1617,24 +1694,168 @@ pub const LAYER_STARTS: [(&str, [f32; 4]); 5] = [
     ("Snow", [0.85, 0.87, 0.90, 1.0]),
 ];
 
-/// The selection after a click on `object`. A plain click leaves it alone in the selection. An
-/// additive one puts it in, or takes it out if it was there.
+/// What a click on an object asks of the core.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Picked {
+    /// Select these. The core puts the gizmo on the last of them.
+    Selection(Vec<ObjectId>),
+    /// Leave the selection as it is and put the gizmo on this one of it.
+    Active(ObjectId),
+}
+
+/// What a click on `object` means. `active` is the selected object the gizmo is on.
 ///
-/// The order here is not kept: the core holds a selection as a set, in the order of the
-/// objects' IDs, and that is the order the snapshot gives it back in.
-pub fn picked(selection: &[ObjectId], object: ObjectId, additive: bool) -> Vec<ObjectId> {
+/// A plain click selects the object alone. An additive one, with Shift held, puts an object
+/// that is not selected into the selection, last, which is where the core puts the gizmo. On
+/// an object that is selected already it does the next thing a person can want of it: the
+/// gizmo goes to it, and if the gizmo is on it already, it leaves the selection. So one click
+/// chooses which of several objects the others are moved and turned about, and a second takes
+/// it out.
+///
+/// The order of a selection is otherwise not kept: the core holds it as a set, in the order of
+/// the objects' IDs, and that is the order the snapshot gives it back in.
+pub fn picked(
+    selection: &[ObjectId],
+    active: Option<&ObjectId>,
+    object: ObjectId,
+    additive: bool,
+) -> Picked {
     if !additive {
-        return vec![object];
+        return Picked::Selection(vec![object]);
     }
-    let mut picked: Vec<ObjectId> = selection
+    if !selection.contains(&object) {
+        let mut with: Vec<ObjectId> = selection.to_vec();
+        with.push(object);
+        return Picked::Selection(with);
+    }
+    if selection.len() > 1 && active != Some(&object) {
+        return Picked::Active(object);
+    }
+    Picked::Selection(
+        selection
+            .iter()
+            .filter(|id| **id != object)
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Whether the selection can be duplicated, and if not, why not.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DuplicateOffer {
+    Offered,
+    NothingSelected,
+    /// A landscape is selected, or is under something selected.
+    Landscape,
+}
+
+/// Whether "Duplicate" can be chosen for this selection.
+pub fn duplicate_offer(snapshot: &ViewSnapshot) -> DuplicateOffer {
+    if snapshot.selection.is_empty() {
+        DuplicateOffer::NothingSelected
+    } else if duplicate_specs(snapshot, || ObjectId::from_u128(1)).is_some() {
+        DuplicateOffer::Offered
+    } else {
+        DuplicateOffer::Landscape
+    }
+}
+
+/// How far along X a copy stands from what it was copied from, in metres: far enough to be
+/// seen as a second object, and two steps of the grid's first setting.
+pub const DUPLICATE_OFFSET_M: f32 = 1.0;
+
+/// The longest name the level takes, in bytes.
+const NAME_BYTES: usize = 256;
+
+/// What a copy is called: the name it was copied from and "copy", if the level takes a name
+/// that long.
+fn copy_name(name: &str) -> String {
+    let copy = format!("{name} copy");
+    if copy.len() <= NAME_BYTES {
+        copy
+    } else {
+        name.to_owned()
+    }
+}
+
+/// What duplicating the selection asks of the core: one copy for every selected object and
+/// for everything under one, each parent before what is under it. `fresh` makes a new ID.
+///
+/// A selected object that is not under another selected one is a root of what is copied. Its
+/// copy stands [`DUPLICATE_OFFSET_M`] beside it under the same parent, after that parent's
+/// last child, and is called after it. What is under a root is copied as it is, under the
+/// copy. A spawn point's copy gets the next order no spawn point has.
+///
+/// `None` when nothing is selected, and when a landscape is among what would be copied: the
+/// core copies none, and a copy of everything but the landscape is not what was asked for.
+pub fn duplicate_specs(
+    snapshot: &ViewSnapshot,
+    mut fresh: impl FnMut() -> ObjectId,
+) -> Option<Vec<DuplicateObject>> {
+    let document = &snapshot.document;
+    let mut next_spawn = document
+        .objects
         .iter()
-        .filter(|id| **id != object)
-        .cloned()
-        .collect();
-    if picked.len() == selection.len() {
-        picked.push(object);
+        .filter_map(|object| match object.data {
+            ObjectData::Spawn { order } => Some(order + 1),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    // The place after the last child of each parent a root's copy goes under.
+    let mut next_order: BTreeMap<Option<ObjectId>, u32> = BTreeMap::new();
+    let mut copies = Vec::new();
+    // The rows are in the core's order: each is followed by everything under it. Rows before
+    // this one are under a root that is being copied.
+    let mut copied_until = 0;
+    for (index, row) in snapshot.hierarchy.iter().enumerate() {
+        let root = index >= copied_until && snapshot.selection.contains(&row.id);
+        if root {
+            copied_until = row.subtree_end_exclusive;
+        }
+        if index >= copied_until {
+            continue;
+        }
+        let source = document.object(&row.id)?;
+        let spawn_order = match source.data {
+            ObjectData::Terrain(_) => return None,
+            ObjectData::Spawn { .. } => {
+                next_spawn += 1;
+                Some(next_spawn - 1)
+            }
+            _ => None,
+        };
+        let (name, sibling_order, local) = if root {
+            let order = next_order.entry(source.parent.clone()).or_insert_with(|| {
+                document
+                    .objects
+                    .iter()
+                    .filter(|other| other.parent == source.parent)
+                    .map(|other| other.sibling_order + 1)
+                    .max()
+                    .unwrap_or(0)
+            });
+            *order += 1;
+            let mut local = source.local.clone();
+            local.translation_m[0] += DUPLICATE_OFFSET_M;
+            (copy_name(&source.name), *order - 1, local)
+        } else {
+            (
+                source.name.clone(),
+                source.sibling_order,
+                source.local.clone(),
+            )
+        };
+        copies.push(DuplicateObject {
+            source: source.id.clone(),
+            id: fresh(),
+            name,
+            sibling_order,
+            spawn_order,
+            local,
+        });
     }
-    picked
+    (!copies.is_empty()).then_some(copies)
 }
 
 /// The landscape the landscape tools work on: the selected one, or else the level's first.
@@ -1756,6 +1977,12 @@ fn command_name(command: &Command) -> &'static str {
         Command::PreviewTerrainPaint { .. } => "preview paint",
         Command::CommitViewportEdit { .. } => "commit drag",
         Command::CancelViewportEdit { .. } => "cancel drag",
+        Command::AssignField { .. } => "assign",
+        Command::DuplicateObjects { .. } => "duplicate",
+        Command::ReparentObjects { .. } => "reparent",
+        Command::SetActiveObject(_) => "set active",
+        Command::SetGizmoPivot(_) => "set pivot",
+        Command::SetSnap(_) => "set snap",
         // A command the core added that this log has no name for yet.
         #[allow(
             unreachable_patterns,
@@ -2661,23 +2888,43 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_click_selects_one_object_and_an_additive_one_adds_or_takes_out() {
+    fn a_plain_click_selects_one_object_and_an_additive_one_adds_it_last() {
         let [a, b, c] = [1, 2, 3].map(ObjectId::from_u128);
+        let two = [a.clone(), b.clone()];
         assert_eq!(
-            picked(&[a.clone(), b.clone()], c.clone(), false),
-            std::slice::from_ref(&c)
+            picked(&two, Some(&b), c.clone(), false),
+            Picked::Selection(vec![c.clone()])
+        );
+        // Added last, whatever its ID: the core puts the gizmo on the last.
+        assert_eq!(
+            picked(&[b.clone(), c.clone()], Some(&c), a.clone(), true),
+            Picked::Selection(vec![b.clone(), c.clone(), a.clone()])
         );
         assert_eq!(
-            picked(&[a.clone(), b.clone()], c.clone(), true),
-            [a.clone(), b.clone(), c.clone()]
+            picked(&[], None, a.clone(), true),
+            Picked::Selection(vec![a.clone()])
         );
-        // Picked again, it leaves.
+    }
+
+    #[test]
+    fn an_additive_click_on_a_selected_object_gives_it_the_gizmo_and_the_next_takes_it_out() {
+        let [a, b, c] = [1, 2, 3].map(ObjectId::from_u128);
+        let three = [a.clone(), b.clone(), c.clone()];
+        // The gizmo is on c: a click on a moves it there and keeps all three.
         assert_eq!(
-            picked(&[a.clone(), b.clone(), c.clone()], a.clone(), true),
-            [b.clone(), c.clone()]
+            picked(&three, Some(&c), a.clone(), true),
+            Picked::Active(a.clone())
         );
-        assert_eq!(picked(&[], a.clone(), true), std::slice::from_ref(&a));
-        assert!(picked(std::slice::from_ref(&a), a.clone(), true).is_empty());
+        // The gizmo is on a now: the same click takes a out.
+        assert_eq!(
+            picked(&three, Some(&a), a.clone(), true),
+            Picked::Selection(vec![b.clone(), c.clone()])
+        );
+        // The only selected object has the gizmo, whatever the core says: it leaves.
+        assert_eq!(
+            picked(std::slice::from_ref(&a), None, a.clone(), true),
+            Picked::Selection(Vec::new())
+        );
     }
 
     #[test]
@@ -2708,6 +2955,14 @@ mod tests {
             editor.snapshot().selection.to_vec(),
             [ids[0].clone(), ids[2].clone()]
         );
+        // The gizmo is on the one picked last; a second pick of the other moves it there and
+        // keeps both selected.
+        assert_eq!(editor.snapshot().active.as_ref(), Some(&ids[2]));
+        editor.pick(ids[0].clone(), true);
+        settle(&mut editor);
+        assert_eq!(editor.snapshot().active.as_ref(), Some(&ids[0]));
+        assert_eq!(editor.snapshot().selection.len(), 2);
+        assert_eq!(editor.problem, None);
         // The core says which fields differ between them: the position, not the size.
         let mixed = |field: &str| {
             editor
@@ -2726,6 +2981,351 @@ mod tests {
         editor.undo();
         settle(&mut editor);
         assert_eq!(editor.snapshot().document.objects.len(), 3);
+    }
+
+    const UNIT_BOX: ObjectData = ObjectData::Box {
+        half_extents_m: [0.5; 3],
+    };
+
+    fn id(number: u128) -> ObjectId {
+        ObjectId::from_u128(number)
+    }
+
+    #[test]
+    fn a_copy_stands_beside_what_it_was_copied_from_with_everything_under_it() {
+        let mut editor = empty_level();
+        create(
+            &mut editor,
+            1,
+            None,
+            at([2.0, 0.5, 0.0], Quat::IDENTITY),
+            UNIT_BOX,
+        );
+        let spawn = ObjectData::Spawn { order: 0 };
+        create(
+            &mut editor,
+            2,
+            Some(1),
+            at([0.0, 1.0, 0.0], Quat::IDENTITY),
+            spawn,
+        );
+        create(
+            &mut editor,
+            3,
+            None,
+            at([9.0, 0.5, 0.0], Quat::IDENTITY),
+            UNIT_BOX,
+        );
+        editor.select(vec![id(1)]);
+        settle(&mut editor);
+
+        editor.duplicate_selected();
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        let snapshot = editor.snapshot();
+        assert_eq!(
+            snapshot.document.objects.len(),
+            5,
+            "the box and its spawn point"
+        );
+        // The copy is what is selected, and the gizmo is on it.
+        let [copy] = snapshot.selection.as_ref() else {
+            panic!("one copy is selected, not {:?}", snapshot.selection);
+        };
+        assert_eq!(snapshot.active.as_ref(), Some(copy));
+        let copy = snapshot.document.object(copy).unwrap();
+        assert_eq!(copy.name, "Object 1 copy");
+        assert_eq!(copy.parent, None);
+        assert_eq!(copy.local.translation_m, [3.0, 0.5, 0.0]);
+        // What was under the box is under the copy, where it was under the box, and a spawn
+        // point has an order of its own.
+        let under = snapshot
+            .document
+            .objects
+            .iter()
+            .find(|object| object.parent.as_ref() == Some(&copy.id))
+            .expect("the spawn point was copied too");
+        assert_eq!(under.name, "Object 2");
+        assert_eq!(under.local.translation_m, [0.0, 1.0, 0.0]);
+        assert!(matches!(under.data, ObjectData::Spawn { order: 1 }));
+
+        // One undo step takes both copies away again.
+        editor.undo();
+        settle(&mut editor);
+        assert_eq!(editor.snapshot().document.objects.len(), 3);
+    }
+
+    #[test]
+    fn of_two_selected_objects_one_under_the_other_only_the_upper_is_a_root() {
+        let mut editor = empty_level();
+        create(&mut editor, 1, None, at([0.0; 3], Quat::IDENTITY), UNIT_BOX);
+        create(
+            &mut editor,
+            2,
+            Some(1),
+            at([0.0, 2.0, 0.0], Quat::IDENTITY),
+            UNIT_BOX,
+        );
+        create(
+            &mut editor,
+            3,
+            None,
+            at([5.0, 0.0, 0.0], Quat::IDENTITY),
+            UNIT_BOX,
+        );
+        editor.select(vec![id(1), id(2), id(3)]);
+        settle(&mut editor);
+        let mut next = 100;
+        let copies = duplicate_specs(&editor.snapshot(), || {
+            next += 1;
+            id(next)
+        })
+        .expect("boxes can be copied");
+        // Each parent before what is under it; the two roots go after the last top object.
+        let shape: Vec<(ObjectId, u32, [f32; 3])> = copies
+            .iter()
+            .map(|copy| {
+                (
+                    copy.source.clone(),
+                    copy.sibling_order,
+                    copy.local.translation_m,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (id(1), 3, [1.0, 0.0, 0.0]),
+                (id(2), 1, [0.0, 2.0, 0.0]),
+                (id(3), 4, [6.0, 0.0, 0.0]),
+            ]
+        );
+        editor.duplicate_selected();
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        let snapshot = editor.snapshot();
+        assert_eq!(snapshot.document.objects.len(), 6);
+        assert_eq!(snapshot.selection.len(), 2, "the two copied roots");
+    }
+
+    #[test]
+    fn a_selection_with_a_landscape_in_it_is_not_copied() {
+        let mut editor = empty_level();
+        create(
+            &mut editor,
+            1,
+            None,
+            at([0.0; 3], Quat::IDENTITY),
+            flat(100, &[(0, 0)]),
+        );
+        create(
+            &mut editor,
+            2,
+            None,
+            at([5.0, 0.0, 0.0], Quat::IDENTITY),
+            UNIT_BOX,
+        );
+        editor.select(vec![id(1), id(2)]);
+        settle(&mut editor);
+        assert_eq!(duplicate_specs(&editor.snapshot(), || id(77)), None);
+        assert_eq!(
+            duplicate_offer(&editor.snapshot()),
+            DuplicateOffer::Landscape
+        );
+        // Asked for all the same, with the key: nothing is copied, and it is said why.
+        editor.duplicate_selected();
+        assert!(!editor.busy(), "nothing was asked of the core");
+        assert_eq!(editor.snapshot().document.objects.len(), 2);
+        let problem = editor
+            .problem
+            .clone()
+            .expect("the key does not fail silently");
+        assert_eq!(problem.code, "duplicate.terrain_unsupported");
+        let shown = crate::wording::problem(&problem.code, |_| None);
+        assert!(shown.title.contains("landscape"), "{}", shown.title);
+
+        // The box alone is copied, and that puts the notice away.
+        editor.select(vec![id(2)]);
+        settle(&mut editor);
+        assert_eq!(duplicate_offer(&editor.snapshot()), DuplicateOffer::Offered);
+        editor.duplicate_selected();
+        settle(&mut editor);
+        assert_eq!(editor.snapshot().document.objects.len(), 3);
+        assert_eq!(editor.problem, None);
+
+        // With nothing selected nothing is copied, and there is nothing to say.
+        editor.select(Vec::new());
+        settle(&mut editor);
+        assert_eq!(
+            duplicate_offer(&editor.snapshot()),
+            DuplicateOffer::NothingSelected
+        );
+        editor.duplicate_selected();
+        assert!(!editor.busy());
+        assert_eq!(editor.problem, None);
+    }
+
+    #[test]
+    fn an_object_moved_under_another_stays_where_it_is_in_the_level() {
+        let mut editor = empty_level();
+        let turned = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        create(&mut editor, 1, None, at([10.0, 0.0, 0.0], turned), UNIT_BOX);
+        create(
+            &mut editor,
+            2,
+            None,
+            at([12.0, 0.0, 0.0], Quat::IDENTITY),
+            UNIT_BOX,
+        );
+        create(
+            &mut editor,
+            3,
+            None,
+            at([14.0, 0.0, 0.0], Quat::IDENTITY),
+            UNIT_BOX,
+        );
+
+        editor.move_under(vec![id(2), id(3)], Some(id(1)));
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        let snapshot = editor.snapshot();
+        let worlds = scene_data::world_transforms(&snapshot.document).unwrap();
+        for (object, x) in [(2, 12.0), (3, 14.0)] {
+            let moved = snapshot.document.object(&id(object)).unwrap();
+            assert_eq!(moved.parent, Some(id(1)));
+            assert_ne!(
+                moved.local.translation_m,
+                [x, 0.0, 0.0],
+                "under a turned parent"
+            );
+            let world = Vec3::from_array(worlds[&id(object)].translation_m);
+            assert!(world.distance(Vec3::new(x, 0.0, 0.0)) < 1e-4, "{world}");
+        }
+        assert_eq!(snapshot.undo_label.as_deref(), Some("reparent"));
+
+        // One undo step puts both back at the top.
+        editor.undo();
+        settle(&mut editor);
+        let snapshot = editor.snapshot();
+        assert!([2, 3].iter().all(|object| snapshot
+            .document
+            .object(&id(*object))
+            .unwrap()
+            .parent
+            .is_none()));
+
+        // Under what is under it: the core refuses, in words.
+        editor.move_under(vec![id(1)], Some(id(1)));
+        settle(&mut editor);
+        let problem = editor.problem.clone().expect("a cycle is refused");
+        let shown = crate::wording::problem(&problem.code, |_| None);
+        assert!(!shown.title.contains(&problem.code), "{}", shown.title);
+    }
+
+    #[test]
+    fn a_value_given_to_several_objects_leaves_what_was_not_given() {
+        let mut editor = empty_level();
+        create(
+            &mut editor,
+            1,
+            None,
+            at([1.0, 2.0, -4.0], Quat::IDENTITY),
+            UNIT_BOX,
+        );
+        create(
+            &mut editor,
+            2,
+            None,
+            at([4.0, 3.0, -4.0], Quat::IDENTITY),
+            UNIT_BOX,
+        );
+        editor.select(vec![id(1), id(2)]);
+        settle(&mut editor);
+
+        editor.assign(FieldAssignment::Translation([Some(7.0), None, None]));
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        let snapshot = editor.snapshot();
+        let place = |object: u128| {
+            snapshot
+                .document
+                .object(&id(object))
+                .unwrap()
+                .local
+                .translation_m
+        };
+        assert_eq!((place(1), place(2)), ([7.0, 2.0, -4.0], [7.0, 3.0, -4.0]));
+
+        // A size is given whole; the level keeps half of it.
+        editor.assign(FieldAssignment::Size([None, Some(3.0), None]));
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        let snapshot = editor.snapshot();
+        for object in [1, 2] {
+            let ObjectData::Box { half_extents_m } =
+                snapshot.document.object(&id(object)).unwrap().data
+            else {
+                panic!("a box");
+            };
+            assert_eq!(half_extents_m, [0.5, 1.5, 0.5]);
+        }
+        // Each was one undo step.
+        editor.undo();
+        settle(&mut editor);
+        editor.undo();
+        settle(&mut editor);
+        let snapshot = editor.snapshot();
+        assert_eq!(
+            snapshot
+                .document
+                .object(&id(2))
+                .unwrap()
+                .local
+                .translation_m,
+            [4.0, 3.0, -4.0]
+        );
+    }
+
+    #[test]
+    fn the_snap_steps_and_the_pivot_are_settings_the_core_keeps_and_the_level_does_not() {
+        let mut editor = empty_level();
+        let wanted = SnapSettings {
+            enabled: true,
+            translation_m: 0.25,
+            rotation_degrees: 45.0,
+        };
+        let before = editor.snapshot();
+        editor.set_snap(wanted);
+        editor.set_pivot(GizmoPivot::Center);
+        settle(&mut editor);
+        let snapshot = editor.snapshot();
+        assert_eq!(
+            (snapshot.snap, snapshot.pivot),
+            (wanted, GizmoPivot::Center)
+        );
+        assert_eq!(
+            (snapshot.document_revision, snapshot.status.dirty),
+            (before.document_revision, before.status.dirty),
+            "the level is not changed by a setting"
+        );
+        assert_eq!(snapshot.undo_label, None, "and it is no undo step");
+
+        // Steps the core does not take are refused in words, and the setting stays.
+        editor.set_snap(SnapSettings {
+            translation_m: 0.0,
+            ..wanted
+        });
+        settle(&mut editor);
+        let problem = editor
+            .problem
+            .clone()
+            .expect("a step of nothing is refused");
+        assert_eq!(problem.code, "snap.range");
+        let shown = crate::wording::problem(&problem.code, |key| {
+            problem.parameters.get(key).map(String::as_str)
+        });
+        assert!(!shown.title.contains("snap.range"), "{}", shown.title);
+        assert_eq!(editor.snapshot().snap, wanted);
     }
 
     #[test]

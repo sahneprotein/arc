@@ -7,16 +7,20 @@
 //! is added when what it does exists.
 
 use bevy::{
+    app::PropagateOver,
     feathers::{
+        constants::fonts,
         containers::pane_header_divider,
         controls::{
             ButtonVariant, FeathersButton, FeathersMenu, FeathersMenuButton, FeathersMenuDivider,
         },
-        theme::{ThemeBackgroundColor, ThemedText},
+        theme::{ThemeBackgroundColor, ThemeTextColor, ThemedText},
         tokens,
     },
     gizmos::transform_gizmo::{TransformGizmoMode, TransformGizmoSettings},
     prelude::*,
+    text::FontSourceTemplate,
+    ui::InteractionDisabled,
     ui_widgets::Activate,
     window::PrimaryWindow,
 };
@@ -28,9 +32,9 @@ use crate::{
         play::play_control,
         snap::{snap_button, snap_item},
     },
-    session::Editor,
+    session::{duplicate_offer, DuplicateOffer, Editor},
     shell::PanelChoice,
-    theme::{size, spacing},
+    theme::{size, spacing, text},
     tool::{PlaceAt, Tool},
 };
 
@@ -233,9 +237,95 @@ fn add_menu() -> impl Scene {
                             editor.add_spawn(&place);
                         })
                     ),
+                    @FeathersMenuDivider,
+                    (
+                        menu_item("Duplicate", "Ctrl+D")
+                        DuplicateRow
+                        InteractionDisabled
+                        on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.duplicate_selected())
+                    ),
+                    (
+                        // Why the row above is off, beside it, as the design's Menu has it.
+                        Text("")
+                        TextFont {
+                            font: FontSourceTemplate::Handle(fonts::REGULAR),
+                            font_size: {FontSize::Px(text::SMALL.size)},
+                        }
+                        PropagateOver<TextFont>
+                        ThemeTextColor(tokens::TEXT_DIM)
+                        DuplicateReason
+                        Node {
+                            max_width: px(size::MENU_WIDTH),
+                            padding: UiRect::axes(px(spacing::SPACE_4), px(spacing::SPACE_1)),
+                        }
+                    ),
                 ]
             ),
         ]
+    }
+}
+
+/// The Add menu's row that copies the selection.
+#[derive(Component, Default, Clone)]
+pub struct DuplicateRow;
+
+/// The line under it that says why it is off.
+#[derive(Component, Default, Clone)]
+pub struct DuplicateReason;
+
+/// Why "Duplicate" cannot be chosen. Empty when it can.
+pub fn duplicate_reason(offer: DuplicateOffer) -> &'static str {
+    match offer {
+        DuplicateOffer::Offered => "",
+        DuplicateOffer::NothingSelected => "Select what to duplicate.",
+        DuplicateOffer::Landscape => {
+            "A landscape cannot be duplicated. Take it out of the selection."
+        }
+    }
+}
+
+/// Switches "Duplicate" on or off with the selection, and says why it is off. Worked out
+/// when the selection or the hierarchy changed, and when the row is new.
+pub(crate) fn show_duplicate(
+    mut commands: Commands,
+    editor: NonSend<Editor>,
+    rows: Query<(Entity, Has<InteractionDisabled>), With<DuplicateRow>>,
+    added: Query<(), Added<DuplicateRow>>,
+    mut reasons: Query<(&mut Text, &mut Node), With<DuplicateReason>>,
+    mut shown: Local<Option<(u64, u64, u64)>>,
+) {
+    let snapshot = editor.snapshot();
+    let key = (
+        snapshot.session,
+        snapshot.regions.selection,
+        snapshot.regions.hierarchy,
+    );
+    if *shown == Some(key) && added.is_empty() {
+        return;
+    }
+    *shown = Some(key);
+    let offer = duplicate_offer(&snapshot);
+    let offered = offer == DuplicateOffer::Offered;
+    for (row, off) in &rows {
+        if offered && off {
+            commands.entity(row).remove::<InteractionDisabled>();
+        } else if !offered && !off {
+            commands.entity(row).insert(InteractionDisabled);
+        }
+    }
+    let reason = duplicate_reason(offer);
+    let display = if offered {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    for (mut text, mut node) in &mut reasons {
+        if text.0 != reason {
+            text.0 = reason.to_owned();
+        }
+        if node.display != display {
+            node.display = display;
+        }
     }
 }
 
@@ -435,6 +525,13 @@ pub fn tool_caption(choice: ToolChoice) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_row_that_is_off_says_why_and_one_that_is_on_says_nothing() {
+        assert_eq!(duplicate_reason(DuplicateOffer::Offered), "");
+        assert!(duplicate_reason(DuplicateOffer::NothingSelected).contains("Select"));
+        assert!(duplicate_reason(DuplicateOffer::Landscape).contains("landscape"));
+    }
 
     #[test]
     fn the_tools_fold_below_the_designs_width_and_not_at_it() {
