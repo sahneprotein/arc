@@ -35,7 +35,7 @@ use bevy::{
     ui_widgets::Activate,
     window::PrimaryWindow,
 };
-use editor_services::{PlayRole, PlayRun, PlayStage, PlayState};
+use editor_services::{PlayProcess, PlayRole, PlayRun, PlayStage, PlayState};
 
 use crate::{
     panels::{
@@ -127,15 +127,28 @@ pub fn stage_words(stage: PlayStage) -> &'static str {
 
 /// How far each process of a run has come: its latest step, for each that reported one.
 fn steps_of(run: &PlayRun) -> String {
-    run.processes
+    steps_words(&run.processes)
+}
+
+/// How far each of these processes has come, in words: its latest step, for each that
+/// reported one. In a run of several local test clients each client is said with its number
+/// among them, so that one that lags is told from the others; a run's only client is "client".
+pub fn steps_words(processes: &[PlayProcess]) -> String {
+    let several = processes
+        .iter()
+        .filter(|process| process.role == PlayRole::Client)
+        .count()
+        > 1;
+    processes
         .iter()
         .filter_map(|process| {
-            let role = match process.role {
-                PlayRole::Server => "server",
-                PlayRole::Client => "client",
+            let who = match (process.role, process.client_id) {
+                (PlayRole::Server, _) => "server".to_owned(),
+                (PlayRole::Client, Some(id)) if several => format!("client {id}"),
+                (PlayRole::Client, _) => "client".to_owned(),
             };
             let latest = process.stages.last()?;
-            Some(format!("{role} {}", stage_words(*latest)))
+            Some(format!("{who} {}", stage_words(*latest)))
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -711,6 +724,40 @@ pub(crate) fn show_play(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_clients_of_a_run_of_several_are_said_apart_by_their_numbers() {
+        let process = |role, client_id, stages: &[PlayStage]| PlayProcess {
+            role,
+            client_id,
+            pid: None,
+            stages: stages.to_vec(),
+            listening: None,
+            log_path: None,
+            exit: None,
+        };
+        let server = process(PlayRole::Server, None, &[PlayStage::CollisionReady]);
+        let ready = [PlayStage::LevelDrawn, PlayStage::FirstControllableFrame];
+        // Two clients, one ahead of the other, and a third that has said nothing yet.
+        let several = [
+            server.clone(),
+            process(PlayRole::Client, Some(1), &ready),
+            process(PlayRole::Client, Some(2), &[PlayStage::HandshakeAccepted]),
+            process(PlayRole::Client, Some(3), &[]),
+        ];
+        assert_eq!(
+            steps_words(&several),
+            "server collision ready, client 1 first controllable frame, \
+             client 2 accepted by the server"
+        );
+        // A run's only client needs no number.
+        let one = [server, process(PlayRole::Client, Some(1), &ready)];
+        assert_eq!(
+            steps_words(&one),
+            "server collision ready, client first controllable frame"
+        );
+        assert_eq!(steps_words(&[]), "");
+    }
 
     fn view(cooked: Option<&str>, older: bool, check: PackageCheck) -> PlayView {
         PlayView {

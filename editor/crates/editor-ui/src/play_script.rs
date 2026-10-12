@@ -65,7 +65,8 @@ impl Script {
     }
 }
 
-/// The process numbers the scripted game reports.
+/// The process numbers the scripted game reports. `CLIENT_PID` is the first client's; each
+/// further client of a run has the next number.
 pub const SERVER_PID: u32 = 4312;
 pub const CLIENT_PID: u32 = 4313;
 
@@ -78,9 +79,14 @@ impl PlayBackend for Script {
         if *self == Self::Unavailable {
             return Err(Diagnostic::new("play.runtime_adapter_unavailable"));
         }
-        let (pid, name) = match launch.role {
-            PlayRole::Server => (SERVER_PID, "server"),
-            PlayRole::Client => (CLIENT_PID, "client"),
+        // The first client is the one every run has, with the number and the log it always
+        // had; a further local test client has its own of each.
+        let (pid, name) = match (launch.role, launch.client_id) {
+            (PlayRole::Server, _) => (SERVER_PID, "server".to_owned()),
+            (PlayRole::Client, None | Some(1)) => (CLIENT_PID, "client".to_owned()),
+            (PlayRole::Client, Some(id)) => {
+                (CLIENT_PID + u32::from(id) - 1, format!("client-{id}"))
+            }
         };
         Ok(Box::new(Scripted {
             script: *self,

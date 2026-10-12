@@ -1130,6 +1130,33 @@ if wanted project-look-again; then
         failed=1
     fi
 fi
+# The number of local test clients is set in the Project settings, in the Multiplayer group,
+# with a button for each number from 1 to 4, and Play starts that many clients beside the one
+# server. The game is the stand-in: no real game is started. A folder is set up, 3 is chosen
+# and saved, and a run started from the editor has three clients, each a process of its own
+# with its number, and each leaves with status 0 when the run is stopped. Started again on
+# the folder, the editor shows 3 as the file's and starts three again. A project whose file
+# names no number starts one client, and looking at the setting does not write a number.
+CLIENTS_RUN="$PLAY,wait-run=running,click-button=Stop,wait-run=none"
+THREE_CLIENTS='play_clients=3 play_client_ids=\[1,2,3\] play_client_pids=3 play_client_exits=\[1:0,2:0,3:0\]'
+with_game runs check project-clients "click-button=Set up project,scroll-project=300,click-button=3,click-button=Save project settings,click-button=Close settings,$CLIENTS_RUN" \
+    'project=Ready' 'project_draft=Unchanged project_saved=true' 'project_clients=3' \
+    'play_end=play\.stopped' 'play_server_exit=0' "$THREE_CLIENTS" 'play_cleanup=\[\]' 'problem=none'
+if wanted project-clients; then
+    grep -q '"clients": 3' "$work/project-clients/project/arc-project.json" \
+        && grep -q '"bots": null' "$work/project-clients/project/arc-project.json" \
+        || { echo "project-clients: FAILED, the project file does not hold three clients and the planned settings as they were"; failed=1; }
+fi
+with_game runs check project-clients-again "$CLIENTS_RUN" \
+    'project=Ready' 'project_draft=Unchanged project_saved=false' 'project_clients=3' \
+    'play_end=play\.stopped' "$THREE_CLIENTS" 'problem=none'
+with_game runs check project-clients-unnamed "click-button=Set up project,scroll-project=300,click-button=1,click-button=Close settings,$CLIENTS_RUN" \
+    'project=Ready' 'project_draft=Unchanged project_saved=false' 'project_clients=unnamed' \
+    'play_end=play\.stopped' 'play_clients=1 play_client_ids=\[1\] play_client_pids=1 play_client_exits=\[1:0\]' 'problem=none'
+if wanted project-clients-unnamed; then
+    grep -q '"clients": null' "$work/project-clients-unnamed/project/arc-project.json" \
+        || { echo "project-clients-unnamed: FAILED, the project file names a number nobody set"; failed=1; }
+fi
 # Closing the editor with project settings that were changed and not saved asks first, as
 # it does for a level: the Project settings are closed with the change in them, and then the
 # window. "Keep editing" leaves the editor open, the change still held and the project file

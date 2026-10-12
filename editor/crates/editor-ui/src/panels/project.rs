@@ -53,6 +53,7 @@ use crate::{
     panels::{inspector::group_title, unsaved::Leave},
     project::{
         planned_rows, DraftState, KeyAction, LookChoice, Project, ProjectState, SettingsEdit,
+        MULTIPLAYER,
     },
     session::Editor,
     theme::{
@@ -199,6 +200,17 @@ pub fn shared_keys(settings: &SettingsEdit) -> Vec<KeyAction> {
 /// What a group of planned settings says.
 pub const PLANNED_HINT: &str = "Planned. The game does not read these yet, so they cannot be \
     set.";
+
+/// What the setting of the local test clients is called.
+pub const LOCAL_CLIENTS: &str = "Local test clients";
+
+/// What the dialog says of the local test clients.
+pub const LOCAL_CLIENTS_HINT: &str = "How many game windows Play opens on this machine, each a \
+    client of the one server it starts. Play uses the number that is saved.";
+
+/// What the dialog says of the number of local test clients while the project file names
+/// none: that it is one, and the file's to leave unnamed.
+pub const LOCAL_CLIENTS_UNNAMED: &str = "The project file names no number, which is 1.";
 
 /// What the dialog says of the game's look profile: whether the editor holds it.
 pub fn look_words(look: &LookStatus) -> String {
@@ -500,6 +512,58 @@ fn look_row(choice: &LookChoice, chosen: bool) -> Box<dyn SceneList> {
         ),
         {button}
     ])])
+}
+
+/// The button of a number of local test clients.
+#[derive(Component, Default, Clone, Copy)]
+pub struct LocalClientsButton(pub u8);
+
+/// The width of the button of a number of clients.
+const COUNT_WIDTH: f32 = 36.0;
+
+fn set_local_clients(
+    activate: On<Activate>,
+    buttons: Query<&LocalClientsButton>,
+    mut project: ResMut<Project>,
+) {
+    if let Ok(button) = buttons.get(activate.entity) {
+        project.set_local_clients(button.0);
+    }
+}
+
+/// How many clients Play starts on this machine: a button for each number, the one that is
+/// set marked as the chosen one.
+fn local_clients_row(chosen: u8) -> Box<dyn SceneList> {
+    let button = |clients: u8| {
+        let variant = if clients == chosen {
+            ButtonVariant::Primary
+        } else {
+            ButtonVariant::Normal
+        };
+        let caption = clients.to_string();
+        bsn! {
+            @FeathersButton { @caption: bsn! { Text({caption}) ThemedText }, @variant: {variant} }
+            LocalClientsButton({clients})
+            Node { min_width: px(COUNT_WIDTH), flex_shrink: 0.0 }
+            on(set_local_clients)
+        }
+    };
+    Box::new(bsn_list![row(bsn_list![
+        name_of(LOCAL_CLIENTS),
+        button(1),
+        button(2),
+        button(3),
+        button(4),
+    ])])
+}
+
+/// Hands the number of local test clients the project file names to the part of the editor
+/// that starts the game, whenever it is another: what Play starts is the saved number.
+pub(crate) fn hand_local_clients_to_play(project: Res<Project>, mut editor: NonSendMut<Editor>) {
+    let clients = project.local_clients();
+    if editor.local_clients() != clients {
+        editor.set_local_clients(clients);
+    }
 }
 
 /// A setting the game does not read yet: its name and a control that is switched off.
@@ -823,12 +887,18 @@ fn content(project: &Project, look: &LookStatus) -> Vec<Box<dyn SceneList>> {
                 rows.push(Box::new(bsn_list![label_dim(NO_LOOK)]));
             }
 
-            for (group, settings) in planned_rows(config) {
-                rows.push(Box::new(bsn_list![
-                    group_title(group),
-                    label_dim(PLANNED_HINT)
-                ]));
-                for (what, value) in settings {
+            for (group, planned_settings) in planned_rows(config) {
+                rows.push(Box::new(bsn_list![group_title(group)]));
+                // The one setting of the group that is read comes first, and is set here.
+                if group == MULTIPLAYER {
+                    rows.push(Box::new(bsn_list![label_dim(LOCAL_CLIENTS_HINT)]));
+                    rows.push(local_clients_row(settings.local_clients.unwrap_or(1)));
+                    if settings.local_clients.is_none() {
+                        rows.push(Box::new(bsn_list![label_dim(LOCAL_CLIENTS_UNNAMED)]));
+                    }
+                }
+                rows.push(Box::new(bsn_list![label_dim(PLANNED_HINT)]));
+                for (what, value) in planned_settings {
                     rows.push(planned(what, value));
                 }
             }
@@ -1026,6 +1096,12 @@ mod tests {
         assert!(follows.contains("starts with the level that can be read"));
         assert!(CONVERT_HINT.contains(".schema-N.bak"));
         assert!(PLANNED_HINT.contains("does not read these yet"));
+        // The local test clients are named as that, and said to be windows on this machine
+        // and the saved number.
+        assert_eq!(LOCAL_CLIENTS, "Local test clients");
+        assert!(LOCAL_CLIENTS_HINT.contains("on this machine"));
+        assert!(LOCAL_CLIENTS_HINT.contains("the number that is saved"));
+        assert!(LOCAL_CLIENTS_UNNAMED.contains("names no number, which is 1"));
         assert!(NO_FOLDER.contains("--game"));
         assert!(set_up_words("levels/a.level.json", true).contains("starter level that was made"));
         assert!(set_up_words("levels/a.level.json", false).contains("was in the folder"));

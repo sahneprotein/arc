@@ -163,8 +163,16 @@ pub struct PlannedSettings {
     pub gameplay: PlannedGameplay,
 }
 
+/// The fewest and the most clients Play starts on one machine to test with.
+pub const MIN_LOCAL_CLIENTS: u8 = 1;
+pub const MAX_LOCAL_CLIENTS: u8 = 4;
+
 /// Reserved for the roadmap's Play settings. `None` means not configured; the editor
 /// renders these rows disabled until their runtime support ships.
+///
+/// `clients` is the first that is read: how many clients the editor's Play starts on this
+/// machine, [`MIN_LOCAL_CLIENTS`] to [`MAX_LOCAL_CLIENTS`]. `None` is one client, and is
+/// kept as `None` until a person sets a number.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedMultiplayer {
@@ -315,7 +323,7 @@ pub fn validate(config: &ProjectConfig) -> Result<(), ProjectError> {
     }
     validate_controls(&config.controls)?;
     if let Some(clients) = config.planned.multiplayer.clients
-        && !(1..=4).contains(&clients)
+        && !(MIN_LOCAL_CLIENTS..=MAX_LOCAL_CLIENTS).contains(&clients)
     {
         return Err(ProjectError::Value("planned.multiplayer.clients"));
     }
@@ -496,11 +504,18 @@ mod tests {
             Err(ProjectError::Value("startup.start_level"))
         );
         config.startup.start_level = "levels/first.level.json".into();
-        config.planned.multiplayer.clients = Some(5);
-        assert_eq!(
-            validate(&config),
-            Err(ProjectError::Value("planned.multiplayer.clients"))
-        );
+        // One to four local test clients, or none named.
+        for clients in [Some(0), Some(5), Some(u8::MAX)] {
+            config.planned.multiplayer.clients = clients;
+            assert_eq!(
+                validate(&config),
+                Err(ProjectError::Value("planned.multiplayer.clients"))
+            );
+        }
+        for clients in [None, Some(MIN_LOCAL_CLIENTS), Some(MAX_LOCAL_CLIENTS)] {
+            config.planned.multiplayer.clients = clients;
+            assert_eq!(validate(&config), Ok(()));
+        }
     }
 
     #[test]

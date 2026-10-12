@@ -20,8 +20,8 @@ use editor_core::{
 };
 use editor_services::{
     DiskVersion, EditorHandle, JobKind, JobOperation, JobOutput, JobTicket, PlayConfig,
-    PlayControl, PlayEnd, PlayEvent, PlayHandle, PlayMode, PlayRequest, PlayState, PlayStatus,
-    RunId, ServiceEvent, VerifiedPackageReceipt,
+    PlayControl, PlayEnd, PlayEvent, PlayHandle, PlayMode, PlayRequest, PlayRole, PlayState,
+    PlayStatus, RunId, ServiceEvent, VerifiedPackageReceipt,
 };
 use scene_data::{
     terrain::{LayerDefinition, LayerKind, RuleDefinition, TerrainDocument, TileKey},
@@ -90,6 +90,8 @@ pub struct Editor {
     next_play_request: u64,
     /// The way to play that was chosen and waits for the check of the cooked level to pass.
     play_when_checked: Option<PlayMode>,
+    /// How many clients a run starts on this machine: the project's number, one without.
+    local_clients: u8,
     /// A start that was sent and not yet answered.
     start_unanswered: bool,
     /// The last thing the coordinator refused, until the next request.
@@ -202,6 +204,7 @@ impl Editor {
             play: None,
             next_play_request: 1,
             play_when_checked: None,
+            local_clients: 1,
             start_unanswered: false,
             play_refusal: None,
             last_end: None,
@@ -1213,7 +1216,11 @@ impl Editor {
                     // A new run begins: what the last one left to say is put away.
                     self.last_end = None;
                     self.start_unanswered = true;
-                    self.submit_play(PlayControl::Start { mode, receipt });
+                    self.submit_play(PlayControl::Start {
+                        mode,
+                        receipt,
+                        local_clients: self.local_clients,
+                    });
                 }
                 Some(Ok(()))
             }
@@ -1321,6 +1328,33 @@ impl Editor {
     /// Whether this editor has a game to start.
     pub fn play_connected(&self) -> bool {
         self.play.is_some()
+    }
+
+    /// How many clients the next run starts on this machine.
+    pub fn local_clients(&self) -> u8 {
+        self.local_clients
+    }
+
+    /// The local clients of the coordinator's run, the one under way or the last: how many
+    /// it was started with, and each client process as its number among them and its
+    /// process number. `None` without a run.
+    pub fn run_clients(&self) -> Option<(u8, Vec<(Option<u8>, Option<u32>)>)> {
+        let status = self.play_status()?;
+        let run = status.run.as_ref()?;
+        let clients = run
+            .processes
+            .iter()
+            .filter(|process| process.role == PlayRole::Client)
+            .map(|process| (process.client_id, process.pid))
+            .collect();
+        Some((run.local_clients, clients))
+    }
+
+    /// Sets how many clients the next run starts on this machine: the number the project
+    /// file names, or one when it names none. It is handed to the coordinator as it is,
+    /// which refuses a start with a number it cannot start; a run under way keeps its own.
+    pub fn set_local_clients(&mut self, clients: u8) {
+        self.local_clients = clients;
     }
 
     /// Has the coordinator call `wake` whenever a run changes, from its own thread. The game
@@ -2164,7 +2198,7 @@ mod tests {
             notice::{notices, run_log, NoticeAction, NoticeWords},
             play::{PlayView, RunView},
         },
-        play_script::{Script, SERVER_PID},
+        play_script::{Script, CLIENT_PID, SERVER_PID},
     };
 
     /// Pumps until `done` holds.
@@ -2832,6 +2866,89 @@ mod tests {
         assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
     }
 
+    /// The clients of the coordinator's run, each as its number among them and its process.
+    fn clients_of(editor: &Editor) -> (u8, Vec<(Option<u8>, Option<u32>)>) {
+        editor.run_clients().expect("a run")
+    }
+
+    #[test]
+    fn a_run_starts_as_many_local_clients_as_the_editor_was_told_the_project_names() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = with_game(folder.path(), Script::Runs);
+        // An editor that was told nothing starts one client, as a project that names none.
+        assert_eq!(editor.local_clients(), 1);
+        editor.set_local_clients(3);
+        editor.play_external();
+        until(&mut editor, "the game running", |editor| {
+            run(editor) == RunView::Running
+        });
+        // The run is of three clients, each a process of its own, and one server.
+        let three = [
+            (Some(1), Some(CLIENT_PID)),
+            (Some(2), Some(CLIENT_PID + 1)),
+            (Some(3), Some(CLIENT_PID + 2)),
+        ];
+        assert_eq!(clients_of(&editor), (3, three.to_vec()));
+        let status = editor.play_status().unwrap();
+        let servers: Vec<_> = status
+            .run
+            .as_ref()
+            .unwrap()
+            .processes
+            .iter()
+            .filter(|process| process.role == PlayRole::Server)
+            .map(|process| (process.client_id, process.pid))
+            .collect();
+        assert_eq!(servers, [(None, Some(SERVER_PID))]);
+
+        // Another number while the game runs is the next run's: this one keeps its own.
+        editor.set_local_clients(2);
+        editor.pump();
+        assert_eq!(clients_of(&editor).0, 3);
+        editor.stop_play();
+        until(&mut editor, "the run's end", |editor| {
+            editor.last_end().is_some()
+        });
+        // Every client's end is in the account of the cleanup, by its number.
+        let left: Vec<_> = editor
+            .last_end()
+            .unwrap()
+            .cleanup
+            .clients
+            .iter()
+            .map(|client| {
+                (
+                    client.client_id,
+                    client.exit.as_ref().is_some_and(|exit| exit.success()),
+                )
+            })
+            .collect();
+        assert_eq!(left, [(1, true), (2, true), (3, true)]);
+
+        editor.play_external();
+        until(&mut editor, "the game running again", |editor| {
+            run(editor) == RunView::Running
+        });
+        assert_eq!(clients_of(&editor), (2, three[..2].to_vec()));
+        editor.stop_play();
+        until(&mut editor, "the second run's end", |editor| {
+            editor.active_run().is_none() && !editor.play_requested()
+        });
+
+        // A number is handed on as it is. One the coordinator cannot start is its to
+        // refuse: nothing is started, and nothing is made of the number here.
+        editor.set_local_clients(0);
+        editor.play_external();
+        until(&mut editor, "the refusal", |editor| {
+            editor.play_refusal().is_some()
+        });
+        assert_eq!(
+            editor.play_refusal().unwrap().code,
+            "play.local_clients_invalid"
+        );
+        assert_eq!(editor.active_run(), None);
+    }
+
     #[test]
     fn a_second_start_is_refused_in_one_sentence_and_the_game_keeps_running() {
         let folder = tempfile::tempdir().unwrap();
@@ -2846,6 +2963,7 @@ mod tests {
         editor.submit_play(PlayControl::Start {
             mode: PlayMode::ExternalGame,
             receipt,
+            local_clients: 1,
         });
         until(&mut editor, "the refusal", |editor| {
             editor.play_refusal().is_some()

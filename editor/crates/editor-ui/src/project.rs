@@ -609,6 +609,32 @@ impl Project {
         usable
     }
 
+    /// How many clients Play starts on this machine: what the manifest names, and one when
+    /// it names none. It is the file's number, not one that is being changed and is not
+    /// saved yet. Without a manifest that is read it is one.
+    pub fn local_clients(&self) -> u8 {
+        self.config()
+            .and_then(|config| config.planned.multiplayer.clients)
+            .unwrap_or(1)
+    }
+
+    /// Sets how many clients Play starts on this machine, one to four; whether it was taken.
+    /// A manifest that names no number is left naming none when the number is the one that
+    /// means: looking at the setting, or choosing what it is already, changes nothing.
+    pub fn set_local_clients(&mut self, clients: u8) -> bool {
+        let range = project_spec::MIN_LOCAL_CLIENTS..=project_spec::MAX_LOCAL_CLIENTS;
+        let Some(named) = self
+            .config()
+            .map(|config| config.planned.multiplayer.clients)
+            .filter(|_| range.contains(&clients))
+        else {
+            return false;
+        };
+        let unnamed = named.is_none() && clients == 1;
+        self.change(|edit| edit.local_clients = (!unnamed).then_some(clients));
+        true
+    }
+
     /// Puts the settings back to the manifest's. Nothing is written.
     pub fn discard_settings(&mut self) {
         self.draft = None;
@@ -705,8 +731,12 @@ pub fn control_rows(config: &ProjectConfig) -> Vec<(&'static str, String)> {
 /// What a planned setting shows while it has no value.
 pub const NOT_SET: &str = "Not set";
 
+/// The name of the group of settings the number of local test clients is in.
+pub const MULTIPLAYER: &str = "Multiplayer";
+
 /// The settings the manifest has a place for and the game does not read yet: two groups,
-/// each row what it is and what the manifest holds for it.
+/// each row what it is and what the manifest holds for it. The number of local test clients
+/// is not among them: it is read, and set in the dialog.
 pub fn planned_rows(config: &ProjectConfig) -> [(&'static str, Vec<(&'static str, String)>); 2] {
     fn shown<T: ToString>(value: &Option<T>) -> String {
         value
@@ -716,9 +746,8 @@ pub fn planned_rows(config: &ProjectConfig) -> [(&'static str, Vec<(&'static str
     let (multiplayer, gameplay) = (&config.planned.multiplayer, &config.planned.gameplay);
     [
         (
-            "Multiplayer",
+            MULTIPLAYER,
             vec![
-                ("Clients", shown(&multiplayer.clients)),
                 ("Bots", shown(&multiplayer.bots)),
                 ("Network conditions", shown(&multiplayer.network_conditions)),
                 ("Start at", shown(&multiplayer.start_at)),
@@ -1200,14 +1229,70 @@ mod tests {
 
         let [(multiplayer, play), (gameplay, rules)] = planned_rows(&config);
         assert_eq!((multiplayer, gameplay), ("Multiplayer", "Gameplay"));
-        assert_eq!(play.len() + rules.len(), 9);
+        assert_eq!(play.len() + rules.len(), 8);
         assert!(play.iter().chain(&rules).all(|(_, value)| value == NOT_SET));
+        // The number of local test clients is read, and so is none of the planned.
+        assert!(play.iter().all(|(name, _)| !name.contains("lients")));
         // A value the manifest holds is shown, and is still not one the game reads.
-        let mut with_clients = config;
-        with_clients.planned.multiplayer.clients = Some(2);
+        let mut with_bots = config;
+        with_bots.planned.multiplayer.bots = Some("idle".into());
         assert_eq!(
-            planned_rows(&with_clients)[0].1[0],
-            ("Clients", "2".to_owned())
+            planned_rows(&with_bots)[0].1[0],
+            ("Bots", "idle".to_owned())
         );
+    }
+
+    #[test]
+    fn the_local_test_clients_are_set_saved_and_read_again_and_none_stays_none() {
+        let clients = |project: &Project| project.config().unwrap().planned.multiplayer.clients;
+        let shown = |project: &Project| project.settings().unwrap().local_clients;
+        let (folder, mut project) = ready();
+        let before = manifest(&project);
+        // A project that names no number starts one client.
+        assert_eq!((clients(&project), project.local_clients()), (None, 1));
+
+        // Choosing the one it has is no change; neither is a number out of range.
+        assert!(project.set_local_clients(1));
+        assert!(!project.set_local_clients(0) && !project.set_local_clients(5));
+        assert_eq!(project.draft_state(), DraftState::Unchanged);
+        assert_eq!(shown(&project), None);
+
+        // A number is held and not written; Play is still started with the file's.
+        assert!(project.set_local_clients(3));
+        assert_eq!(project.draft_state(), DraftState::Changed);
+        assert_eq!((shown(&project), project.local_clients()), (Some(3), 1));
+        assert_eq!(manifest(&project), before);
+        // Back to one, the manifest names none again and there is nothing to save.
+        assert!(project.set_local_clients(1));
+        assert_eq!((shown(&project), project.settings_unsaved()), (None, false));
+        // Discarded, it is the file's.
+        project.set_local_clients(4);
+        project.discard_settings();
+        assert_eq!((shown(&project), project.local_clients()), (None, 1));
+        assert_eq!(manifest(&project), before);
+
+        // Saved, it is the file's number and what Play is started with.
+        project.set_local_clients(3);
+        assert!(project.save_settings());
+        assert_eq!((clients(&project), project.local_clients()), (Some(3), 3));
+        assert!(project.settings_saved() && !project.settings_unsaved());
+        // A save of something else keeps it, and so does reading the folder anew.
+        project.ask_key(KeyAction::Jump);
+        project.press_key(KeyCode::Enter);
+        assert!(project.save_settings());
+        let again = Project::of_folder(Some(folder.path().to_path_buf()));
+        assert_eq!((clients(&again), again.local_clients()), (Some(3), 3));
+        assert_eq!(again.config().unwrap().controls.jump, "Enter");
+
+        // A number that is named stays named: one is written as one.
+        assert!(project.set_local_clients(1));
+        assert_eq!(shown(&project), Some(1));
+        assert!(project.save_settings());
+        assert_eq!((clients(&project), project.local_clients()), (Some(1), 1));
+
+        // Without a project there is one client, and nothing to set.
+        let mut none = Project::of_folder(None);
+        assert_eq!(none.local_clients(), 1);
+        assert!(!none.set_local_clients(2));
     }
 }

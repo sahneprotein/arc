@@ -42,8 +42,8 @@ use crate::{
         paint::{commit_layer_name, fill_layer_names, show_layers},
         play::show_play,
         project::{
-            fill_project_name, fit_project_foot, press_project_key, project_dialog, show_project,
-            ProjectDialog,
+            fill_project_name, fit_project_foot, hand_local_clients_to_play, press_project_key,
+            project_dialog, show_project, ProjectDialog,
         },
         review::{fit_review, review_panel, show_review},
         rules::{fill_rule_fields, show_rules},
@@ -402,6 +402,7 @@ impl Plugin for EditorUiPlugin {
                             show_project,
                             fill_project_name,
                             fit_project_foot,
+                            hand_local_clients_to_play,
                         )
                             .chain(),
                         tell_emitter_assets,

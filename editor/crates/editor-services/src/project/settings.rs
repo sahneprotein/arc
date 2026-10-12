@@ -1,11 +1,13 @@
-//! Changing the settings of a project that is read: the keys the game uses and the look
-//! profile it is drawn with.
+//! Changing the settings of a project that is read: the keys the game uses, the look
+//! profile it is drawn with, and how many clients Play starts on this machine.
 //!
 //! A save is asked for with the manifest as the editor read it and with what is to be
 //! different. Everything else is taken from the file as it is on disk at that moment: the
 //! schema, the name, the level the project starts with and the settings the game does not
-//! read yet are never written from what an editor holds. So a save cannot set a planned
-//! setting, and it cannot put back something another program has changed since.
+//! read yet are never written from what an editor holds. So a save cannot set a setting
+//! that is still planned, and it cannot put back something another program has changed
+//! since. The number of local test clients is the one planned setting that is read, and so
+//! the one a save sets; a manifest that names none keeps naming none until a number is set.
 //!
 //! Nothing is written over unseen. The manifest is held with the same lock file a conversion
 //! makes (`project.locked`). If it is no longer what the editor read, the save is refused
@@ -31,12 +33,16 @@ pub const LOOK_FOLDER: &str = "assets/render";
 /// How many look profiles are listed at most.
 pub const MAX_LOOK_CHOICES: usize = 64;
 
-/// What a save of the settings sets: the keys, what is looked with, and the look profile.
+/// What a save of the settings sets: the keys, what is looked with, the look profile, and
+/// how many clients Play starts on this machine.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SettingsEdit {
     pub controls: ControlSettings,
     /// The look profile, as a path in the project's folder with `/` between its parts.
     pub rendering_profile: String,
+    /// How many clients Play starts on this machine, as the manifest has it: `None` while
+    /// it names none, which is one client.
+    pub local_clients: Option<u8>,
 }
 
 impl SettingsEdit {
@@ -45,6 +51,7 @@ impl SettingsEdit {
         Self {
             controls: config.controls.clone(),
             rendering_profile: config.rendering.profile.clone(),
+            local_clients: config.planned.multiplayer.clients,
         }
     }
 
@@ -53,6 +60,7 @@ impl SettingsEdit {
         let mut changed = config.clone();
         changed.controls = self.controls.clone();
         changed.rendering.profile = self.rendering_profile.clone();
+        changed.planned.multiplayer.clients = self.local_clients;
         changed
     }
 }
@@ -227,6 +235,50 @@ mod tests {
         assert_eq!(super::super::load_project(root).unwrap(), saved);
         // Neither the lock nor a half-written file is left beside it.
         assert_eq!(names(root), before);
+    }
+
+    #[test]
+    fn a_save_sets_the_local_test_clients_and_no_other_planned_setting() {
+        let (folder, mut config) = project();
+        let root = folder.path();
+        // A manifest that names no number, and holds planned settings a save must keep.
+        config.planned.multiplayer.clients = None;
+        config.planned.multiplayer.bots = Some("idle".into());
+        let unnamed = project_spec::canonical_bytes(&config).unwrap();
+        fs::write(project_path(root), &unnamed).unwrap();
+
+        // A save of something else leaves it unnamed: none is not written as one.
+        let mut edit = SettingsEdit::of(&config);
+        assert_eq!(edit.local_clients, None);
+        edit.controls.jump = "Enter".into();
+        let saved = save_settings(root, &config, &edit).unwrap();
+        assert_eq!(saved.planned, config.planned);
+        assert!(String::from_utf8(manifest(root))
+            .unwrap()
+            .contains("\"clients\": null"));
+
+        // A number that is set is written, and read back; the rest of the planned settings
+        // is the file's.
+        let mut edit = SettingsEdit::of(&saved);
+        edit.local_clients = Some(3);
+        let three = save_settings(root, &saved, &edit).unwrap();
+        assert_eq!(three.planned.multiplayer.clients, Some(3));
+        assert_eq!(three.planned.multiplayer.bots.as_deref(), Some("idle"));
+        assert_eq!(three.planned.gameplay, config.planned.gameplay);
+        assert_eq!(three.controls.jump, "Enter");
+        assert_eq!(super::super::load_project(root).unwrap(), three);
+        assert_eq!(SettingsEdit::of(&three).local_clients, Some(3));
+
+        // A number the game could not be started with is not written.
+        let before = manifest(root);
+        for clients in [0, 5] {
+            let mut edit = SettingsEdit::of(&three);
+            edit.local_clients = Some(clients);
+            let refused = save_settings(root, &three, &edit).unwrap_err();
+            assert_eq!(refused.code, "project.value", "{clients}");
+            assert_eq!(refused.parameters["field"], "planned.multiplayer.clients");
+        }
+        assert_eq!(manifest(root), before);
     }
 
     #[test]

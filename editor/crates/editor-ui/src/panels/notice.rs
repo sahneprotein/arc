@@ -27,7 +27,7 @@ use bevy::{
 };
 use std::path::PathBuf;
 
-use editor_services::{PlayEnd, PlayProcess, PlayRole, PlayStatus};
+use editor_services::{PlayCleanup, PlayEnd, PlayProcess, PlayRole, PlayStatus};
 
 use crate::{
     panels::play::{PlayView, RunView},
@@ -241,14 +241,33 @@ pub struct NoticeWords {
     pub actions: Vec<NoticeAction>,
 }
 
-/// The process of the last run that played this part.
-fn process(status: Option<&PlayStatus>, role: PlayRole) -> Option<&PlayProcess> {
-    status?
-        .run
-        .as_ref()?
-        .processes
+/// The processes of the last run: its server and each of its local test clients.
+fn processes(status: Option<&PlayStatus>) -> &[PlayProcess] {
+    status
+        .and_then(|status| status.run.as_ref())
+        .map_or(&[][..], |run| run.processes.as_slice())
+}
+
+/// The clients among these processes, in the order of their numbers.
+fn clients(processes: &[PlayProcess]) -> impl Iterator<Item = &PlayProcess> {
+    processes
         .iter()
-        .find(|process| process.role == role)
+        .filter(|process| process.role == PlayRole::Client)
+}
+
+/// Whether these are the processes of a run of several local test clients, in which a
+/// client is said with its number.
+fn several_clients(processes: &[PlayProcess]) -> bool {
+    clients(processes).count() > 1
+}
+
+/// What a client is called in a notice: "client 2" among several, nothing when it is the
+/// run's only one, which the notice's own words already speak of.
+fn client_name(process: &PlayProcess, several: bool) -> Option<String> {
+    match process.client_id {
+        Some(id) if several => Some(format!("client {id}")),
+        _ => None,
+    }
 }
 
 /// The facts of a process for a notice: how it ended, its number, its log.
@@ -270,18 +289,53 @@ fn facts(process: Option<&PlayProcess>, with_pid: bool) -> String {
 }
 
 /// The process a notice of the run's end speaks of. The game is the client; when no client
-/// was started, a server that died is what there is to speak of.
-fn shown_process(status: Option<&PlayStatus>) -> Option<&PlayProcess> {
-    let client = process(status, PlayRole::Client);
-    match client {
-        Some(process) if process.pid.is_some() => client,
-        _ => process(status, PlayRole::Server),
+/// was started, a server that died is what there is to speak of. Among several local test
+/// clients it is the first that did not leave cleanly, which is the one whose log says why
+/// the run ended; when all did, or none has left, the first.
+fn shown_process(processes: &[PlayProcess]) -> Option<&PlayProcess> {
+    let started = || clients(processes).filter(|process| process.pid.is_some());
+    started()
+        .find(|process| process.exit.as_ref().is_some_and(|exit| !exit.success()))
+        .or_else(|| started().next())
+        .or_else(|| {
+            processes
+                .iter()
+                .find(|process| process.role == PlayRole::Server)
+        })
+}
+
+/// The facts of the run's end for its notice. Of a run with one client they are those of
+/// the process the notice speaks of. Of a run of several local test clients they are how
+/// each client left, by its number, and then the log of the one the notice speaks of: a
+/// client that was never started and one whose end was not seen are said as that.
+pub fn end_facts(processes: &[PlayProcess]) -> String {
+    let shown = shown_process(processes);
+    if !several_clients(processes) {
+        return facts(shown, false);
     }
+    let mut said: Vec<String> = clients(processes)
+        .map(|client| {
+            let id = client
+                .client_id
+                .map_or_else(|| "?".to_owned(), |id| id.to_string());
+            let how = match (&client.exit, client.pid) {
+                (Some(exit), _) => wording::exit_facts(exit.code, exit.signal)
+                    .unwrap_or_else(|| "ended".to_owned()),
+                (None, Some(_)) => "end not seen".to_owned(),
+                (None, None) => "not started".to_owned(),
+            };
+            format!("client {id} {how}")
+        })
+        .collect();
+    if let Some(log) = shown.and_then(|process| process.log_path.as_ref()) {
+        said.push(log.display().to_string());
+    }
+    said.join("   ")
 }
 
 /// The log of the process the notice of the last run's end speaks of, if it wrote one.
 pub fn run_log(status: Option<&PlayStatus>) -> Option<PathBuf> {
-    shown_process(status)?.log_path.clone()
+    shown_process(processes(status))?.log_path.clone()
 }
 
 /// The notice of how the last run ended, if it is an end the person did not ask for. It
@@ -300,7 +354,7 @@ pub fn run_end_words(end: &PlayEnd, status: Option<&PlayStatus>) -> Option<Notic
     Some(NoticeWords {
         title: shown.title,
         remedy: shown.remedy,
-        facts: facts(shown_process(status), false),
+        facts: end_facts(processes(status)),
         actions,
     })
 }
@@ -327,28 +381,53 @@ pub fn moved_on_words(view: &PlayView) -> Option<NoticeWords> {
 /// the coordinator saw it end. Its cleanup is reported as having overrun, and that shows in
 /// how it ended ("ended by signal 9"), not as something that may still be running.
 pub fn left_behind_words(end: &PlayEnd, status: Option<&PlayStatus>) -> Option<NoticeWords> {
-    let left = |role: PlayRole| {
-        let ended = match role {
-            PlayRole::Server => end.cleanup.server.is_some(),
-            PlayRole::Client => end.cleanup.client.is_some(),
-        };
-        let started = process(status, role).is_some_and(|process| process.pid.is_some());
-        started && !ended
-    };
-    let (code, role) = if left(PlayRole::Server) {
-        ("play.server_cleanup_failed", PlayRole::Server)
-    } else if left(PlayRole::Client) {
-        ("play.client_cleanup_failed", PlayRole::Client)
-    } else {
-        return None;
-    };
+    let (code, facts) = left_behind(&end.cleanup, processes(status))?;
     let shown = wording::play_left_behind(code)?;
     Some(NoticeWords {
         title: shown.title,
         remedy: shown.remedy,
-        facts: facts(process(status, role), true),
+        facts,
         actions: Vec::new(),
     })
+}
+
+/// What a run left behind, as the code of its notice and the facts of what was left: a
+/// server, or else every local test client that was started and whose end the cleanup does
+/// not have, each with its number among several, its process and its log.
+pub fn left_behind(
+    cleanup: &PlayCleanup,
+    processes: &[PlayProcess],
+) -> Option<(&'static str, String)> {
+    let server = processes
+        .iter()
+        .find(|process| process.role == PlayRole::Server && process.pid.is_some());
+    if let Some(server) = server.filter(|_| cleanup.server.is_none()) {
+        return Some(("play.server_cleanup_failed", facts(Some(server), true)));
+    }
+    // The cleanup's account of the clients is by number. A run's only client is also the
+    // one the cleanup names without a number.
+    let ended = |client: &PlayProcess| {
+        let by_number = client.client_id.and_then(|id| {
+            cleanup
+                .clients
+                .iter()
+                .find(|left| left.client_id == id)
+                .map(|left| left.exit.is_some())
+        });
+        by_number.unwrap_or_else(|| cleanup.client.is_some())
+    };
+    let several = several_clients(processes);
+    let left: Vec<String> = clients(processes)
+        .filter(|client| client.pid.is_some() && !ended(client))
+        .map(|client| {
+            let of_it = facts(Some(client), true);
+            match client_name(client, several) {
+                Some(name) => format!("{name}   {of_it}"),
+                None => of_it,
+            }
+        })
+        .collect();
+    (!left.is_empty()).then(|| ("play.client_cleanup_failed", left.join("   ")))
 }
 
 /// What each notice says now, by slot.
@@ -458,4 +537,159 @@ pub(crate) fn show_notice(
         }
     }
     *shown = Some(now);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use editor_services::{PlayClientExit, PlayExit};
+
+    fn exit(code: Option<i32>, signal: Option<i32>, forced: bool) -> PlayExit {
+        PlayExit {
+            code,
+            signal,
+            forced,
+        }
+    }
+
+    /// A process of a run: a server without a number, or the client of this number. It was
+    /// started unless it has no process number, and has left if it has an exit.
+    fn process(client_id: Option<u8>, pid: Option<u32>, exit: Option<PlayExit>) -> PlayProcess {
+        let name = client_id.map_or_else(|| "server".to_owned(), |id| format!("client-{id}"));
+        PlayProcess {
+            role: if client_id.is_some() {
+                PlayRole::Client
+            } else {
+                PlayRole::Server
+            },
+            client_id,
+            pid,
+            stages: Vec::new(),
+            listening: None,
+            log_path: pid.map(|_| PathBuf::from(format!("logs/{name}.log"))),
+            exit,
+        }
+    }
+
+    #[test]
+    fn the_end_of_a_run_of_several_clients_says_how_each_left_by_its_number() {
+        let clean = || Some(exit(Some(0), None, false));
+        let server = || process(None, Some(10), clean());
+        // Client 2 ended by itself, the others were stopped for it, one of them by force;
+        // a fourth was never started.
+        let run = [
+            server(),
+            process(Some(1), Some(11), clean()),
+            process(Some(2), Some(12), Some(exit(Some(101), None, false))),
+            process(Some(3), Some(13), Some(exit(None, Some(9), true))),
+            process(Some(4), None, None),
+        ];
+        assert_eq!(
+            end_facts(&run),
+            "client 1 exit code 0   client 2 exit code 101   client 3 ended by signal 9   \
+             client 4 not started   logs/client-2.log"
+        );
+        // The log the notice offers is the log of the client that did not leave cleanly.
+        assert_eq!(
+            shown_process(&run).and_then(|process| process.client_id),
+            Some(2)
+        );
+        // A client whose end nobody saw is said as that.
+        let unseen = [
+            server(),
+            process(Some(1), Some(11), clean()),
+            process(Some(2), Some(12), None),
+        ];
+        assert!(end_facts(&unseen).contains("client 2 end not seen"));
+
+        // A run's only client is not numbered: its facts are as they always were.
+        let one = [
+            server(),
+            process(Some(1), Some(11), Some(exit(Some(101), None, false))),
+        ];
+        assert_eq!(end_facts(&one), "exit code 101   logs/client-1.log");
+        // Without a client that was started, the server is what there is to speak of.
+        let none = [
+            process(None, Some(10), Some(exit(Some(2), None, false))),
+            process(Some(1), None, None),
+        ];
+        assert_eq!(end_facts(&none), "exit code 2   logs/server.log");
+        assert_eq!(end_facts(&[]), "");
+    }
+
+    #[test]
+    fn every_client_a_run_left_behind_is_named_and_one_that_was_killed_is_not() {
+        let clean = || Some(exit(Some(0), None, false));
+        let left = |client_id, exit| PlayClientExit { client_id, exit };
+        let run = [
+            process(None, Some(10), clean()),
+            process(Some(1), Some(11), clean()),
+            process(Some(2), Some(12), None),
+            process(Some(3), Some(13), None),
+            process(Some(4), None, None),
+        ];
+        // Client 1 left by itself, client 2 had to be killed and so was seen to end, the end
+        // of client 3 was never seen, and client 4 was never started.
+        let cleanup = PlayCleanup {
+            server: clean(),
+            client: clean(),
+            clients: vec![
+                left(1, clean()),
+                left(2, Some(exit(None, Some(9), true))),
+                left(3, None),
+                left(4, None),
+            ],
+            diagnostics: Vec::new(),
+        };
+        assert_eq!(
+            left_behind(&cleanup, &run),
+            Some((
+                "play.client_cleanup_failed",
+                "client 3   process 13   logs/client-3.log".to_owned()
+            ))
+        );
+        // A server that is left is named before any client: its end was not seen either.
+        let no_server = PlayCleanup {
+            server: None,
+            ..cleanup.clone()
+        };
+        let mut server_stays = run.clone();
+        server_stays[0].exit = None;
+        assert_eq!(
+            left_behind(&no_server, &server_stays),
+            Some((
+                "play.server_cleanup_failed",
+                "process 10   logs/server.log".to_owned()
+            ))
+        );
+        // Everything seen to end: nothing was left.
+        let all = PlayCleanup {
+            clients: vec![
+                left(1, clean()),
+                left(2, clean()),
+                left(3, clean()),
+                left(4, None),
+            ],
+            ..cleanup
+        };
+        assert_eq!(left_behind(&all, &run), None);
+
+        // A run's only client, left behind, is not numbered; the cleanup's account of it
+        // without a number counts where it has none by number.
+        let one = [
+            process(None, Some(10), clean()),
+            process(Some(1), Some(11), None),
+        ];
+        let unnumbered = PlayCleanup {
+            server: clean(),
+            ..PlayCleanup::default()
+        };
+        assert_eq!(
+            left_behind(&unnumbered, &one),
+            Some((
+                "play.client_cleanup_failed",
+                "process 11   logs/client-1.log".to_owned()
+            ))
+        );
+    }
 }

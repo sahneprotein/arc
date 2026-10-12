@@ -437,7 +437,7 @@ type Emitters<'w> = (
 
 /// What the result line says of the project's settings as the dialog shows them:
 ///
-/// `project_draft=Unchanged project_saved=false project_keys=W,S,A,D,Space,V,Escape project_look=mouse+stick project_profile=assets/render/look-v1.json`
+/// `project_draft=Unchanged project_saved=false project_keys=W,S,A,D,Space,V,Escape project_look=mouse+stick project_profile=assets/render/look-v1.json project_clients=unnamed`
 ///
 /// `project_draft` is whether they are the file's (`Unchanged`), were changed and can be
 /// saved (`Changed`), or cannot be (`SharedKey`, `Refused`); `project_saved` whether the
@@ -448,7 +448,7 @@ fn settings_words(project: &editor_ui::Project) -> String {
     use editor_ui::project::{DraftState, KeyAction};
     let Some(settings) = project.settings() else {
         return "project_draft=None project_saved=false project_keys= project_look= \
-                project_profile="
+                project_profile= project_clients=none"
             .to_owned();
     };
     let draft = match project.draft_state() {
@@ -465,9 +465,14 @@ fn settings_words(project: &editor_ui::Project) -> String {
         (false, true) => "stick",
         (false, false) => "none",
     };
+    // The local test clients as the dialog shows them: the number, or `unnamed` while the
+    // manifest names none and none was set.
+    let clients = settings
+        .local_clients
+        .map_or_else(|| "unnamed".to_owned(), |clients| clients.to_string());
     format!(
         "project_draft={draft} project_saved={} project_keys={} project_look={look} \
-         project_profile={}",
+         project_profile={} project_clients={clients}",
         project.settings_saved(),
         keys.join(","),
         settings.rendering_profile
@@ -682,18 +687,89 @@ fn cleanup_word(code: &str, reason: Option<&str>) -> String {
     }
 }
 
+/// What the result line says of the local test clients of the coordinator's run, the one
+/// under way or the last:
+///
+/// `play_clients=3 play_client_ids=[1,2,3] play_client_pids=3 play_client_exits=[1:0,2:0,3:0]`
+///
+/// `play_clients` is how many clients the run was started with, `play_client_ids` the
+/// number each client process has among them, and `play_client_pids` how many different
+/// processes those are. `play_client_exits` is how each client left, by its number, as
+/// [`exit_word`] says it, once the run has ended. Without a run, and the exits without an
+/// end, they say `none`.
+fn play_clients_words(
+    run: Option<(u8, &[(Option<u8>, Option<u32>)])>,
+    exits: Option<&[(u8, String)]>,
+) -> String {
+    let exits = exits.map_or_else(
+        || "none".to_owned(),
+        |exits| {
+            let each: Vec<String> = exits
+                .iter()
+                .map(|(client, exit)| format!("{client}:{exit}"))
+                .collect();
+            format!("[{}]", each.join(","))
+        },
+    );
+    let Some((asked, clients)) = run else {
+        return format!(
+            "play_clients=none play_client_ids=none play_client_pids=none play_client_exits={exits}"
+        );
+    };
+    let ids: Vec<String> = clients
+        .iter()
+        .map(|(id, _)| id.map_or_else(|| "?".to_owned(), |id| id.to_string()))
+        .collect();
+    let mut pids: Vec<u32> = clients.iter().filter_map(|(_, pid)| *pid).collect();
+    pids.sort_unstable();
+    pids.dedup();
+    format!(
+        "play_clients={asked} play_client_ids=[{}] play_client_pids={} play_client_exits={exits}",
+        ids.join(","),
+        pids.len()
+    )
+}
+
+/// [`play_clients_words`] of this editor's run.
+fn play_clients_of(editor: &Editor) -> String {
+    let run = editor.run_clients();
+    let exits: Option<Vec<(u8, String)>> = editor.last_end().map(|end| {
+        end.cleanup
+            .clients
+            .iter()
+            .map(|client| {
+                let exit = client
+                    .exit
+                    .as_ref()
+                    .map(|exit| (exit.code, exit.signal, exit.forced));
+                (client.client_id, exit_word(exit))
+            })
+            .collect()
+    });
+    play_clients_words(
+        run.as_ref()
+            .map(|(asked, clients)| (*asked, clients.as_slice())),
+        exits.as_deref(),
+    )
+}
+
 /// What the result line says of how the last run ended and its processes left:
 ///
 /// `play_cause=none play_server_exit=0 play_client_exit=0 play_cleanup=[]`
 ///
 /// `play_cause` is the reason behind `play_end`, if the coordinator gave one. The two exits
-/// are as [`exit_word`] says them: a clean stop is `0` for both. `play_cleanup` lists what
+/// are as [`exit_word`] says them: a clean stop is `0` for both; the client's is the first
+/// client's, and every client's is in `play_client_exits`. `play_cleanup` lists what
 /// the coordinator said of the cleanup, which is empty when both left by themselves.
-/// Without a run that has ended, all four say `none`.
+/// Without a run that has ended, all four say `none`. After them comes what
+/// [`play_clients_words`] says.
 fn play_exit_words(editor: &Editor) -> String {
+    let clients = play_clients_of(editor);
     let Some(end) = editor.last_end() else {
-        return "play_cause=none play_server_exit=none play_client_exit=none play_cleanup=none"
-            .to_owned();
+        return format!(
+            "play_cause=none play_server_exit=none play_client_exit=none play_cleanup=none \
+             {clients}"
+        );
     };
     let cleanup: Vec<String> = end
         .cleanup
@@ -707,7 +783,7 @@ fn play_exit_words(editor: &Editor) -> String {
         })
         .collect();
     format!(
-        "play_cause={} play_server_exit={} play_client_exit={} play_cleanup=[{}]",
+        "play_cause={} play_server_exit={} play_client_exit={} play_cleanup=[{}] {clients}",
         end.cause
             .as_ref()
             .map_or("none", |cause| cause.code.as_str()),
@@ -1688,6 +1764,38 @@ mod tests {
             "play.server_cleanup_failed:grace_deadline"
         );
         assert_eq!(cleanup_word("play.wait_failed", None), "play.wait_failed");
+    }
+
+    #[test]
+    fn the_clients_of_a_run_are_said_by_number_and_as_different_processes() {
+        assert_eq!(
+            play_clients_words(None, None),
+            "play_clients=none play_client_ids=none play_client_pids=none play_client_exits=none"
+        );
+        // A run of three under way: three numbers, three processes, no exits yet.
+        let three = [
+            (Some(1), Some(40)),
+            (Some(2), Some(41)),
+            (Some(3), Some(42)),
+        ];
+        assert_eq!(
+            play_clients_words(Some((3, &three)), None),
+            "play_clients=3 play_client_ids=[1,2,3] play_client_pids=3 play_client_exits=none"
+        );
+        // Ended: each client's exit by its number, a missing one as none.
+        let exits = [
+            (1, "0".to_owned()),
+            (2, "signal9,forced".to_owned()),
+            (3, "none".to_owned()),
+        ];
+        assert!(play_clients_words(Some((3, &three)), Some(&exits))
+            .ends_with("play_client_exits=[1:0,2:signal9,forced,3:none]"));
+        // Two clients said to be one process, and one that was never started, show as that.
+        let wrong = [(Some(1), Some(40)), (Some(2), Some(40)), (None, None)];
+        assert_eq!(
+            play_clients_words(Some((3, &wrong)), None),
+            "play_clients=3 play_client_ids=[1,2,?] play_client_pids=1 play_client_exits=none"
+        );
     }
 
     #[test]
