@@ -467,6 +467,17 @@ What was run, each of a different kind, and nothing more:
   - What the cases read is what the editor holds after the change: the profile's identity,
     how bright the sun is, what the ground's and the boxes' materials are made with, and
     that the editor did not end. No picture is taken of a hidden window.
+- For what was there before and the change touches, five cases run again by name on
+  2026-10-12 against `24f57260c`, with the window hidden, by the agent that coordinates
+  this work and recorded here as it reports them, not run by the writer of this note: 5 of
+  5.
+  - `view-game-look`: Game look chosen with the game's profile has its sun and its ground,
+    and the selection is kept.
+  - `view-game-stage` and `view-game-stage-back`: the Particles tool takes the view to the
+    editor's picture, and the tool left again brings Game look back. That is the way out of
+    Game look and into it again, on which the camera is made anew.
+  - `project-settings` in its two runs: the settings are saved and are the file's, and the
+    editor started again shows them with nothing to save.
 - The client's first try to be accepted, mended in the game (`7dd510d`, "let netcode own
   timed-out hello cleanup"), as the game's side reports it and not run by the writer of
   this note:
@@ -568,8 +579,9 @@ What that does not show:
   includes any of this, in either repository. The whole scripted suite has not been run
   with hidden windows; the one case timed took five to six seconds hidden and two shown.
   The change for the saved profile restructures how Game look is put on and adds a field
-  to every case's result; the cases that were there before for Game look (`view-`) and for
-  the settings (`project-settings`) were not run again after it.
+  to every case's result. Of the cases that were there before, the five named above were
+  run again after it; the other cases of the view's control (`view-`, `narrow-view`) and
+  every other case were not.
 
 Known and left as it is:
 
@@ -592,8 +604,7 @@ Proposed next, in this order, none decided:
    (`ARC_EDITOR_CHECK_VISIBLE=1` with `project-draft` and `project-look`).
 2. The full checks in both repositories on the tips named above: the linter, each package's
    tests, the application's unit tests among them, and the editor's whole scripted suite,
-   with hidden windows; the `view-` and `project-settings` cases are the first to matter
-   after the last change. Then the two branches are merged and the game's pins of the
+   with hidden windows. Then the two branches are merged and the game's pins of the
    editor's crates moved to the merged commit.
 3. The first planned setting made real: the number of clients, in the manifest, in the
    Project settings and in the launch (1.9).
