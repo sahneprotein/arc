@@ -19,6 +19,8 @@ use std::{
 
 mod settings;
 pub use settings::*;
+mod catalog;
+pub use catalog::*;
 
 pub const PROJECT_FILE: &str = project_spec::FILE_NAME;
 
