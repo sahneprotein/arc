@@ -306,13 +306,15 @@ these up.]
    model placed as an object (steps 6 and 7 of 2.5).
 
 Progress, 2026-10-11, the fifth note, continued on 2026-10-12. The editor's
-`codex/play-backend` is at `bd4182fff` and the game's `codex/play-readiness` at `7dd510d`;
+`codex/play-backend` is at `30c0f7bb5` and the game's `codex/play-readiness` at `7dd510d`;
 both are pushed and merged nowhere. A project's settings can now be changed in the editor,
 what is saved is a manifest the game can play with, the editor does not close over changes
 that were not saved, a look profile that is saved is what Game look is drawn from at
 once, and the number of local test clients is a setting that Play starts with. That last
 one is shown with a stand-in for the game only: no real game was started with more than
-one client.
+one client. And an editor that is started with nothing named opens on a project browser,
+where a project is chosen, opened or made; the desktop's folder dialog it uses was built
+and never shown.
 
 - The keys and the look profile are changed in the Project settings (`37925c13f`).
   - A key is changed by pressing its button and then the key. A key the game does not read
@@ -377,6 +379,48 @@ one client.
     picture, so that nothing of the old sky stays on it. The boxes keep their material,
     which is changed in place; where the new profile's texture repeats otherwise, every box
     gets a mesh made for it again.
+- The editor starts in a project browser (`2891b80be` for the services' account of
+  projects, `b3ddaff25` for the browser and the editor, `30c0f7bb5` for one test of the
+  former; 2026-10-12). It is the owner's decision that a person names no folder on a
+  command line.
+  - Started with nothing named, the editor's window opens on the browser, and the editor
+    is entered on the project that is chosen, in the same window. There is one program and
+    one window: no second one is started for either, and none is left behind.
+  - The arguments `--game`, `--level` and `--package` stay, for development and scripts.
+    Any of them starts the editor as it always did, without the browser, and so does a
+    scripted check.
+  - The browser lists the projects that were opened before, most recent first: name,
+    folder and how long ago. The list is a file in the place the system has for an
+    application's settings, at most 32 projects; one that cannot be read is said and left
+    as it is, and projects are opened and made all the same. The disk is never searched.
+  - Two buttons lead to another project, "Open Project" and "New Project", each through
+    the desktop's own folder dialog, which can make a folder. Without any project the
+    browser says what each is for. Any row can be taken out of the list; the folder is not
+    touched.
+  - What a folder is decides what choosing it does. A project is entered. A folder that
+    is no project yet is set up first, in the browser, on the person's word and under a
+    name: the project file and a starter level, as the Project settings do it. An older
+    project file is converted first, with the file as it was kept beside it. A folder
+    that is gone, a project file that is refused and a start level that is there and
+    cannot be read stay in the browser, in the warning colour, with why. A new project is
+    not made over one that is there.
+  - A project whose start level is not in its folder is opened all the same. Its row says
+    so and that opening uses an unsaved map; once entered, the Project settings open by
+    themselves and say to save a level under that name or to put the file back. Nothing
+    makes the file but the person's save.
+  - Behind the browser the editor holds no project. Its level is the built-in map,
+    unsaved, with a file and a cooked folder that are nowhere, so the folder the desktop
+    started the editor in is neither read nor written; and the editor's keys do nothing.
+  - Entering a project gives the editor that project's start level, its own `cooked`
+    folder for cooked levels, its emitters and its look profile. A profile that is not
+    there leaves the editor's own picture, and the view's control names the file.
+  - The game is looked for in the project's folder, as before. A project that was just
+    made has none: the editor then has no game to start, and the Play menu says what is
+    not there, the server, the client or the assets, each with its place. Such a level is
+    edited, saved, cooked and checked all the same. A game built later counts from the
+    next time the project is opened.
+  - Not built: going from a project that is open to another one. That needs the questions
+    about unsaved changes and a running game, and is the next piece.
 - The number of local test clients is the first planned setting that is real
   (`ea911bb25` for the coordinator, `bd4182fff` for the settings and the editor,
   2026-10-12).
@@ -511,6 +555,47 @@ What was run, each of a different kind, and nothing more:
     Game look and into it again, on which the camera is made anew.
   - `project-settings` in its two runs: the settings are saved and are the file's, and the
     editor started again shows them with nothing to save.
+- For the project browser, on 2026-10-12, each check chosen by name. No real game was
+  started, and the desktop's folder dialog was not shown in any of them.
+  - The services' account of projects (`2891b80be`), run by the one who wrote it and
+    recorded here as reported: its tests in `editor-services`, 7 of 7. After a fault in
+    one test's own made-up folder was put right (`30c0f7bb5`), that test again, 1 of 1,
+    and the application built once more; also as reported.
+  - By the writer of this note (`b3ddaff25`): in `editor-ui`, 17 of 17. Eight are of the
+    browser's state: no list, a folder asked for once, a new project set up and entered,
+    where opening leads, a conversion first, a missing start level, the list's order with
+    a folder that is gone and one that is forgotten, a list that cannot be read. Three are
+    of its words, two of the folder chooser's stand-in, and one each of what the Play menu
+    says without a game, of the Project settings shown unasked for a missing start level,
+    of the editor entered on an unsaved map with no game, and of how long ago a project
+    was opened.
+  - Two of those tests failed at first, and one of them a second time, each for a fault in
+    its own made-up folder and not in the editor: a path compared in another spelling
+    than the one chosen, a start level that was named and not made, and one made that was
+    no level. They passed after those were put right.
+  - The application's tests, 10 of 10: when the browser is the first screen and when it is
+    not, that the places behind it are outside the working folder and are not made, the
+    window's name, and seven of the look, one with the profile of an entered project that
+    is not there. The application builds.
+  - Scripted, in the built editor with its window hidden, twelve cases (`browser`): 12 of
+    12, run once. The folder dialog is answered by the script, which names the folder; the
+    list of projects is a file in the case's own folder.
+    - With no project, the browser is shown with nothing listed, the editor's keys do
+      nothing behind it, and neither a list nor a level is written. Choosing no folder
+      changes nothing.
+    - A folder chosen for a new project waits for the person's word, and until then the
+      folder and the list are as they were. Set up, the editor is entered on the starter
+      level; the level is cooked into the project's own folder and the cooked level passes
+      its check; there is no game, with the server, the client and the assets said to be
+      missing; Game look is refused for the profile that is not there; and the project is
+      in the list.
+    - Started again, the project is listed and Enter opens it. A new project is not made
+      over it.
+    - Its folder moved away, it is listed as missing and opens nothing; it is taken out of
+      the list; and it is opened where it is now.
+    - Its start level taken away, it is listed as that and entered on an unsaved map with
+      the Project settings open, and the level's file is not made.
+    - An editor that is told what to open has no browser.
 - For the local test clients, on 2026-10-12, each check chosen by name and run by itself.
   No real game was started in any of them.
   - The coordinator (`ea911bb25`), three tests of `editor-services`, run by the one who
@@ -611,6 +696,23 @@ What that does not show:
     changes, the mark beside a key two actions share, a key being asked for, a refusal and
     so the warning colours are unseen. The pictures were taken before the words about the
     look profile were changed, and show the old ones.
+- **The folder dialog was never shown.** It is built, on macOS, and nothing more: every
+  check answers in its place. That it opens in front of the editor, that it gives back
+  the folder that was chosen and none when it is closed, that it can make a folder, and
+  that the editor's window waits behind it and goes on afterwards are not shown. On Linux
+  it needs the desktop's portal service; nothing was built or run on Linux or on Windows.
+- **Nobody started the editor from the desktop.** The first screen was seen by no one and
+  is in no picture: its layout at any width, the chosen row, the warning colours. No
+  check types a project's name, and none starts the editor as a double click does, with
+  a working folder the desktop chose; that this folder is not used is a test of the rule
+  and of the places, and of the first scripted case.
+- **A new project cannot be played.** The game is still looked for in the project's own
+  folder, and a folder the browser sets up has none; nor has it a look profile. The editor
+  says both. What a project needs to be played, a game of its own or one that several
+  projects share, is not decided.
+- **What stays in the browser cannot be mended there.** A project whose start level cannot
+  be read, or whose file is refused, is shown with the reason and no way on; keeping such
+  a file safe while a project is opened beside it is not designed.
 - **No real game was started with more than one client.** Everything above about several
   clients is the coordinator with stand-ins: scripted processes in its tests, a test
   program for the arguments, and the editor's stand-in game, which launches nothing. So it
@@ -666,7 +768,11 @@ What that does not show:
   every other case were not. The change for the local test clients touches how a run is
   started, how its steps and its notices are worded, and the stand-in game, and adds
   fields to every result; none of the cases and tests of Play that were there before
-  (`play-`, `game-`, and the session's own) was run again after it.
+  (`play-`, `game-`, and the session's own) was run again after it. The project browser
+  changes how the editor starts, when the Project settings open by themselves, what the
+  Play menu says without a game, and the result of every case once more; of the cases
+  that were there before, none was run again after it. One of the twelve new cases is an
+  editor started the old way.
 
 Known and left as it is:
 
@@ -682,23 +788,31 @@ Known and left as it is:
 
 Proposed next, in this order, none decided:
 
-1. A real run from the editor with two local test clients, on a project that sets 2, with
+1. A person starts the editor from the desktop, with nothing named, and uses it: the
+   browser as it looks, the folder dialog for a new project and for one that is there,
+   the editor entered. What is found is mended. This is the one thing about the browser no
+   check can show.
+2. Going from an open project to another, from the Level menu, with the questions about
+   unsaved changes, unsaved project settings and a game that runs, as closing asks them.
+3. A real run from the editor with two local test clients, on a project that sets 2, with
    the display awake: that it reaches Running with both windows shown, and that Stop ends
    the server and both clients with status 0. Until then the setting is shown with
    stand-ins only. What the game's side must take for it is the game's to say.
-2. A person at the machine looks at the Project settings, with the Multiplayer group as it
+4. A person at the machine looks at the Project settings, with the Multiplayer group as it
    is now, at the question on closing and at Game look as a profile is saved under it,
    against the design's Dialog page; what is found is mended. Pictures of the first two
    exist from before the local test clients and were looked at by agents only; the
    settings with changes in them and Game look after a save are in no picture yet
    (`ARC_EDITOR_CHECK_VISIBLE=1` with `project-draft`, `project-look` and
    `project-clients`).
-3. The full checks in both repositories on the tips named above: the linter, each package's
+5. The full checks in both repositories on the tips named above: the linter, each package's
    tests, the application's unit tests among them, and the editor's whole scripted suite,
-   with hidden windows; the cases and tests of Play are the first to matter after the last
-   change. Then the two branches are merged and the game's pins of the editor's crates
+   with hidden windows; every case that was there before the browser is the first to
+   matter. Then the two branches are merged and the game's pins of the editor's crates
    moved to the merged commit.
-4. Parity by picture, the adapter's refused fields and published models, as the fourth note
+6. For the owner: where the game is for a project that the browser made, so that it can
+   be played; and what is done with a project whose start level cannot be read.
+7. Parity by picture, the adapter's refused fields and published models, as the fourth note
    has them.
 
 Sources:
@@ -713,7 +827,7 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend` (commit `bd4182fff`), which continues
+- The editor as it is on the branch `codex/play-backend` (commit `30c0f7bb5`), which continues
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
@@ -743,7 +857,7 @@ editor, from the request to the end of its cleanup.
 | The same level on both sides | game, the same branch | Built. The client's hello carries the hash of the package's manifest, the server accepts only its own, and the client checks the hash the server answers with. A cooked level against the built-in one, or against another cooked level, is refused before a character exists |
 | Landscape in the game | game, branch `codex/play-readiness` (pushed, not merged) | Built for ground and painted layers, and run in the live smoke: the cooked ground is the game's collision, and the painted layers its colour. What a landscape's rules make (grass, layers a rule fills) is not run, and a level that has any is refused, in words; nothing is dropped silently |
 | Starting the game from the editor (P1) | editor core, branch `codex/play-backend` (pushed, not merged) | Built for the game's own window. A Play coordinator starts one server and one client on the checked cooked level, reports each step they reach, stops them on request, and says how the run ended and whether each process was seen to end. A level whose landscape has rules, or a level without a spawn point, is refused before anything is started; ground and painted layers are let through |
-| Open Game Window in the UI (P1) | editor UI, the same branch | Built. The control reads "Starting", "Game window open" and "Stopping"; Stop is beside it and also cancels a check or a start. The status bar names the steps reached and an end the person asked for; an end nobody asked for is a notice that stays, and a process that was started and never seen to end is a second notice. Closing the editor during a run stops the game first. The editor does not redraw while a game runs; the coordinator wakes it. The game's folder is named with `--game <folder>`; without it the control says no game is set up |
+| Open Game Window in the UI (P1) | editor UI, the same branch | Built. The control reads "Starting", "Game window open" and "Stopping"; Stop is beside it and also cancels a check or a start. The status bar names the steps reached and an end the person asked for; an end nobody asked for is a notice that stays, and a process that was started and never seen to end is a second notice. Closing the editor during a run stops the game first. The editor does not redraw while a game runs; the coordinator wakes it. The game's folder is named with `--game <folder>`, or is the folder of the project chosen in the project browser (fifth progress note); without a game the control says so, and in a project whose folder does not hold the game it says what is missing |
 | The game reporting readiness and taking Stop | game, branch `codex/play-readiness` (pushed, not merged) | Built. Server and client, started by the editor, report their steps over a local connection and stop when told; the client says when its window was closed by the player |
 | Keys, and what a notice offers | editor UI, the same branch | Built (third progress note). F5 cooks, checks and plays in the game's window and Shift+F5 stops; a notice offers "Play again", "Open log" and "Cook and play again" |
 | The game folder as a project | editor and game, the same two branches | Built (fourth and fifth progress notes). The editor sets a folder up, converts an older manifest on request, and changes and saves its keys, its look profile, which Game look is drawn from as soon as it is saved, and its number of local test clients, which Play starts with; a manifest the game could not play with is refused by the shared format; a client the editor starts gets `--project-root` and the folder, a server does not; the client reads its keys from the manifest |
