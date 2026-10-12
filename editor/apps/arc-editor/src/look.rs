@@ -11,9 +11,11 @@
 //! What is chosen is the window's ([`ViewMode`]). Going back to the editor's picture takes
 //! everything off again that Game look put on.
 //!
-//! The profile is the one the project names. It is read when the editor starts and again
-//! whenever the Project settings are saved, so that a profile chosen there is what Game look
-//! is drawn from at once, without another start.
+//! The profile is the one the project names. It is read when the editor starts, when a
+//! project is entered from the project browser, and again whenever the Project settings are
+//! saved, so that a profile chosen there is what Game look is drawn from at once, without
+//! another start. A project whose profile is not there has no Game look, and the view's
+//! control says which file is missing.
 
 use std::path::PathBuf;
 
@@ -38,7 +40,7 @@ use editor_core::Diagnostic;
 use editor_ui::{
     look::{LoadedLook, LookBoxes, LookTexture},
     theme::{color, feathers::to_color},
-    Editor, LookStatus, Project, ViewMode,
+    Editor, Launcher, LookStatus, Project, ViewMode,
 };
 use landscape_render::{GroundLook, GroundRenderer};
 use scene_data::ObjectData;
@@ -102,18 +104,21 @@ pub fn look_after_save(
     (held != (&status, look.as_ref())).then_some((status, look))
 }
 
-/// Reads the project's look profile again when its settings were saved, and holds what was
-/// read in place of the profile of the start. A profile that cannot be read then is said to
-/// be refused, as at the start, and Game look goes back to the editor's own picture.
+/// Reads the project's look profile again when its settings were saved, and when a project
+/// was entered from the project browser, and holds what was read in place of the profile of
+/// the start. A profile that cannot be read then is said to be refused, as at the start, and
+/// Game look goes back to the editor's own picture.
 pub(crate) fn follow_saved_settings(
-    project: Res<Project>,
+    (project, launcher): (Res<Project>, Res<Launcher>),
     mut status: ResMut<LookStatus>,
     mut look: ResMut<GameLook>,
-    mut saves: Local<u64>,
+    mut seen: Local<(u64, u64)>,
     mut redraw: MessageWriter<RequestRedraw>,
 ) {
-    let now = project.settings_saves();
-    if std::mem::replace(&mut *saves, now) == now {
+    // A project that was entered counts its own saves from nought, so the saves alone do
+    // not tell one project's from another's.
+    let now = (project.settings_saves(), launcher.times_entered());
+    if std::mem::replace(&mut *seen, now) == now {
         return;
     }
     let Some((read, loaded)) = look_after_save((&*status, look.0.as_ref()), project.look_profile())
@@ -567,8 +572,18 @@ mod tests {
         assert_eq!(look_after_save(held, Some((path(), read("{")))), None);
         assert!(look_after_save(held, Some((path(), read(FIXTURE)))).is_some());
 
-        // An editor that had no profile takes the one a project names after a save.
+        // An editor that had no profile, as the one behind the project browser, takes the
+        // one of the project that is entered; and where that project's profile is not
+        // there, it holds none and says which file it looked for.
         let (nothing, _) = look_status(None);
+        let absent = load_look_profile(&path());
+        let (now, taken) = look_after_save((&nothing, None), Some((path(), absent))).unwrap();
+        assert!(taken.is_none());
+        let LookStatus::Refused { code, path: at, .. } = now else {
+            panic!("a profile that is not there is refused");
+        };
+        assert_eq!(code, "look.missing");
+        assert!(at.ends_with("dusk.json"), "{at}");
         let (now, taken) =
             look_after_save((&nothing, None), Some((path(), read(FIXTURE)))).unwrap();
         assert!(now.loaded() && taken.is_some());

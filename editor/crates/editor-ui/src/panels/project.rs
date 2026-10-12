@@ -585,7 +585,7 @@ pub struct PlannedSetting;
 
 /// A refusal as the dialog shows it, edged in the warning colour, which always comes with
 /// these words.
-fn warning(title: String, remedy: String, more: Option<String>) -> Box<dyn SceneList> {
+pub(crate) fn warning(title: String, remedy: String, more: Option<String>) -> Box<dyn SceneList> {
     let more: Box<dyn SceneList> = match more {
         Some(more) => Box::new(bsn_list![label_dim(more)]),
         None => Box::new(bsn_list![]),

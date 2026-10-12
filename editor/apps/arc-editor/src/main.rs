@@ -9,6 +9,14 @@
 //!
 //! The panels, the theme and the link to the editor core are in the `editor-ui` crate.
 //!
+//! Started without arguments, the editor opens on the project browser: the projects that
+//! were opened before, and the two ways to another one, each through the desktop's own
+//! folder chooser (`editor_ui::chooser`). The editor is entered on the project that is
+//! chosen, in the same window.
+//!
+//! The arguments are for development and for scripts, and each of them starts the editor
+//! without the browser, as it always started:
+//!
 //! `arc-editor [--level <file>] [--package <directory>] [--game <folder>]`: the level file is
 //! opened if it exists. Otherwise the editor starts with the game's current map, converted, and
 //! saves it there. Without `--level` the file is the level the game's project starts with
@@ -34,23 +42,59 @@ use bevy::{
     picking::mesh_picking::MeshPickingPlugin,
     prelude::*,
     render::RenderPlugin,
-    window::{PresentMode, WindowResolution},
+    window::{PresentMode, PrimaryWindow, WindowResolution},
     winit::{EventLoopProxyWrapper, UpdateMode, WinitSettings, WinitUserEvent},
 };
 use editor_ui::{
     theme::{color, feathers::to_color},
-    Editor, EditorUiPlugin, Particles, Project,
+    Editor, EditorUiPlugin, Launcher, Particles, Project,
 };
 
 /// Where the editor writes when it is not told otherwise, relative to the working directory.
 const DEFAULT_LEVEL: &str = "levels/current-map.level.json";
 const DEFAULT_PACKAGE: &str = "cooked";
 
+/// What the window is called, and what it is called with a project.
+const WINDOW_TITLE: &str = "Arc Editor";
+
 struct Arguments {
     /// The level file, if one was named.
     level: Option<PathBuf>,
     package: PathBuf,
     game: Option<PathBuf>,
+    /// Whether anything was named at all: a level, a package or a game.
+    any: bool,
+}
+
+/// Whether the editor starts in the project browser: when nothing was named on the command
+/// line and no script checks it. A scripted check that is about the browser asks for it by
+/// naming the file its list is kept in.
+fn starts_in_browser(any_argument: bool, scripted: bool, scripted_browser: bool) -> bool {
+    if scripted {
+        scripted_browser
+    } else {
+        !any_argument
+    }
+}
+
+/// Where the level and the cooked levels of the editor behind the project browser would
+/// go: into a folder of this run's own name under the system's temporary folder, which is
+/// not made. Nothing is saved or cooked behind the browser; these are places that are not
+/// the working directory and not a project's, should anything ever be.
+fn no_project_paths(temporary: &std::path::Path, process: u32) -> (PathBuf, PathBuf) {
+    let nowhere = temporary.join(format!("arc-editor-no-project-{process}"));
+    (
+        nowhere.join("levels/unsaved.level.json"),
+        nowhere.join("cooked"),
+    )
+}
+
+/// The window's title with this project's name in it.
+fn window_title(project: Option<&str>) -> String {
+    match project {
+        Some(name) => format!("{name} - {WINDOW_TITLE}"),
+        None => WINDOW_TITLE.to_owned(),
+    }
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -58,9 +102,11 @@ fn arguments() -> Result<Arguments, String> {
         level: None,
         package: DEFAULT_PACKAGE.into(),
         game: None,
+        any: false,
     };
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
+        parsed.any = true;
         let name = arg.to_string_lossy().into_owned();
         // A path is taken as the system gives it: it need not be text.
         let mut path = || -> Result<PathBuf, String> {
@@ -93,18 +139,41 @@ fn main() -> AppExit {
     // level file exists it is opened in its place; if opening fails, the map stays and the
     // problem is shown.
     let game = arguments.game.clone();
+    // Without anything named, the editor opens on the project browser and is entered on the
+    // project that is chosen there. Until then it holds no project: what is built below is
+    // the editor as it is without one, behind the browser, and nothing of it is written or
+    // read from where the editor happens to be started.
+    let launcher = if starts_in_browser(
+        arguments.any,
+        check::is_scripted(),
+        check::scripted_browser().is_some(),
+    ) {
+        Launcher::at_start(check::scripted_browser().or_else(editor_ui::launcher::default_list))
+    } else {
+        Launcher::off()
+    };
     // The project of the game's folder, as it is on disk: nothing is written by looking. A
     // folder without a project file, or with one of an older version, is the person's to
     // set up or to convert, in the Project settings. A scripted check may name another
     // folder.
     let project = Project::of_folder(check::scripted_project().or_else(|| game.clone()));
     // The level: the one that was named; without a name, the one the project starts with;
-    // without a project, the file an editor without a project always used.
-    let level = arguments
-        .level
-        .or_else(|| project.start_level())
-        .unwrap_or_else(|| DEFAULT_LEVEL.into());
-    let saved_level = level.exists().then(|| level.clone());
+    // without a project, the file an editor without a project always used. Behind the
+    // project browser there is no project and so no level of one: the level is the game's
+    // current map, unsaved, with a file and a cooked folder that are nowhere
+    // (`no_project_paths`), until the project that is chosen takes its place. The working
+    // directory is whatever the desktop made it, and nothing in it is opened or written.
+    let (level, saved_level, package) = if launcher.shown() {
+        let (level, package) = no_project_paths(&std::env::temp_dir(), std::process::id());
+        (level, None, package)
+    } else {
+        let level = arguments
+            .level
+            .or_else(|| project.start_level())
+            .unwrap_or_else(|| DEFAULT_LEVEL.into());
+        let saved_level = level.exists().then(|| level.clone());
+        (level, saved_level, arguments.package)
+    };
     // The game's look profile, which Game look in the 3D view is drawn from: read before the
     // window opens. It is the profile the project names; a folder that is no project yet has
     // the one a game always had. It is read again whenever the Project settings are saved
@@ -131,7 +200,7 @@ fn main() -> AppExit {
     let particles = emitter_game
         .clone()
         .map_or_else(Particles::default, Particles::of_game);
-    let mut editor = match Editor::new(scene_data::current_map(), level, arguments.package) {
+    let mut editor = match Editor::new(scene_data::current_map(), level, package) {
         Ok(mut editor) => {
             editor.set_emitter_game(emitter_game);
             if let Some(path) = saved_level {
@@ -167,7 +236,7 @@ fn main() -> AppExit {
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Arc Editor".into(),
+                    title: WINDOW_TITLE.into(),
                     resolution: WindowResolution::new(width, height),
                     // A scripted check keeps its window off the desktop unless it is asked
                     // to show it; in real use the window is always shown.
@@ -221,10 +290,38 @@ fn main() -> AppExit {
     .insert_resource(look::GameLook(game_look))
     .insert_resource(particles)
     .insert_resource(project)
+    .insert_resource(launcher)
+    // A scripted check has no desktop to show a folder chooser on: it names the answers.
+    .insert_resource(if check::is_scripted() {
+        editor_ui::FolderChooser::scripted()
+    } else {
+        editor_ui::FolderChooser::default()
+    })
     .insert_non_send(editor)
     .init_resource::<check::GameWakes>()
-    .add_systems(Startup, wake_for_the_game);
+    .add_systems(Startup, wake_for_the_game)
+    .add_systems(Update, follow_entered_project);
     app.run()
+}
+
+/// What is set up once for the editor's project is set up again for a project that is
+/// entered from the browser: the Play coordinator of that project's game wakes the editor,
+/// and the window is called by the project's name.
+fn follow_entered_project(
+    launcher: Res<Launcher>,
+    project: Res<Project>,
+    editor: NonSend<Editor>,
+    proxy: Res<EventLoopProxyWrapper>,
+    wakes: Res<check::GameWakes>,
+    mut window: Single<&mut Window, With<PrimaryWindow>>,
+    mut entered: Local<u64>,
+) {
+    let now = launcher.times_entered();
+    if std::mem::replace(&mut *entered, now) == now {
+        return;
+    }
+    wake_for_the_game(editor, proxy, wakes);
+    window.title = window_title(project.config().map(|config| config.project.name.as_str()));
 }
 
 /// Lets the Play coordinator wake the editor. The editor sleeps while nothing happens in its
@@ -243,4 +340,41 @@ fn wake_for_the_game(
             wakes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_browser_is_the_first_screen_unless_something_was_named_or_a_script_checks() {
+        // A person starts the editor: nothing named, no script.
+        assert!(starts_in_browser(false, false, false));
+        // A level, a package or a game named on the command line goes straight in.
+        assert!(!starts_in_browser(true, false, false));
+        // A scripted check goes straight in, with or without arguments, unless it is about
+        // the browser and says so.
+        assert!(!starts_in_browser(false, true, false));
+        assert!(!starts_in_browser(true, true, false));
+        assert!(starts_in_browser(false, true, true));
+    }
+
+    #[test]
+    fn behind_the_browser_the_level_and_the_cooked_folder_are_in_no_project_and_not_made() {
+        let temporary = std::path::Path::new("/no/such/temporary/folder");
+        let (level, package) = no_project_paths(temporary, 4242);
+        let nowhere = temporary.join("arc-editor-no-project-4242");
+        assert!(level.starts_with(&nowhere) && package.starts_with(&nowhere));
+        assert!(level.is_absolute() && package.is_absolute());
+        // Naming them makes nothing: there is no level to open and none is opened.
+        assert!(!nowhere.exists() && !level.exists());
+        // Another run has other places.
+        assert_ne!(no_project_paths(temporary, 4243).0, level);
+    }
+
+    #[test]
+    fn the_window_is_called_by_the_project_that_is_open() {
+        assert_eq!(window_title(None), "Arc Editor");
+        assert_eq!(window_title(Some("Harbour")), "Harbour - Arc Editor");
+    }
 }

@@ -65,6 +65,12 @@
 //! Project settings are open (`project_dialog=`). At its end it says what the settings are
 //! as the dialog shows them (`settings_words`).
 //!
+//! `ARC_EDITOR_CHECK_LAUNCHER` names the file the project browser keeps its list in, and
+//! makes a scripted editor start in the browser as a person's does; without it a scripted
+//! editor has no browser. `pick-folder=PATH` plays nothing: it is what the desktop's folder
+//! chooser answers the next time the browser asks for a folder, and `pick-folder=` is the
+//! person choosing none. The result line ends with what the browser shows (`launcher_words`).
+//!
 //! `scroll-project=PIXELS` plays nothing: it puts the content of the Project settings that
 //! far up, so that a step after it finds a setting that is lower than the dialog is tall. A
 //! click on something the dialog does not show would go to whatever is there.
@@ -216,6 +222,17 @@ pub fn scripted_opener() -> Option<editor_ui::session::Opener> {
             Ok(())
         }
     }))
+}
+
+/// The file a scripted check of the project browser names with `ARC_EDITOR_CHECK_LAUNCHER`:
+/// the list of projects is kept in it, in place of the person's own, and naming it is what
+/// makes a scripted editor start in the browser. No check reads or writes the list of
+/// whoever is at the machine.
+pub fn scripted_browser() -> Option<PathBuf> {
+    if !is_scripted() {
+        return None;
+    }
+    std::env::var_os("ARC_EDITOR_CHECK_LAUNCHER").map(PathBuf::from)
 }
 
 /// The look profile a scripted check names with `ARC_EDITOR_CHECK_LOOK`: a file that is
@@ -433,7 +450,76 @@ type Emitters<'w> = (
     Res<'w, editor_ui::GpuPreview>,
     Res<'w, editor_ui::Project>,
     Res<'w, editor_ui::ProjectDialog>,
+    Res<'w, editor_ui::Launcher>,
 );
+
+/// What the result line says of the project browser:
+///
+/// `launcher=shown launcher_rows=[Harbour:ready] launcher_selected=0 launcher_pending=none launcher_refusal=none launcher_list=ok launcher_entered=0 game_missing=[]`
+///
+/// `launcher` is whether the browser is the window's screen (`shown`) or not (`off`). Each
+/// row of the list is the project's name and what its folder is now: `ready`, `nolevel`
+/// (its start level is not in the folder), `setup`, `convert`, `missing` or `refused`. `launcher_pending` is the folder that waits for the
+/// person's word, to be set up (`setup`) or converted (`convert`); `launcher_refusal` why
+/// the folder last chosen was not entered: `missing`, `already`, or the refusal's code.
+/// `launcher_list` is `ok`, `none` where there is no place for a list, or the code of why
+/// it cannot be used. `launcher_entered` counts the projects entered from the browser, and
+/// `game_missing` lists what of the game is not in the project's folder.
+fn launcher_words(launcher: &editor_ui::Launcher, editor: &Editor) -> String {
+    use editor_ui::launcher::{Pending, Refusal};
+    use editor_ui::project_status::{Kind, Status};
+    let rows: Vec<String> = launcher
+        .rows()
+        .iter()
+        .map(|row| {
+            let now = match &row.status {
+                Status::Ready { .. } => "ready",
+                Status::MissingStartLevel { .. } => "nolevel",
+                Status::SetupRequired { .. } => "setup",
+                Status::ConversionRequired { .. } => "convert",
+                Status::Missing => "missing",
+                Status::Refused { .. } => "refused",
+            };
+            format!("{}:{now}", row.recent.name)
+        })
+        .collect();
+    let pending = match launcher.pending() {
+        None => "none",
+        Some(Pending::SetUp { .. }) => "setup",
+        Some(Pending::Convert { .. }) => "convert",
+    };
+    let refusal = match launcher.refusal() {
+        None => "none".to_owned(),
+        Some(Refusal::Missing(_)) => "missing".to_owned(),
+        Some(Refusal::AlreadyProject(_)) => "already".to_owned(),
+        Some(Refusal::Refused(_, refusal)) => refusal.code.clone(),
+    };
+    let list = match (launcher.list_problem(), launcher.has_list()) {
+        (Some(problem), _) => problem.code.clone(),
+        (None, true) => "ok".to_owned(),
+        (None, false) => "none".to_owned(),
+    };
+    let missing: Vec<&str> = editor
+        .game_missing()
+        .iter()
+        .map(|part| match part.kind {
+            Kind::ServerExecutable => "server",
+            Kind::ClientExecutable => "client",
+            Kind::AssetsDirectory => "assets",
+        })
+        .collect();
+    format!(
+        "launcher={} launcher_rows=[{}] launcher_selected={} launcher_pending={pending} \
+         launcher_refusal={refusal} launcher_list={list} launcher_entered={} game_missing=[{}]",
+        if launcher.shown() { "shown" } else { "off" },
+        rows.join(","),
+        launcher
+            .selected()
+            .map_or_else(|| "none".to_owned(), |index| index.to_string()),
+        launcher.times_entered(),
+        missing.join(",")
+    )
+}
 
 /// What the result line says of the project's settings as the dialog shows them:
 ///
@@ -829,7 +915,7 @@ fn scripted(
     gizmo_state: Res<TransformGizmoState>,
     (shown, ground, closing): (Res<Shown>, Res<GroundShown>, Dialogs),
     (tool, brush, aim, stroke, row_drag, view, look, picture): Tools,
-    (mut particles, mut preview, stage, gpu, project, project_dialog): Emitters,
+    (mut particles, mut preview, stage, gpu, project, project_dialog, launcher): Emitters,
     mut redraw: MessageWriter<RequestRedraw>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -912,6 +998,19 @@ fn scripted(
             script.waiting_for = Some((wanted.to_owned(), script.frame + WAIT_FOR_THE_GAME));
             script.no_run_frames = 0;
             redraw.write(RequestRedraw);
+            return;
+        }
+        if let Some(folder) = step.strip_prefix("pick-folder=") {
+            // Set-up: what the desktop's folder chooser answers the next time it is asked.
+            let answer = (!folder.is_empty()).then(|| PathBuf::from(folder));
+            commands.queue(move |world: &mut World| {
+                world
+                    .resource_mut::<editor_ui::FolderChooser>()
+                    .answer_next(answer);
+            });
+            script.next_step_at = script.frame + BETWEEN_STEPS;
+            redraw.write(RequestRedraw);
+            info!("check step {step}");
             return;
         }
         if let Some(pixels) = step.strip_prefix("scroll-project=") {
@@ -1003,7 +1102,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} box_look={:?} {} project={} project_dialog={} picture={} window_shown={} {} {}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} box_look={:?} {} project={} project_dialog={} picture={} window_shown={} {} {} {}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -1296,6 +1395,8 @@ fn scripted(
             settings_words(&project),
             // How the last run of the game ended and its processes left.
             play_exit_words(&editor),
+            // The project browser, and what of the game the project's folder lacks.
+            launcher_words(&launcher, &editor),
         );
         exit.write(AppExit::Success);
     }

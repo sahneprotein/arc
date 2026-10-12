@@ -370,13 +370,18 @@ impl Project {
 
     /// Whether the person is to be shown the project's panel without asking for it: the
     /// folder has no manifest yet, one that waits to be converted, or one that cannot be
-    /// used.
+    /// used; or the project is read and the level it starts with is not in the folder,
+    /// which the panel says with what to do about it.
     pub fn wants_attention(&self) -> bool {
         matches!(
             self.state,
             ProjectState::NotSetUp
                 | ProjectState::NeedsConversion { .. }
                 | ProjectState::Refused(_)
+                | ProjectState::Ready {
+                    start_level_there: false,
+                    ..
+                }
         )
     }
 
@@ -899,6 +904,16 @@ mod tests {
             }
         );
         assert_eq!(project.start_level(), None);
+        // That is the person's to put right, so the project's panel is shown unasked. The
+        // level is not made by looking, by converting or by reading again.
+        assert!(project.wants_attention());
+        project.read();
+        assert!(!root.join("levels/legacy.level.json").exists());
+        // With the level in the folder the project needs nothing more.
+        std::fs::create_dir_all(root.join("levels")).unwrap();
+        std::fs::write(root.join("levels/legacy.level.json"), b"{}").unwrap();
+        project.read();
+        assert!(project.start_level().is_some() && !project.wants_attention());
         assert!(!project.convert(), "there is nothing left to convert");
     }
 

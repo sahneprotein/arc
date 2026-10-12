@@ -7,6 +7,10 @@
 //! - `shell.rs`: the window's regions and the plugin.
 //! - `rules.rs`: landscape rules as the panel handles them, without drawing.
 //! - `project.rs`: the project's file as the editor found it, its setup and its conversion.
+//! - `launcher.rs`: the project browser the editor starts in: the list of projects, the
+//!   folders that are chosen, and the project that is entered.
+//! - `chooser.rs`: the desktop's folder chooser, which answers the browser, or a script's
+//!   answers in its place.
 //! - `particles.rs`: the game's particle emitters as the Particles tool handles them, and
 //!   the preview's controls, without drawing.
 //! - `tool.rs`: which tool the pointer has, and the landscape brush's settings.
@@ -23,7 +27,16 @@ pub mod look {
         LookBoxes, LookProfile, LookTexture,
     };
 }
+pub mod chooser;
+pub mod launcher;
 pub mod panels;
+/// What a project's folder is found to be, and what of the game it may lack, as the editor's
+/// services say them: for the application's checks to read.
+pub mod project_status {
+    pub use editor_services::project::{
+        GameRuntimeRequirementKind as Kind, ProjectInspectionStatus as Status,
+    };
+}
 pub mod particles;
 pub mod play_script;
 pub mod project;
@@ -34,6 +47,8 @@ pub mod theme;
 pub mod tool;
 pub mod wording;
 
+pub use chooser::FolderChooser;
+pub use launcher::{FolderFor, Launcher};
 pub use panels::closing::Shutdown;
 pub use panels::levels::LevelDialog;
 pub use panels::menu::MenuOpen;

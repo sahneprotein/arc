@@ -1279,6 +1279,93 @@ if wanted project-draft-close-conflict; then
 fi
 unset ARC_EDITOR_CHECK_PROJECT
 
+# The project browser. A person's editor starts in it; a scripted one only when the case
+# names the file the list of projects is kept in (with_browser), which is in the case's own
+# folder, never the list of whoever is at the machine. The desktop's folder chooser is not
+# shown: `pick-folder=PATH` is what it answers the next time it is asked.
+#
+# with_browser <check function> <name> <steps> <expected>...
+with_browser() {
+    ARC_EDITOR_CHECK_LAUNCHER="$work/${2%%-again*}/projects.json"; export ARC_EDITOR_CHECK_LAUNCHER
+    "$@"
+    unset ARC_EDITOR_CHECK_LAUNCHER
+}
+NO_BROWSER_STATE='launcher_pending=none launcher_refusal=none launcher_list=ok'
+# Without a list the browser is the window's screen, with nothing listed and no project; the
+# editor's own keys do nothing behind it, and looking writes no list.
+with_browser check browser-empty 'key=t,key=ctrl+s' \
+    'launcher=shown launcher_rows=\[\] launcher_selected=none' "$NO_BROWSER_STATE" 'launcher_entered=0' \
+    'project=NoFolder' 'sculpt=false' 'has_file=false' 'game=false' 'problem=none'
+if wanted browser-empty; then
+    [ ! -e "$work/browser-empty/projects.json" ] && [ -z "$(ls "$work/browser-empty/levels")" ] \
+        || { echo "browser-empty: FAILED, looking at the browser wrote a list or a level"; failed=1; }
+fi
+# Choosing no folder changes nothing.
+with_browser check browser-none 'pick-folder=,click-button=Open Project' \
+    'launcher=shown launcher_rows=\[\]' "$NO_BROWSER_STATE" 'launcher_entered=0' 'project=NoFolder'
+# A new project: the folder is chosen, the browser shows what a setup makes there, and on
+# the person's word the project is made and the editor entered on it, in the same window.
+# The level is the project's starter level and its cooked level goes into the project's
+# folder. The game is not built there, so the editor has none to start and says what is
+# missing; the level is cooked and checked all the same. The project is in the list.
+if wanted browser-new; then
+    mkdir -p "$work/browser-new/Harbour"
+fi
+HARBOUR="$work/browser-new/Harbour"
+ENTERED='launcher=off launcher_rows=\[Harbour:ready\]'
+NO_RUNTIME='game_missing=\[[a-z,]+\]'
+with_browser check browser-new "pick-folder=$HARBOUR,click-button=New Project" \
+    'launcher=shown launcher_rows=\[\] launcher_selected=none launcher_pending=setup launcher_refusal=none' \
+    'launcher_entered=0' 'project=NoFolder'
+if wanted browser-new; then
+    [ -z "$(ls -A "$HARBOUR")" ] && [ ! -e "$work/browser-new/projects.json" ] \
+        || { echo "browser-new: FAILED, the folder or the list was written before the person said so"; failed=1; }
+fi
+with_browser check browser-new-again-made "pick-folder=$HARBOUR,click-button=New Project,click-button=Set up project,cook,click-button=Play,click-item=Check cooked level" \
+    "$ENTERED" "$NO_BROWSER_STATE" 'launcher_entered=1' 'project=Ready' 'project_dialog=false' \
+    'has_file=true' 'game=false' "$NO_RUNTIME" 'play_cooked=[0-9a-f]{8}' 'play_check=passed' \
+    'look=refused:look\.missing' 'view=Editor' 'problem=none'
+if wanted browser-new-again-made; then
+    [ -f "$HARBOUR/arc-project.json" ] && [ -n "$(ls "$HARBOUR/levels")" ] && [ -d "$HARBOUR/cooked" ] \
+        && [ ! -e "$work/browser-new/cooked" ] && grep -q 'Harbour' "$work/browser-new/projects.json" \
+        || { echo "browser-new-again-made: FAILED, the project, its level, its cooked level or the list is not where it belongs"; failed=1; }
+fi
+# Started again, the browser lists the project, chosen, and Enter opens it. A new project is
+# not made over it.
+with_browser check browser-new-again-listed 'key=t' \
+    'launcher=shown launcher_rows=\[Harbour:ready\] launcher_selected=0' "$NO_BROWSER_STATE" 'launcher_entered=0' 'project=NoFolder'
+with_browser check browser-new-again-opened 'key=enter' \
+    "$ENTERED" 'launcher_entered=1' 'project=Ready' 'has_file=true' "$NO_RUNTIME" 'problem=none'
+with_browser check browser-new-again-over "pick-folder=$HARBOUR,click-button=New Project" \
+    'launcher=shown' 'launcher_pending=none launcher_refusal=already' 'launcher_entered=0' 'project=NoFolder'
+# The project's folder is moved away: it is still listed, as missing, and opens nothing.
+# Opened where it is now, through the folder chooser, it is entered; taken out of the list,
+# the list has only the project where it is.
+if wanted browser-new-again-moved; then
+    mv "$HARBOUR" "$work/browser-new/Quay"
+fi
+with_browser check browser-new-again-moved 'key=enter' \
+    'launcher=shown launcher_rows=\[Harbour:missing\]' 'launcher_refusal=missing' 'launcher_entered=0' 'project=NoFolder'
+with_browser check browser-new-again-moved-forgotten 'click-button=Remove from list' \
+    'launcher=shown launcher_rows=\[\] launcher_selected=none' 'launcher_list=ok' 'launcher_entered=0'
+with_browser check browser-new-again-moved-opened "pick-folder=$work/browser-new/Quay,click-button=Open Project" \
+    "$ENTERED" 'launcher_entered=1' 'project=Ready' 'has_file=true' 'problem=none'
+# The level the project starts with is taken out of its folder. The project is listed as one
+# without its start level and opens all the same: on an unsaved map, with the Project
+# settings opened to say what is missing. Opening does not make the level's file.
+if wanted browser-new-again-nolevel; then
+    rm -f "$work/browser-new/Quay/levels/"*.level.json
+fi
+with_browser check browser-new-again-nolevel 'key=enter' \
+    'launcher=off launcher_rows=\[Harbour:nolevel\]' 'launcher_entered=1' 'project=Ready' 'project_dialog=true' \
+    'has_file=false' 'problem=none'
+if wanted browser-new-again-nolevel; then
+    [ -z "$(ls "$work/browser-new/Quay/levels")" ] \
+        || { echo "browser-new-again-nolevel: FAILED, opening the project made its missing level"; failed=1; }
+fi
+# An editor that is told what to open, as every other case of this file, has no browser.
+check browser-off 'click-row=11' 'launcher=off launcher_rows=\[\]' 'launcher_list=none' 'selected=Some\("Tall box"\)'
+
 # check_exit <name> <steps> <saved: yes|no>: the editor must end by itself before the check's
 # own end, with status 0, and the level file must or must not have been written.
 check_exit() {

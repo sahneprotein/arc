@@ -35,7 +35,10 @@ use bevy::{
     ui_widgets::Activate,
     window::PrimaryWindow,
 };
-use editor_services::{PlayProcess, PlayRole, PlayRun, PlayStage, PlayState};
+use editor_services::{
+    project::{GameRuntimeRequirement, GameRuntimeRequirementKind},
+    PlayProcess, PlayRole, PlayRun, PlayStage, PlayState,
+};
 
 use crate::{
     panels::{
@@ -65,6 +68,33 @@ pub const NO_GAME: &str = "No game is set up for this editor: start the editor w
 /// Why the one way to play that is always off is off.
 pub const NO_PREVIEW: &str = "Preview in Editor is not built yet.";
 
+/// Why nothing can be played in a project whose folder does not hold the game: what of the
+/// game is not there, each with where it was looked for, and what can be done all the same.
+/// The game is looked for when the project is opened, so one that is built later counts
+/// from the next time the project is opened. Empty when nothing is missing.
+pub fn game_missing_words(missing: &[GameRuntimeRequirement]) -> String {
+    if missing.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = missing
+        .iter()
+        .map(|part| {
+            let what = match part.kind {
+                GameRuntimeRequirementKind::ServerExecutable => "its server",
+                GameRuntimeRequirementKind::ClientExecutable => "its client",
+                GameRuntimeRequirementKind::AssetsDirectory => "its assets folder",
+            };
+            format!("{what} ({})", part.path.display())
+        })
+        .collect();
+    format!(
+        "The game is not in this project's folder, so nothing can be played from here. Not \
+         there: {}. The level can be edited, saved, cooked and checked. Build the game in the \
+         folder and open the project again to play.",
+        parts.join(", ")
+    )
+}
+
 /// Where a run of the game stands, as the coordinator reports it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RunView {
@@ -93,6 +123,9 @@ pub struct PlayView {
     pub check: PackageCheck,
     /// Whether this editor has a game to start.
     pub game: bool,
+    /// Why there is no game, when it is that the project's folder does not hold it: in
+    /// words ([`game_missing_words`]). Empty otherwise.
+    pub game_missing: String,
     pub run: RunView,
     /// The cooked level the run plays, by the same short name.
     pub run_package: Option<String>,
@@ -201,6 +234,7 @@ impl PlayView {
             cooked,
             check: editor.package_check().clone(),
             game: editor.play_connected(),
+            game_missing: game_missing_words(editor.game_missing()),
             run,
             run_package: active
                 .and_then(|run| package_id(Some(&run.identity.manifest_hash.hex()), None)),
@@ -292,11 +326,13 @@ impl PlayView {
     }
 
     /// Why a way to play is off: in the menu's foot as long as one is.
-    pub fn reason_line(&self) -> &'static str {
+    pub fn reason_line(&self) -> &str {
         if self.game {
             NO_PREVIEW
-        } else {
+        } else if self.game_missing.is_empty() {
             NO_GAME
+        } else {
+            &self.game_missing
         }
     }
 
@@ -766,6 +802,7 @@ mod tests {
             can_check: cooked.is_some(),
             check,
             game: true,
+            game_missing: String::new(),
             run: RunView::None,
             run_package: None,
             run_older: false,
@@ -918,6 +955,53 @@ mod tests {
         );
         assert!(view.reason_line().contains("--game"));
         assert!(view.reason_line().contains("cooked and checked"));
+    }
+
+    #[test]
+    fn a_project_without_the_game_built_says_what_is_missing_and_offers_no_way_to_play() {
+        use std::path::PathBuf;
+        assert_eq!(game_missing_words(&[]), "");
+        let part = |kind, path: &str| GameRuntimeRequirement {
+            kind,
+            path: PathBuf::from(path),
+        };
+        let words = game_missing_words(&[
+            part(
+                GameRuntimeRequirementKind::ServerExecutable,
+                "/p/target/debug/server",
+            ),
+            part(
+                GameRuntimeRequirementKind::ClientExecutable,
+                "/p/target/debug/client",
+            ),
+            part(GameRuntimeRequirementKind::AssetsDirectory, "/p/assets"),
+        ]);
+        assert!(
+            words.contains("its server (/p/target/debug/server)"),
+            "{words}"
+        );
+        assert!(
+            words.contains("its client (/p/target/debug/client)"),
+            "{words}"
+        );
+        assert!(words.contains("its assets folder (/p/assets)"), "{words}");
+        assert!(words.contains("nothing can be played from here"));
+        assert!(words.contains("edited, saved, cooked and checked"));
+        assert!(words.contains("open the project again"));
+
+        // The Play menu's foot says that, not that the editor was started without a game.
+        let view = PlayView {
+            game: false,
+            game_missing: words.clone(),
+            ..view(Some("6105ad50"), false, PackageCheck::NotAsked)
+        };
+        assert_eq!(view.reason_line(), words);
+        assert!(!view.reason_line().contains("--game"));
+        assert!(!view.game_window_offered() && !view.cook_and_play_offered());
+        assert!(
+            view.check_offered(),
+            "the cooked level can still be checked"
+        );
     }
 
     #[test]

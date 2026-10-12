@@ -12,6 +12,10 @@ bevy = { workspace = true, features = ["3d", "ui", "bevy_feathers"] }
 editor-core = { workspace = true }
 editor-services = { workspace = true }
 scene-data = { workspace = true }
+# The desktop's own folder chooser, for the project browser: the editor does not draw a
+# file browser of its own. It is named here, and not in the application, so that this
+# crate's own build and the application's use the engine with the same features.
+rfd = "0.15"
 
 [build-dependencies]
 serde_json = { workspace = true }

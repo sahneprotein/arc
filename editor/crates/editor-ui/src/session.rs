@@ -19,6 +19,7 @@ use editor_core::{
     TerrainSculptRequest, TerrainSurfaceRay, TransactionId, TransformRetention, ViewSnapshot,
 };
 use editor_services::{
+    project::{GameRuntimeAvailability, GameRuntimeRequirement, ProjectStartupContext},
     DiskVersion, EditorHandle, JobKind, JobOperation, JobOutput, JobTicket, PlayConfig,
     PlayControl, PlayEnd, PlayEvent, PlayHandle, PlayMode, PlayRequest, PlayRole, PlayState,
     PlayStatus, RunId, ServiceEvent, VerifiedPackageReceipt,
@@ -92,6 +93,9 @@ pub struct Editor {
     play_when_checked: Option<PlayMode>,
     /// How many clients a run starts on this machine: the project's number, one without.
     local_clients: u8,
+    /// What of the game is not in the project's folder, when that is why this editor has no
+    /// game to start.
+    game_missing: Vec<GameRuntimeRequirement>,
     /// A start that was sent and not yet answered.
     start_unanswered: bool,
     /// The last thing the coordinator refused, until the next request.
@@ -205,6 +209,7 @@ impl Editor {
             next_play_request: 1,
             play_when_checked: None,
             local_clients: 1,
+            game_missing: Vec::new(),
             start_unanswered: false,
             play_refusal: None,
             last_end: None,
@@ -1057,6 +1062,61 @@ impl Editor {
                 self.problem_from = Some(Source::Command);
             }
         }
+    }
+
+    /// Enters a project: the level it starts with becomes the open level, in a session of
+    /// its own whose cooked levels go into the project's folder, and the game and its
+    /// emitters are the ones of that folder. Whatever was open before is gone; the caller
+    /// has made sure that nothing of it was to be kept, and that no game runs.
+    ///
+    /// A level file that is there is opened; until it is read, and without one, the level
+    /// is the game's current map, not yet saved, as when the editor is started on a folder
+    /// without a level.
+    ///
+    /// Where the game is not built in the folder the editor has no game to start, and
+    /// keeps what is missing for the Play control to say ([`Editor::game_missing`]). The
+    /// level can be edited, saved, cooked and checked all the same.
+    pub fn open_project(&mut self, context: &ProjectStartupContext) {
+        let fresh = Self::new(
+            scene_data::current_map(),
+            context.start_level.clone(),
+            context.package_root.clone(),
+        );
+        match fresh {
+            Ok(mut fresh) => {
+                fresh.next_id = self.next_id;
+                fresh.local_clients = self.local_clients;
+                fresh.opener = std::mem::replace(&mut self.opener, Box::new(|_| Ok(())));
+                *self = fresh;
+            }
+            Err(problem) => {
+                self.problem = Some(problem);
+                self.problem_from = Some(Source::Command);
+                return;
+            }
+        }
+        self.set_emitter_game(Some(context.game_root.clone()));
+        match &context.runtime {
+            GameRuntimeAvailability::Ready => {
+                if let Err(problem) = self.connect_game(context.game_root.clone()) {
+                    self.problem = Some(problem);
+                    self.problem_from = Some(Source::Command);
+                }
+            }
+            GameRuntimeAvailability::Missing { requirements } => {
+                self.game_missing = requirements.clone();
+            }
+        }
+        if context.start_level_exists {
+            self.open(context.start_level.clone());
+        }
+    }
+
+    /// What of the game is not in the project's folder, when that is why this editor has no
+    /// game to start: its server, its client or its assets, each with where it was looked
+    /// for. Empty when the game is there, and when the editor was started without a project.
+    pub fn game_missing(&self) -> &[GameRuntimeRequirement] {
+        &self.game_missing
     }
 
     /// Saves again where the last save was meant to go.
@@ -2869,6 +2929,81 @@ mod tests {
     /// The clients of the coordinator's run, each as its number among them and its process.
     fn clients_of(editor: &Editor) -> (u8, Vec<(Option<u8>, Option<u32>)>) {
         editor.run_clients().expect("a run")
+    }
+
+    #[test]
+    fn a_project_is_entered_on_its_level_and_without_the_game_built_it_has_none_to_start() {
+        use editor_services::project::{
+            GameRuntimeAvailability, GameRuntimeRequirement, GameRuntimeRequirementKind,
+            ProjectStartupContext,
+        };
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().to_path_buf();
+        // The editor as it is behind the project browser: no project, nothing saved.
+        let nowhere = root.join("nowhere");
+        let mut editor = Editor::new(
+            scene_data::current_map(),
+            nowhere.join("levels/unsaved.level.json"),
+            nowhere.join("cooked"),
+        )
+        .unwrap();
+        editor.set_local_clients(2);
+        let session = editor.snapshot().session;
+
+        // A project whose start level is not in its folder, and whose game is not built.
+        let project = root.join("Quay");
+        let level = project.join("levels/first-level.level.json");
+        let server = project.join("target/debug/server");
+        let context = ProjectStartupContext {
+            project_root: project.clone(),
+            start_level: level.clone(),
+            start_level_exists: false,
+            game_root: project.clone(),
+            package_root: project.join("cooked"),
+            runtime: GameRuntimeAvailability::Missing {
+                requirements: vec![GameRuntimeRequirement {
+                    kind: GameRuntimeRequirementKind::ServerExecutable,
+                    path: server.clone(),
+                }],
+            },
+        };
+        editor.open_project(&context);
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        // The level is another session's: an unsaved map that would be saved to the
+        // project's start level, which entering did not make.
+        assert_ne!(editor.snapshot().session, session);
+        assert_eq!(editor.level_path, level);
+        assert!(!editor.has_file() && !level.exists() && !project.exists());
+        assert!(!nowhere.exists());
+        assert_eq!(editor.local_clients(), 2);
+        // There is no game to start, and what is missing is kept to be said.
+        assert!(!editor.play_connected());
+        assert_eq!(editor.game_missing().len(), 1);
+        let view = PlayView::of(&editor);
+        assert!(!view.game && !view.game_window_offered() && !view.cook_and_play_offered());
+        let said = view.reason_line();
+        assert!(
+            said.contains("its server") && said.contains("target/debug/server"),
+            "{said}"
+        );
+        assert!(!said.contains("--game"), "{said}");
+        editor.play_external();
+        assert_eq!(editor.active_run(), None);
+
+        // The level can be cooked all the same, and its cooked level goes into the
+        // project's folder; saving is what makes the level's file, on the person's word.
+        editor.cook();
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        assert!(editor.cooked().is_some() && project.join("cooked").is_dir());
+        assert!(!level.exists());
+        // A project's folder has its levels folder; this made-up one gets it here.
+        std::fs::create_dir_all(level.parent().unwrap()).unwrap();
+        editor.save();
+        settle(&mut editor);
+        assert_eq!(editor.problem, None);
+        assert!(level.is_file() && editor.has_file());
     }
 
     #[test]

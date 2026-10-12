@@ -13,6 +13,8 @@ use bevy::{
 };
 
 use crate::{
+    chooser::{choose_folder, FolderChooser},
+    launcher::Launcher,
     panels::{
         brush::{brush_panel, show_brush_mode, show_landscape_parts, BrushPanel},
         closing::{drive_shutdown, shutdown_dialog, Shutdown},
@@ -33,6 +35,7 @@ use crate::{
             commit_name, fill_names, fill_new_inputs, fill_snap_steps, inspector_panel,
             show_inspector, show_mixed_marks, InspectorPanel,
         },
+        launcher::{enter_project, fill_launcher_name, launcher, launcher_keys, show_launcher},
         levels::{
             confirm_level_name, forget_name_problem, level_dialog, level_dialog_keys,
             show_level_dialog, LevelDialog, LevelNameProblem,
@@ -76,10 +79,12 @@ fn mark_modal(
     levels: Res<LevelDialog>,
     menu: Res<MenuOpen>,
     shutdown: Res<Shutdown>,
-    (particles, project): (Res<Particles>, Res<ProjectDialog>),
+    (particles, project, launcher): (Res<Particles>, Res<ProjectDialog>, Res<Launcher>),
     mut modal: ResMut<Modal>,
 ) {
-    let open = unsaved.question == Question::Asking
+    // The project browser covers the window: behind it there is no editor to use.
+    let open = launcher.shown()
+        || unsaved.question == Question::Asking
         || *levels != LevelDialog::Closed
         || menu.0
         || *shutdown != Shutdown::No
@@ -181,6 +186,7 @@ fn shell() -> impl Scene {
             unsaved_dialog(),
             remove_dialog(),
             shutdown_dialog(),
+            launcher(),
         ]
     }
 }
@@ -273,6 +279,7 @@ fn keep_drawing(
             Res<GpuPreview>,
             Res<Project>,
             Res<ProjectDialog>,
+            Res<Launcher>,
         ),
     ),
     mut seen: Local<Option<(u64, u64, u64, bool)>>,
@@ -300,7 +307,7 @@ fn keep_drawing(
         collapsed,
         modal,
         view_mode,
-        (particles, preview, gpu, project, project_dialog),
+        (particles, preview, gpu, project, project_dialog, launcher),
     ) = choices;
     let chosen = tool.is_changed()
         || brush.is_changed()
@@ -317,7 +324,8 @@ fn keep_drawing(
         || preview.is_changed()
         || gpu.is_changed()
         || project.is_changed()
-        || project_dialog.is_changed();
+        || project_dialog.is_changed()
+        || launcher.is_changed();
     if input || chosen || editor.busy() || *seen != Some(view) {
         *frames_left = FRAMES_AFTER_A_CHANGE;
     }
@@ -364,6 +372,10 @@ impl Plugin for EditorUiPlugin {
         app.add_plugins(FeathersPlugins)
             .insert_resource(ui_theme())
             .init_resource::<PanelChoice>()
+            // Off unless the application says that the editor starts in the project browser.
+            .init_resource::<Launcher>()
+            // The desktop's folder chooser, unless the application has a script answer.
+            .init_resource::<FolderChooser>()
             .init_resource::<Tool>()
             .init_resource::<Snap>()
             .init_resource::<ViewMode>()
@@ -391,6 +403,21 @@ impl Plugin for EditorUiPlugin {
             .add_systems(Startup, shell.spawn())
             .add_systems(PreUpdate, pump_editor.in_set(PumpEditor))
             .add_systems(Last, keep_drawing)
+            // The project browser: its keys, the folder it asked for, the entering of the
+            // project that was chosen, and its screen. A project is entered before the
+            // Project settings look at it.
+            .add_systems(
+                Update,
+                (
+                    launcher_keys,
+                    choose_folder,
+                    enter_project,
+                    show_launcher,
+                    fill_launcher_name,
+                )
+                    .chain()
+                    .before(show_project),
+            )
             .add_systems(
                 Update,
                 (
