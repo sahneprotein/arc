@@ -975,8 +975,14 @@ menu opened, and the same with the Project settings opened); the 26 other cases 
 Project settings and their two extra comparisons; and `browser-new`, 16 of 16. Chosen by
 the name part `project-`, the cases `play-project-again-*` run without the case that sets
 their folder up and fail for that alone. That the new case fails without the change was
-reasoned and not tried. The limits above stand otherwise: no real game, no picture, no
-person, no whole suite, no linter.
+reasoned and not tried. [Tried since, on the same day: with the asking at a menu and at
+the settings taken out and the editor built again, both new cases failed, each saying that
+nothing stops the game, and the eight others passed; with it put back, 10 of 10.] Also run
+then, since F5 and both rows of the Play menu go through the new check: the scripted cases
+of the keys (`key-`), 18 of 18, and of a game's runs (`game-`), 26 of 26; that second part
+also picks five cases of `browser-new` without the case that makes their project, which
+fail for that alone and pass with their own group. The limits above stand otherwise: no
+real game, no picture, no person, no whole suite, no linter.
 
 Sources:
 
