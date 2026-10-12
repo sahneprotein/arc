@@ -304,10 +304,16 @@ impl Project {
     /// manifest is read, which is also after a setup, a conversion, a save of the settings
     /// and a look profile that was made, and by whoever knows that a level was saved.
     pub fn check_play(&mut self) {
-        self.play_blocker = match &self.root {
+        self.play_blocker = self.play_inputs();
+    }
+
+    /// What the check finds now, without keeping it: for whoever asks often and wants the
+    /// project to count as changed only when the answer is another one.
+    pub(crate) fn play_inputs(&self) -> Option<Diagnostic> {
+        match &self.root {
             Some(root) => editor_services::play::check_project_play_inputs(root).err(),
             None => None,
-        };
+        }
     }
 
     /// What stops the game from being started with this project, as the last check found

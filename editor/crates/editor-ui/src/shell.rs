@@ -469,7 +469,9 @@ impl Plugin for EditorUiPlugin {
                         fold_toolbar,
                         show_tool,
                         show_duplicate,
-                        (follow_play_inputs, show_play).chain(),
+                        (follow_play_inputs, show_play)
+                            .chain()
+                            .after(mark_menu_open),
                         show_view,
                         (mirror_snap, show_snap).chain(),
                     ),

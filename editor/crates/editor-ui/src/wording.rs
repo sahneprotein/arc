@@ -772,12 +772,14 @@ pub fn play_project<'a>(
     parameter: impl Fn(&str) -> Option<&'a str>,
 ) -> Option<Problem> {
     const ANOTHER: &str = "Choose another profile in the Project settings, or put the file right";
+    if let Some(words) = play_start_level(code, &parameter) {
+        return Some(words);
+    }
     let path = parameter("path");
     let file = match path {
         Some(path) => format!(" The file is {path}."),
         None => String::new(),
     };
-    let of_level = path.is_some_and(|path| path.ends_with(".level.json"));
     let (title, remedy): (String, String) = match code {
         "play.project_start_level_missing" => (
             "The level the project starts with is not in its folder".into(),
@@ -820,9 +822,6 @@ pub fn play_project<'a>(
                 format!("The game is drawn with it, and {what}.{named} {mend}, and play again."),
             )
         }
-        // The level the project starts with is there and is not one the game can open.
-        "source.decode" | "schema.unsupported" => start_level_unusable(code, &file),
-        _ if of_level => start_level_unusable(code, &file),
         // The project file itself, in the words a refusal of it has everywhere, without
         // what the reader said.
         _ if code.starts_with("project.") => {
@@ -838,6 +837,30 @@ pub fn play_project<'a>(
         }
         _ => return None,
     };
+    Some(Problem { title, remedy })
+}
+
+/// A refusal of the level the project starts with, which is there and is not one the game
+/// can open, in words: the Play menu's and the Project settings' alike. `None` for a refusal
+/// that is about something else. It is known by the file it names, or by a reader's code
+/// that only a level has.
+pub fn play_start_level<'a>(
+    code: &str,
+    parameter: impl Fn(&str) -> Option<&'a str>,
+) -> Option<Problem> {
+    if code.starts_with("play.") {
+        return None;
+    }
+    let path = parameter("path");
+    let of_level = path.is_some_and(|path| path.ends_with(".level.json"));
+    if !of_level && !matches!(code, "source.decode" | "schema.unsupported") {
+        return None;
+    }
+    let file = match path {
+        Some(path) => format!(" The file is {path}."),
+        None => String::new(),
+    };
+    let (title, remedy) = start_level_unusable(code, &file);
     Some(Problem { title, remedy })
 }
 

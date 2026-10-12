@@ -1358,7 +1358,8 @@ if wanted play-project-again-badlevel; then
     printf 'not a level' > "$PP_LEVEL"
 fi
 with_game runs check play-project-again-badlevel 'key=f5' \
-    'project=Ready' 'play_blocked=source\.decode' 'project_dialog=true' "$NOT_STARTED"
+    'project=Ready' 'play_blocked=source\.decode' 'project_dialog=true' "$NOT_STARTED" \
+    'project_level=Some\("The level the project starts with cannot be used"\)'
 if wanted play-project-again-badlevel; then
     [ "$(cat "$PP_LEVEL")" = 'not a level' ] \
         || { echo "play-project-again-badlevel: FAILED, the file under the level's name was changed"; failed=1; }
@@ -1368,7 +1369,28 @@ if wanted play-project-again-mended; then
     cp "$work/play-project/level-kept.json" "$PP_LEVEL"
 fi
 with_game runs check play-project-again-mended "$PP_RUN" \
-    'project=Ready' 'has_file=true' 'play_blocked=none' 'play_end=play\.stopped' 'problem=none'
+    'project=Ready' 'has_file=true' 'play_blocked=none' 'play_end=play\.stopped' 'problem=none' \
+    'project_level=None'
+# A file that goes bad under an open editor, by another hand: the editor that found the
+# project playable when it was read finds out when the Play menu is opened, without a key
+# and without a start, and the Project settings that are opened then say it too. The level
+# is put back afterwards.
+if wanted play-project-again-spoiled-menu; then
+    pp_before="$(pp_cooked)"
+fi
+with_game runs check play-project-again-spoiled-menu 'spoil-start-level,click-button=Play' \
+    'project=Ready' 'play_blocked=source\.decode' 'menu_open=true' 'project_dialog=false' "$NOT_STARTED"
+if wanted play-project-again-spoiled-menu; then
+    [ "$(pp_cooked)" = "$pp_before" ] \
+        || { echo "play-project-again-spoiled-menu: FAILED, opening the Play menu cooked something"; failed=1; }
+    cp "$work/play-project/level-kept.json" "$PP_LEVEL"
+fi
+with_game runs check play-project-again-spoiled-settings 'spoil-start-level,choose=Level>Project settings' \
+    'project=Ready' 'play_blocked=source\.decode' 'project_dialog=true' "$NOT_STARTED" \
+    'project_level=Some\("The level the project starts with cannot be used"\)'
+if wanted play-project-again-spoiled-settings; then
+    cp "$work/play-project/level-kept.json" "$PP_LEVEL"
+fi
 unset ARC_EDITOR_CHECK_PROJECT
 
 # The project browser. A person's editor starts in it; a scripted one only when the case

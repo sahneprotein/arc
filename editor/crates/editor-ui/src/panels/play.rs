@@ -47,7 +47,7 @@ use scene_data::Diagnostic;
 use crate::{
     launcher::{FolderFor, Launcher},
     panels::{
-        menu::{menu_item, menu_popup_end},
+        menu::{menu_item, menu_popup_end, MenuOpen},
         project::ProjectDialog,
         toolbar::toolbar_folds,
     },
@@ -860,20 +860,31 @@ pub fn cook_and_play(editor: &mut Editor, tool: &mut Tool) {
 /// Has the project check again what of its files stops the game, when the level's file was
 /// written or the level was changed: a save may have made the level the project starts
 /// with, or put one right. The project checks by itself when it is read, which is whenever
-/// its file or its look profile was changed from here; what changes on disk by another
-/// hand is found by the check before the start.
+/// its file or its look profile was changed from here. What changes on disk by another
+/// hand, a file put right in another program among it, is found when a menu is opened or
+/// closed and when the Project settings are, so that the Play menu a person looks at and
+/// the settings they were sent to say what holds then; and by the check before the start.
+/// Never while drawing: only when one of these changed.
 pub(crate) fn follow_play_inputs(
     editor: NonSend<Editor>,
+    (menu, dialog): (Res<MenuOpen>, Res<ProjectDialog>),
     mut project: ResMut<Project>,
-    mut seen: Local<Option<(bool, bool)>>,
+    mut seen: Local<Option<(bool, bool, bool, bool)>>,
 ) {
-    let now = (editor.has_file(), editor.snapshot().status.dirty);
+    let now = (
+        editor.has_file(),
+        editor.snapshot().status.dirty,
+        menu.0,
+        dialog.open,
+    );
     if *seen == Some(now) {
         return;
     }
     let first = seen.is_none();
     *seen = Some(now);
-    if !first && project.root().is_some() {
+    // The project counts as changed only when the answer is another one, so that a menu
+    // that is opened redraws nothing by itself.
+    if !first && project.play_inputs().as_ref() != project.play_blocker() {
         project.check_play();
     }
 }

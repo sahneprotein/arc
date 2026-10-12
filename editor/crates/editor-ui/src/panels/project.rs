@@ -93,6 +93,28 @@ const LABEL_WIDTH: f32 = 168.0;
 pub const NO_FOLDER: &str = "The editor was started without a project folder. Start it with \
     --game and the game's folder to see its project, or to set one up there.";
 
+/// What the dialog says of the level the project starts with when the game cannot be
+/// started with it: it is not in the folder, or it is there and the check before a start
+/// (`Project::play_blocker`) found it to be no level the game can open. `None` while
+/// nothing is known to be wrong with it. The words of a level that is there are the Play
+/// menu's, which sends the person here.
+pub fn start_level_words(
+    start_level_there: bool,
+    blocker: Option<&scene_data::Diagnostic>,
+) -> Option<(String, String)> {
+    if !start_level_there {
+        return Some((
+            "The level the project starts with is not in the folder".into(),
+            "Save a level under that name, or put the file back.".into(),
+        ));
+    }
+    let blocker = blocker?;
+    let words = wording::play_start_level(&blocker.code, |key| {
+        blocker.parameters.get(key).map(String::as_str)
+    })?;
+    Some((words.title, words.remedy))
+}
+
 /// What the first-run setup says it will do, before the person agrees.
 pub const SETUP_HINT: &str = "Setting up writes arc-project.json into this folder. The \
     project starts with the first level in the folder's levels that can be read; if there is \
@@ -846,12 +868,11 @@ fn content(project: &Project, look: &LookStatus) -> Vec<Box<dyn SceneList>> {
                     Node { align_self: AlignSelf::FlexStart, flex_shrink: 0.0 }
                     on(open_start_level)
                 )]));
-            } else {
-                rows.push(warning(
-                    "The level the project starts with is not in the folder".into(),
-                    "Save a level under that name, or put the file back.".into(),
-                    None,
-                ));
+            }
+            if let Some((title, remedy)) =
+                start_level_words(*start_level_there, project.play_blocker())
+            {
+                rows.push(warning(title, remedy, None));
             }
 
             // The settings as they are being changed, which are the file's until they are.
@@ -970,6 +991,8 @@ type Built = (
         Option<KeyAction>,
         bool,
     ),
+    // What of the project's own files stops the game, as it was last checked.
+    Option<scene_data::Diagnostic>,
 );
 
 /// Shows the dialog while it is open, and rebuilds its content when what was found of the
@@ -1017,6 +1040,7 @@ pub(crate) fn show_project(
             project.asking(),
             project.refused_key(),
         ),
+        project.play_blocker().cloned(),
     );
     if built.as_ref() == Some(&now) {
         return;
@@ -1125,6 +1149,40 @@ mod tests {
         });
         assert!(missing.starts_with("Not used. "), "{missing}");
         assert!(!missing.contains("look.missing"), "{missing}");
+    }
+
+    #[test]
+    fn a_start_level_the_game_cannot_open_is_said_where_play_sends_the_person() {
+        use scene_data::Diagnostic;
+        const LEVEL: &str = "/p/levels/first-level.level.json";
+        // Nothing is said of a level that is there and that nothing is known against.
+        assert_eq!(start_level_words(true, None), None);
+        // One that is not there is said as before, whatever else the check found.
+        let missing = Diagnostic::new("play.project_start_level_missing").with("path", LEVEL);
+        for blocker in [None, Some(&missing)] {
+            let (title, remedy) = start_level_words(false, blocker).unwrap();
+            assert_eq!(
+                title,
+                "The level the project starts with is not in the folder"
+            );
+            assert!(remedy.contains("Save a level under that name"));
+        }
+        // One that is there and is no level: what it is, the file, and what mends it, and
+        // neither the code nor what the reader said.
+        let unreadable = Diagnostic::new("source.decode")
+            .with("path", LEVEL)
+            .with("detail", "expected value at line 1 column 1");
+        let (title, remedy) = start_level_words(true, Some(&unreadable)).unwrap();
+        assert_eq!(title, "The level the project starts with cannot be used");
+        assert!(remedy.contains(LEVEL) && remedy.contains("put a file there that can be read"));
+        assert!(!remedy.contains("source.decode") && !remedy.contains("expected value"));
+        // What stops the game for another reason is said in its own place, not here.
+        let profile = Diagnostic::new("play.project_profile_unavailable")
+            .with("profile", "assets/render/look-v1.json")
+            .with("cause", "look.decode");
+        assert_eq!(start_level_words(true, Some(&profile)), None);
+        let manifest = Diagnostic::new("project.read").with("path", "/p/arc-project.json");
+        assert_eq!(start_level_words(true, Some(&manifest)), None);
     }
 
     #[test]

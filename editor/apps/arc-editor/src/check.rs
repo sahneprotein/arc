@@ -53,7 +53,8 @@
 //! numbers), `look-at=X:Y:Z` (the point the view turns about), `tilt=ROW:DEGREES` (turn an
 //! object about X), `inspector` (show the
 //! inspector, hide the hierarchy), `save`, `cook`, `spoil-cooked` (something else writes into
-//! the cooked level on disk), `preview-steps=N` (N whole steps of the particle preview's
+//! the cooked level on disk), `spoil-start-level` (something else writes over the level the
+//! project starts with), `preview-steps=N` (N whole steps of the particle preview's
 //! reference simulation, whether it runs or not).
 //!
 //! `wait-gpu` plays nothing either: the script waits until the Particles tool's GPU preview
@@ -66,7 +67,9 @@
 //! as the dialog shows them (`settings_words`), and what of the project's own files stops
 //! the game from being started with it, as the Play menu has it (`play_blocked=`): `none`,
 //! or the code of the refusal, with the code of what lay behind it after a colon where the
-//! refusal names one (`play.project_profile_unavailable:look.missing`).
+//! refusal names one (`play.project_profile_unavailable:look.missing`). After it,
+//! `project_level=` is the first line of what the Project settings say is wrong with the
+//! level the project starts with, or `None`.
 //!
 //! `ARC_EDITOR_CHECK_LAUNCHER` names the file the project browser keeps its list in, and
 //! makes a scripted editor start in the browser as a person's does; without it a scripted
@@ -1452,7 +1455,7 @@ fn scripted(
             window_shown(),
             // The project's settings as the dialog shows them.
             format!(
-                "{} play_blocked={}",
+                "{} play_blocked={} project_level={:?}",
                 settings_words(&project),
                 // What of the project's own files stops the game from being started, as
                 // the Play menu has it: the refusal's code, and after a colon the code
@@ -1461,7 +1464,19 @@ fn scripted(
                     .with_project(&project)
                     .project_blocked
                     .as_deref()
-                    .unwrap_or("none")
+                    .unwrap_or("none"),
+                // What the Project settings say is wrong with the level the project
+                // starts with: the warning's first line, or nothing.
+                match project.state() {
+                    editor_ui::ProjectState::Ready {
+                        start_level_there, ..
+                    } => editor_ui::panels::project::start_level_words(
+                        *start_level_there,
+                        project.play_blocker()
+                    )
+                    .map(|(title, _)| title),
+                    _ => None,
+                }
             ),
             // How the last run of the game ended and its processes left.
             play_exit_words(&editor),
@@ -1828,6 +1843,13 @@ fn play(
             let package = editor.cooked().ok_or("nothing is cooked")?;
             std::fs::write(package.path().join("level.sim.json"), b"spoiled")
                 .map_err(|error| error.to_string())?;
+        }
+        "spoil-start-level" => {
+            // Set-up: the level the project starts with is overwritten, as by another program.
+            let level = editor_ui::Project::of_folder(scripted_project())
+                .start_level()
+                .ok_or("the project has no start level that is there")?;
+            std::fs::write(level, b"spoiled").map_err(|error| error.to_string())?;
         }
         _ => return Err("unknown step".into()),
     }
