@@ -691,7 +691,8 @@ mod tests {
         let root = folder.path().join("project");
         setup_project(&root, "Not a File");
         let config = super::super::load_project(&root).unwrap();
-        let start_level = super::super::start_level_path(&root, &config).unwrap();
+        let canonical_root = fs::canonicalize(&root).unwrap();
+        let start_level = super::super::start_level_path(&canonical_root, &config).unwrap();
         fs::remove_file(&start_level).unwrap();
         fs::create_dir(&start_level).unwrap();
 
