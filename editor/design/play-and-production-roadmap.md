@@ -305,10 +305,12 @@ these up.]
 8. Published models: a reference in the scene and the cooked level, an Assets browser, a
    model placed as an object (steps 6 and 7 of 2.5).
 
-Progress, 2026-10-11, the fifth note. The editor's `codex/play-backend` is at `0589bd7a7`
-and the game's `codex/play-readiness` at `7dd510d`; both are pushed and merged nowhere. A
-project's settings can now be changed in the editor, what is saved is a manifest the game
-can play with, and the editor does not close over changes that were not saved.
+Progress, 2026-10-11, the fifth note, continued on 2026-10-12. The editor's
+`codex/play-backend` is at `24f57260c` and the game's `codex/play-readiness` at `7dd510d`;
+both are pushed and merged nowhere. A project's settings can now be changed in the editor,
+what is saved is a manifest the game can play with, the editor does not close over changes
+that were not saved, and a look profile that is saved is what Game look is drawn from at
+once.
 
 - The keys and the look profile are changed in the Project settings (`37925c13f`).
   - A key is changed by pressing its button and then the key. A key the game does not read
@@ -354,8 +356,25 @@ can play with, and the editor does not close over changes that were not saved.
   exactly those names.
 - Game look in the 3D view is drawn from the profile the project names. It was always drawn
   from `assets/render/look-v1.json`, whatever the project said. A folder that is no project
-  yet still has that file. The profile is read when the editor starts, so one that is saved
-  in the dialog shows from the next start; the dialog says that.
+  yet still has that file.
+- A profile that is saved in the Project settings is the one at once, without another start
+  (`24f57260c`, 2026-10-12). Before, the profile was read once when the editor started, and
+  the dialog said that a saved one showed from the next start; it now says that it is used
+  at once.
+  - The profile is read again whenever the settings were saved, and only then. A change
+    that is not saved, a save that is refused, and a profile's file that another program
+    changes meanwhile do not change the picture.
+  - A save that leaves the profile as it is, of a key for instance, reads the same profile
+    and draws nothing anew.
+  - A profile that cannot be read at that moment is said to be refused, as at the start,
+    and the view goes back to the editor's own picture.
+  - An editor that had no profile, because its folder was no project when it started, has
+    Game look offered after the first save.
+  - Game look that is being drawn changes under the open dialog. The sun and the sky of the
+    old profile go and the camera is made anew, as it is on the way back to the editor's
+    picture, so that nothing of the old sky stays on it. The boxes keep their material,
+    which is changed in place; where the new profile's texture repeats otherwise, every box
+    gets a mesh made for it again.
 - A level is not saved in a newer schema without its file as it was (`c60aefbf2`).
   - A level goes to its second schema with its first placed emitter. The save that follows
     looks at the schema the file on disk says it is of; if it is older than the level's,
@@ -428,6 +447,26 @@ What was run, each of a different kind, and nothing more:
     for an exit, each run by its name and by itself: 1 of 1 and 1 of 1. They were built in
     the workspace's usual incremental way, from what was built already: only the
     application was compiled, no other crate.
+- For Game look from a saved profile (`24f57260c`), on 2026-10-12, by the writer of this
+  note: unit tests of the UI's project state and dialog words in `editor-ui`, four chosen by
+  name, 4 of 4; the application's unit tests of the look, 7 of 7, one of them new; the
+  application builds; and, scripted with the window hidden, one case in four runs on one
+  project folder (`project-look`), 4 of 4, run once. The folder has the game's profile and
+  another with a weaker sun, no light from the sky, other colours and a box texture that
+  repeats every two metres.
+  - The first run starts without a project, so without a profile. The folder is set up,
+    the other profile chosen and saved, and Game look, chosen afterwards, has that
+    profile's sun, ground and boxes.
+  - The second run starts with that profile, chooses Game look, and saves the game's
+    profile under it: the sun, the ground and the boxes are the game's while the dialog is
+    still open, and each of the 22 objects was drawn a third time.
+  - The third run saves a key alone: the look is as it was and each object was drawn twice,
+    once at the start and once for Game look, as without a save.
+  - The fourth run saves the other profile over the game's while that is drawn, chooses
+    the editor's picture and Game look again: it is the other profile's.
+  - What the cases read is what the editor holds after the change: the profile's identity,
+    how bright the sun is, what the ground's and the boxes' materials are made with, and
+    that the editor did not end. No picture is taken of a hidden window.
 - The client's first try to be accepted, mended in the game (`7dd510d`, "let netcode own
   timed-out hello cleanup"), as the game's side reports it and not run by the writer of
   this note:
@@ -480,11 +519,28 @@ What was run, each of a different kind, and nothing more:
 
 What that does not show:
 
-- **Nobody has looked at the dialog or at the question.** The scripted cases read what
-  the editor holds, not how it looks: no picture is taken of a hidden window, and none was
-  taken shown. The layout of the Project settings at any window size, the checkboxes, the
-  warning colours, and the words of the question on closing as they stand in its dialog are
-  unseen.
+- **No person at the machine has looked at the dialog or at the question.** On 2026-10-12
+  five pictures were taken of them shown, by the agent that coordinates this work, and
+  looked at by that agent and by the writer of this note, who is an agent too: the Project
+  settings at 1440 and at 621 pixels wide, at 621 also scrolled to their end, and the
+  question on closing at both widths. That is not a person's review.
+  - What the pictures show: the dialog fits at both widths; its long content scrolls while
+    its title and its foot with the three buttons stay; the checkboxes are drawn; the
+    question's words and its three buttons fit at both widths. No defect was found that
+    needs mending.
+  - What they show and is left as it is: where the content is cut at the dialog's lower
+    edge there is no scroll bar and no fade, so that there is more below is told only by a
+    row cut in half.
+  - What they do not show: the settings in any state but unchanged. The line for unsaved
+    changes, the mark beside a key two actions share, a key being asked for, a refusal and
+    so the warning colours are unseen. The pictures were taken before the words about the
+    look profile were changed, and show the old ones.
+- **Game look after a saved profile was not seen.** The cases read the editor's state. A
+  hidden window is given nothing drawn, so they do not show that the renderer takes the
+  camera made anew and the other sky without complaint on screen, or that the picture is
+  the profile's; a wrong picture with the right state would pass. Nor was a profile driven
+  that cannot be read at the moment of the save: that is a unit test of the rule, not a
+  case through the window.
 - **The scripted cases read what the editor holds.** Whether the settings are changed,
   saved or on a shared key, the keys, whether a dialog is open. They do not read the mark
   beside a key two actions share, or the words of a refusal: the check's result has no
@@ -511,6 +567,9 @@ What that does not show:
 - **Focused checks only.** No Clippy run, no workspace suite and no full scripted suite
   includes any of this, in either repository. The whole scripted suite has not been run
   with hidden windows; the one case timed took five to six seconds hidden and two shown.
+  The change for the saved profile restructures how Game look is put on and adds a field
+  to every case's result; the cases that were there before for Game look (`view-`) and for
+  the settings (`project-settings`) were not run again after it.
 
 Known and left as it is:
 
@@ -526,17 +585,19 @@ Known and left as it is:
 
 Proposed next, in this order, none decided:
 
-1. A person looks at the Project settings and at the question on closing: once shown from a
-   scripted run with `ARC_EDITOR_CHECK_VISIBLE=1`, at the default width and at 621 pixels,
-   against the design's Dialog page; what is found is mended.
+1. A person at the machine looks at the Project settings, at the question on closing and
+   at Game look as a profile is saved under it, against the design's Dialog page; what is
+   found is mended. Pictures of the first two exist and were looked at by agents only; the
+   settings with changes in them and Game look after a save are in no picture yet
+   (`ARC_EDITOR_CHECK_VISIBLE=1` with `project-draft` and `project-look`).
 2. The full checks in both repositories on the tips named above: the linter, each package's
    tests, the application's unit tests among them, and the editor's whole scripted suite,
-   with hidden windows. Then the two branches are merged and the game's pins of the
-   editor's crates moved to the merged commit. This needs room on the disk first.
-3. Game look takes a newly saved profile without a restart.
-4. The first planned setting made real: the number of clients, in the manifest, in the
+   with hidden windows; the `view-` and `project-settings` cases are the first to matter
+   after the last change. Then the two branches are merged and the game's pins of the
+   editor's crates moved to the merged commit.
+3. The first planned setting made real: the number of clients, in the manifest, in the
    Project settings and in the launch (1.9).
-5. Parity by picture, the adapter's refused fields and published models, as the fourth note
+4. Parity by picture, the adapter's refused fields and published models, as the fourth note
    has them.
 
 Sources:
@@ -551,7 +612,7 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend` (commit `0589bd7a7`), which continues
+- The editor as it is on the branch `codex/play-backend` (commit `24f57260c`), which continues
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
@@ -584,7 +645,7 @@ editor, from the request to the end of its cleanup.
 | Open Game Window in the UI (P1) | editor UI, the same branch | Built. The control reads "Starting", "Game window open" and "Stopping"; Stop is beside it and also cancels a check or a start. The status bar names the steps reached and an end the person asked for; an end nobody asked for is a notice that stays, and a process that was started and never seen to end is a second notice. Closing the editor during a run stops the game first. The editor does not redraw while a game runs; the coordinator wakes it. The game's folder is named with `--game <folder>`; without it the control says no game is set up |
 | The game reporting readiness and taking Stop | game, branch `codex/play-readiness` (pushed, not merged) | Built. Server and client, started by the editor, report their steps over a local connection and stop when told; the client says when its window was closed by the player |
 | Keys, and what a notice offers | editor UI, the same branch | Built (third progress note). F5 cooks, checks and plays in the game's window and Shift+F5 stops; a notice offers "Play again", "Open log" and "Cook and play again" |
-| The game folder as a project | editor and game, the same two branches | Built (fourth and fifth progress notes). The editor sets a folder up, converts an older manifest on request, and changes and saves its keys and its look profile; a manifest the game could not play with is refused by the shared format; a client the editor starts gets `--project-root` and the folder, a server does not; the client reads its keys from the manifest |
+| The game folder as a project | editor and game, the same two branches | Built (fourth and fifth progress notes). The editor sets a folder up, converts an older manifest on request, and changes and saves its keys and its look profile, which Game look is drawn from as soon as it is saved; a manifest the game could not play with is refused by the shared format; a client the editor starts gets `--project-root` and the folder, a server does not; the client reads its keys from the manifest |
 | Of the design below, not built | editor UI | The box in the 3D view saying a game window is open; "Try again" for a server that did not shut down |
 | Running the game inside the editor's view | editor and game | Not built. P2. "Preview in Editor" is in the menu, switched off, with the reason |
 | Design | Claude Design | Drawn: five boards and the PlayControl page. P0 follows them where it can; the Play menu is as wide as any menu, because the design has no token for the wider menu it draws |
