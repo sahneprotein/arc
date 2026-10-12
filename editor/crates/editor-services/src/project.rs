@@ -7,14 +7,28 @@
 //! it: a manifest, a level or a levels folder that is a link to somewhere else is refused,
 //! not followed. Nothing is made before what is asked for has been found valid, so a setup
 //! that is refused leaves the folder as it was.
+//!
+//! A project that is set up has what the game needs of a project's folder: the manifest, a
+//! level to start with and the look profile the manifest names. A level and a profile that
+//! are there are kept; one that is missing is made, the level as the starter arena
+//! (`scene_data::starter_level`) under an ID of its own and the profile as the default one
+//! ([`DEFAULT_LOOK_PROFILE`]). The game's programs and its own assets are not part of a
+//! project and are not made here.
+//!
+//! A new project is made in a folder of its own ([`create_project_in`]): a folder named
+//! after the project, inside the one the person chose, and only where nothing has that
+//! name. So a new project never fills a folder that holds other things.
 
 use crate::persistence::PathLock;
 use project_spec::{ProjectConfig, ProjectError};
-use scene_data::{Diagnostic, SceneDocument};
+use scene_data::{Diagnostic, SceneDocument, StableId};
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
+    hash::{BuildHasher, Hasher},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 mod settings;
@@ -34,6 +48,8 @@ pub struct ProjectSetup {
     pub start_level_path: PathBuf,
     pub created_project: bool,
     pub created_level: bool,
+    /// Whether the look profile the manifest names was made: it was not in the folder.
+    pub created_profile: bool,
 }
 
 /// A level file of the folder that a project cannot start with, and why: the refusal's code
@@ -56,6 +72,9 @@ pub struct SetupPlan {
     pub rejected: Vec<RejectedLevel>,
     /// The starter level a setup would make if it made one: a name no file has.
     pub starter: PathBuf,
+    /// The look profile a setup would make: the one a new manifest names, when nothing in
+    /// the folder has that name. `None` when something has, which is then kept as it is.
+    pub profile: Option<PathBuf>,
 }
 
 impl SetupPlan {
@@ -115,10 +134,13 @@ pub fn plan_setup(root: &Path) -> Result<SetupPlan, Diagnostic> {
         Err(error) => return Err(io_problem("project.read", &folder, error)),
     };
     files.sort();
+    let profile = root.join(ProjectConfig::new("").rendering.profile);
     let mut plan = SetupPlan {
         existing: None,
         rejected: Vec::new(),
         starter: next_starter_path(root),
+        // Anything of the name is kept, a link that leads nowhere too.
+        profile: fs::symlink_metadata(&profile).is_err().then_some(profile),
     };
     for path in files {
         match level_problem(root, &path) {
@@ -130,8 +152,9 @@ pub fn plan_setup(root: &Path) -> Result<SetupPlan, Diagnostic> {
     Ok(plan)
 }
 
-/// Creates the project manifest and first playable starter level without replacing anything.
-/// If a level already exists, it becomes the selected start level instead of being overwritten.
+/// Creates the project manifest, a first playable starter level and the look profile the
+/// manifest names, without replacing anything. If a level already exists, it becomes the
+/// selected start level instead of being overwritten; a look profile that is there is kept.
 /// A folder whose level files are all rejected is not set up: see [`create_project_with`].
 pub fn create_project(root: &Path, name: &str) -> Result<ProjectSetup, Diagnostic> {
     create_project_with(root, name, FreshStarter::OnlyWithoutLevels)
@@ -141,7 +164,8 @@ pub fn create_project(root: &Path, name: &str) -> Result<ProjectSetup, Diagnosti
 /// that were rejected.
 ///
 /// Nothing is made before the name and the whole manifest have been found valid. A starter
-/// level that was made is taken away again if the manifest cannot be written after it.
+/// level and a look profile that were made are taken away again if the manifest cannot be
+/// written after them.
 pub fn create_project_with(
     root: &Path,
     name: &str,
@@ -166,6 +190,7 @@ pub fn create_project_with(
             start_level_path: level,
             created_project: false,
             created_level: false,
+            created_profile: false,
         });
     }
 
@@ -182,18 +207,32 @@ pub fn create_project_with(
     let level_path = plan.existing.unwrap_or(plan.starter);
     inside(root, &level_path)?;
     inside(root, &config_path)?;
+    if let Some(profile) = &plan.profile {
+        inside(root, profile)?;
+    }
     config.startup.start_level = relative_string(root, &level_path)?;
     // The whole manifest, before anything is written.
     let bytes = project_spec::canonical_bytes(&config)
         .map_err(|error| project_error(&config_path, error))?;
+    // What was made for this project is taken away again when there is no project.
+    let take_back = |level: bool, profile: bool| {
+        if level {
+            let _ = fs::remove_file(&level_path);
+        }
+        if let Some(path) = plan.profile.as_ref().filter(|_| profile) {
+            let _ = fs::remove_file(path);
+        }
+    };
     if created_level {
         create_starter_level(&level_path)?;
     }
+    let created_profile = plan.profile.is_some();
+    if created_profile && let Err(refusal) = install_default_look(root, &config.rendering.profile) {
+        take_back(created_level, false);
+        return Err(refusal);
+    }
     if let Err(refusal) = create_exclusive(&config_path, &bytes) {
-        // The starter was made for this project, and there is no project.
-        if created_level {
-            let _ = fs::remove_file(&level_path);
-        }
+        take_back(created_level, created_profile);
         return Err(refusal);
     }
     Ok(ProjectSetup {
@@ -202,6 +241,87 @@ pub fn create_project_with(
         start_level_path: level_path,
         created_project: true,
         created_level,
+        created_profile,
+    })
+}
+
+/// The folders a setup makes in a folder that had none of them, deepest first: what is
+/// taken away again, when it is empty, after a new project could not be made.
+const MADE_FOLDERS: [&str; 3] = ["levels", "assets/render", "assets"];
+
+/// The name of the folder a new project called `name` is made in: the name as it is, with
+/// what a folder's name cannot have on some system (`/ \ : * ? " < > |` and control
+/// characters) written as `-`, and without spaces and dots at its ends. Refused
+/// (`project.folder_name`) when nothing is left, and for a name a system keeps for itself.
+pub fn project_folder_name(name: &str) -> Result<String, Diagnostic> {
+    const KEPT: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let written: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if c.is_control() => '-',
+            c => c,
+        })
+        .collect();
+    let folder = written.trim_matches(|c: char| c.is_whitespace() || c == '.');
+    let stem = folder.split('.').next().unwrap_or_default().trim_end();
+    if folder.is_empty() || KEPT.iter().any(|kept| kept.eq_ignore_ascii_case(stem)) {
+        return Err(Diagnostic::new("project.folder_name").with("name", name.trim()));
+    }
+    Ok(folder.to_owned())
+}
+
+/// Where a new project called `name` would be made inside `parent`. Reads only.
+///
+/// Refused when the name is none a project can have (`project.value`) or leaves no folder
+/// name (`project.folder_name`), when `parent` is not a folder that is there
+/// (`project.parent_missing`), and when anything inside it has the folder's name already,
+/// a file or a link that leads nowhere too (`project.folder_taken`).
+pub fn new_project_folder(parent: &Path, name: &str) -> Result<PathBuf, Diagnostic> {
+    let name = name.trim();
+    let config = ProjectConfig::new(name);
+    project_spec::validate(&config)
+        .map_err(|error| project_error(&parent.join(PROJECT_FILE), error))?;
+    let folder_name = project_folder_name(name)?;
+    let parent = fs::canonicalize(parent)
+        .ok()
+        .filter(|parent| parent.is_dir())
+        .ok_or_else(|| Diagnostic::new("project.parent_missing").with("path", parent.display()))?;
+    let folder = parent.join(folder_name);
+    if fs::symlink_metadata(&folder).is_ok() {
+        return Err(Diagnostic::new("project.folder_taken").with("path", folder.display()));
+    }
+    Ok(folder)
+}
+
+/// Makes a new project called `name` in a folder of its own inside `parent`
+/// ([`new_project_folder`]): the folder, and in it the manifest, the starter level and the
+/// default look profile. `parent` itself is given nothing but that one folder.
+///
+/// Nothing that is there is written over or entered: a folder of that name that another
+/// program makes meanwhile refuses it too (`project.folder_taken`). If the project cannot
+/// be made in the new folder, what was made is taken away again, the folder too.
+pub fn create_project_in(parent: &Path, name: &str) -> Result<ProjectSetup, Diagnostic> {
+    let name = name.trim();
+    let folder = new_project_folder(parent, name)?;
+    // Made as a new folder or not at all: one that is there is not entered.
+    fs::create_dir(&folder).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Diagnostic::new("project.folder_taken").with("path", folder.display())
+        } else {
+            io_problem("project.create_folder", &folder, error)
+        }
+    })?;
+    create_project_with(&folder, name, FreshStarter::OnlyWithoutLevels).inspect_err(|_| {
+        // Only folders that are empty go: the files were taken away where they were made,
+        // and anything another program put there stays.
+        for made in MADE_FOLDERS {
+            let _ = fs::remove_dir(folder.join(made));
+        }
+        let _ = fs::remove_dir(&folder);
     })
 }
 
@@ -363,19 +483,49 @@ fn level_problem(root: &Path, path: &Path) -> Option<(String, String)> {
         .map(|refusal| (refusal.code.clone(), refusal.to_string()))
 }
 
+/// The level a new project starts with, under an ID of its own: the starter arena, as a
+/// setup writes it. For whoever shows a project a level before it has one of its own.
+pub fn starter_level() -> SceneDocument {
+    scene_data::starter_level(fresh_level_id())
+}
+
 fn create_starter_level(path: &Path) -> Result<(), Diagnostic> {
     let parent = path
         .parent()
         .ok_or_else(|| Diagnostic::new("project.path_invalid"))?;
     fs::create_dir_all(parent)
         .map_err(|error| io_problem("project.create_folder", parent, error))?;
-    let document: SceneDocument = scene_data::current_map();
+    let document = starter_level();
     scene_data::validate(&document)
         .map_err(|error| Diagnostic::new("project.starter_invalid").with("detail", error))?;
     let mut bytes = serde_json::to_vec_pretty(&document)
         .map_err(|error| Diagnostic::new("project.encode").with("detail", error))?;
     bytes.push(b'\n');
     create_exclusive(path, &bytes)
+}
+
+/// An ID for a level that is made here, which no other level is likely to have: from the
+/// time, this process, a count of the IDs it made and what the system gives each program
+/// to keep its tables apart, which is different every time a program is started.
+fn fresh_level_id() -> StableId {
+    static MADE: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let chance = std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish();
+    let mut hash = Sha256::new();
+    hash.update(b"arc level id");
+    hash.update(nanos.to_le_bytes());
+    hash.update(std::process::id().to_le_bytes());
+    hash.update(MADE.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+    hash.update(chance.to_le_bytes());
+    let digest = hash.finalize();
+    let mut bits = [0u8; 16];
+    bits.copy_from_slice(&digest[..16]);
+    // Never the one ID no level may have.
+    StableId::from_u128(u128::from_le_bytes(bits) | 1)
 }
 
 fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, Diagnostic> {
@@ -523,15 +673,202 @@ mod tests {
     fn first_setup_creates_manifest_and_playable_starter_without_replacing_existing_files() {
         let folder = tempfile::tempdir().unwrap();
         let project = create_project(folder.path(), "Arc Test").unwrap();
-        assert!(project.created_project && project.created_level);
+        assert!(project.created_project && project.created_level && project.created_profile);
         assert!(project.start_level_path.is_file());
         assert_eq!(load_project(folder.path()).unwrap(), project.config);
+        // The look profile the manifest names is in the folder, and is the default one.
+        let profile = folder.path().join(&project.config.rendering.profile);
+        assert_eq!(fs::read(&profile).unwrap(), DEFAULT_LOOK_PROFILE);
+        assert!(look_profile(folder.path(), &project.config.rendering.profile).is_ok());
 
         let level_bytes = fs::read(&project.start_level_path).unwrap();
         let again = create_project(folder.path(), "A Different Name").unwrap();
-        assert!(!again.created_project && !again.created_level);
+        assert!(!again.created_project && !again.created_level && !again.created_profile);
         assert_eq!(fs::read(&project.start_level_path).unwrap(), level_bytes);
         assert_eq!(again.config.project.name, "Arc Test");
+    }
+
+    fn level_at(path: &Path) -> SceneDocument {
+        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_starter_is_the_arena_under_an_id_of_its_own_and_can_be_cooked_and_played() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let one = level_at(
+            &create_project(first.path(), "One")
+                .unwrap()
+                .start_level_path,
+        );
+        let two = level_at(
+            &create_project(second.path(), "Two")
+                .unwrap()
+                .start_level_path,
+        );
+        // The same arena, and each project's level is a level of its own.
+        assert_eq!(one.objects, two.objects);
+        assert!(one.id.valid() && two.id.valid());
+        assert_ne!(one.id, two.id);
+        assert_eq!(one, scene_data::starter_level(one.id.clone()));
+        // Not the game's old map.
+        let sample = scene_data::current_map();
+        assert_ne!(one.id, sample.id);
+        assert_ne!(one.objects, sample.objects);
+        // Nothing stops it from being cooked and played as it is.
+        let problems = editor_core::review_document(&one);
+        assert!(problems.is_empty(), "{}", problems.len());
+        editor_cook::cook(&one).unwrap();
+    }
+
+    #[test]
+    fn a_setup_keeps_a_look_profile_that_is_there_and_says_what_it_would_make() {
+        let folder = tempfile::tempdir().unwrap();
+        let named = folder.path().join("assets/render/look-v1.json");
+        let plan = plan_setup(folder.path()).unwrap();
+        assert_eq!(plan.profile, Some(named.clone()));
+        // One of the folder's own, which the look reader would not even take.
+        fs::create_dir_all(named.parent().unwrap()).unwrap();
+        fs::write(&named, b"the folder's own").unwrap();
+        assert_eq!(plan_setup(folder.path()).unwrap().profile, None);
+        let project = create_project(folder.path(), "Arc Test").unwrap();
+        assert!(project.created_project && !project.created_profile);
+        assert_eq!(fs::read(&named).unwrap(), b"the folder's own");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_setup_whose_manifest_cannot_be_written_takes_back_the_level_and_the_profile() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path();
+        // The level and the profile can be made, in folders that are there, and the
+        // manifest cannot: nothing may be made in the folder itself.
+        fs::create_dir_all(root.join("levels")).unwrap();
+        fs::create_dir_all(root.join("assets/render")).unwrap();
+        let allow = |mode: u32| fs::set_permissions(root, fs::Permissions::from_mode(mode));
+        allow(0o555).unwrap();
+        let refused = create_project(root, "Arc Test");
+        allow(0o755).unwrap();
+        // Whoever may write anywhere is not refused, and then there is nothing to see.
+        if let Err(refused) = refused {
+            assert_eq!(refused.code, "project.write");
+            assert!(files(root).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_new_project_is_made_in_a_folder_of_its_own_inside_the_chosen_one() {
+        let chosen = tempfile::tempdir().unwrap();
+        let parent = chosen.path().canonicalize().unwrap();
+        fs::write(parent.join("notes.txt"), b"the person's").unwrap();
+        assert_eq!(
+            new_project_folder(&parent, " Harbour Duel ").unwrap(),
+            parent.join("Harbour Duel")
+        );
+        assert_eq!(files(&parent).len(), 1);
+
+        let project = create_project_in(&parent, " Harbour Duel ").unwrap();
+        let root = parent.join("Harbour Duel");
+        assert_eq!(project.config.project.name, "Harbour Duel");
+        assert_eq!(project.config_path, project_path(&root));
+        assert!(project.created_project && project.created_level && project.created_profile);
+        // The chosen folder has the new one and what it had, nothing more.
+        let mut inside: Vec<_> = fs::read_dir(&parent)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        inside.sort();
+        assert_eq!(inside, ["Harbour Duel", "notes.txt"]);
+        assert_eq!(fs::read(parent.join("notes.txt")).unwrap(), b"the person's");
+        let made: Vec<_> = files(&root)
+            .into_iter()
+            .map(|(path, _)| relative_string(&root, &path).unwrap())
+            .collect();
+        assert_eq!(
+            made,
+            [
+                "arc-project.json",
+                "assets/render/look-v1.json",
+                "levels/first-level.level.json"
+            ]
+        );
+        assert_eq!(load_project(&root).unwrap(), project.config);
+    }
+
+    #[test]
+    fn a_new_project_is_not_made_where_anything_has_its_folders_name() {
+        let chosen = tempfile::tempdir().unwrap();
+        let parent = chosen.path().canonicalize().unwrap();
+        // A folder with something in it, a file, and a project that is there already.
+        fs::create_dir(parent.join("Taken")).unwrap();
+        fs::write(parent.join("Taken/keep.txt"), b"kept").unwrap();
+        fs::write(parent.join("A file"), b"kept").unwrap();
+        create_project_in(&parent, "Made").unwrap();
+        let before = files(&parent);
+        for name in ["Taken", "A file", "Made"] {
+            let refused = create_project_in(&parent, name).unwrap_err();
+            assert_eq!(refused.code, "project.folder_taken", "{name}");
+            assert_eq!(
+                refused.parameters["path"],
+                parent.join(name).display().to_string()
+            );
+            assert_eq!(
+                new_project_folder(&parent, name).unwrap_err().code,
+                "project.folder_taken"
+            );
+        }
+        // An empty folder of the name is not entered either: it is not this project's.
+        fs::create_dir(parent.join("Empty")).unwrap();
+        assert_eq!(
+            create_project_in(&parent, "Empty").unwrap_err().code,
+            "project.folder_taken"
+        );
+        assert!(parent.join("Empty").is_dir());
+        assert_eq!(files(&parent), before);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(parent.join("nowhere"), parent.join("Linked")).unwrap();
+            assert_eq!(
+                create_project_in(&parent, "Linked").unwrap_err().code,
+                "project.folder_taken"
+            );
+            assert!(!parent.join("nowhere").exists());
+        }
+    }
+
+    #[test]
+    fn a_new_projects_folder_is_named_after_it_as_far_as_a_folder_can_be() {
+        assert_eq!(project_folder_name("Harbour Duel").unwrap(), "Harbour Duel");
+        assert_eq!(project_folder_name("  a/b\\c: d?  ").unwrap(), "a-b-c- d-");
+        assert_eq!(project_folder_name("..hidden.").unwrap(), "hidden");
+        assert_eq!(project_folder_name("tab\there").unwrap(), "tab-here");
+        for name in [
+            "", "  ", ".", "..", " . . ", "con", "NUL", "com1.txt", "Lpt9",
+        ] {
+            let refused = project_folder_name(name).unwrap_err();
+            assert_eq!(refused.code, "project.folder_name", "{name:?}");
+        }
+        assert_eq!(project_folder_name("console").unwrap(), "console");
+
+        let chosen = tempfile::tempdir().unwrap();
+        let before = files(chosen.path());
+        // A name no project can have, a name that leaves no folder name, and a chosen
+        // folder that is not there: nothing is made for any of them.
+        for (name, code) in [("  ", "project.value"), ("..", "project.folder_name")] {
+            let refused = create_project_in(chosen.path(), name).unwrap_err();
+            assert_eq!(refused.code, code, "{name:?}");
+        }
+        let gone = chosen.path().join("gone");
+        let refused = create_project_in(&gone, "Game").unwrap_err();
+        assert_eq!(refused.code, "project.parent_missing");
+        assert!(!gone.exists());
+        // Nor inside a file.
+        fs::write(chosen.path().join("file"), b"").unwrap();
+        let refused = create_project_in(&chosen.path().join("file"), "Game").unwrap_err();
+        assert_eq!(refused.code, "project.parent_missing");
+        fs::remove_file(chosen.path().join("file")).unwrap();
+        assert_eq!(files(chosen.path()), before);
     }
 
     #[test]

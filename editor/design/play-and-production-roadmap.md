@@ -815,6 +815,40 @@ Proposed next, in this order, none decided:
 7. Parity by picture, the adapter's refused fields and published models, as the fourth note
    has them.
 
+Progress, 2026-10-12, the sixth note: a project the browser makes can be played. This takes
+the place of what the fifth note says of a new project that cannot be played and of where
+the game is looked for. It is in the working tree on top of `613c51be9` and was not committed
+when this was written. "New Project" asks for a name and makes a folder of that name inside
+the folder that was chosen, never over one that is there, and puts nothing else into the
+chosen folder. The project gets its file, in the same schema as before; a first level made
+for the purpose, a small arena for two teams of 19 boxes and 8 spawn points under an ID of
+its own, where it was the game's old map before; and the default look profile at
+`assets/render/look-v1.json`, so that Game look and the game's client have one to read. A
+project whose look profile is not in its folder is entered with the Project settings open,
+and "Make the default look profile" makes it there, only where no file is, without writing
+the project file. The game is not part of a project: its folder is one setting of the editor
+for every project, kept where the system keeps an application's settings, chosen in the
+browser and changed from the Play menu of an open project. A folder without the built
+server, the built client and the assets is refused in words, and the setting stays as it
+was. The setting comes before a game in the project's own folder, which is used only while
+nothing is set. What was run, after the Command Line Tools were put back and both build
+folders emptied, is recorded as the one who ran it reports and was not run by the writer of
+this note. Unit tests chosen by name: `scene-data`, the starter level, 4 of 4;
+`editor-services`, the project, its catalog and its settings, 39 of 39, the game's folder 4
+of 4 and the check of a placed emitter before a start 1 of 1; `editor-ui`, the browser 15 of
+15, the project 38 of 38, the Play menu 23 of 23, the words 1 of 1, the folder chooser 2 of
+2, the Project settings' panel 5 of 5 and two of the session for a new project and the game's
+folder, 2 of 2; the application, the browser as first screen 1 of 1, the look 7 of 7 and the
+places behind the browser 1 of 1. The editor builds. Scripted, in the built editor with its
+window hidden: the cases of a new project (`browser-new`), 16 of 16; `project-setup`, 2 of
+2; `project-starter-cooks`, 1 of 1. And the real game once: with
+`/private/tmp/arc-game-play-readiness` chosen as the game's folder and a project "Playcheck"
+made new in a temporary folder, F5 reached Running on the arena, the run was stopped, server
+and client both left with status 0, and the cleanup had nothing to say; no file of the
+person's Documents folder or of the game's main checkout was changed. Not run: the tests of
+the whole workspace, the linter, and the other scripted cases; and no picture was taken of
+the new words and buttons.
+
 Sources:
 
 - `crates/editor-services/docs/play-boundary.md`: the agreed contract between the UI and the

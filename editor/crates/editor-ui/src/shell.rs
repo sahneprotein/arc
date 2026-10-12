@@ -35,7 +35,10 @@ use crate::{
             commit_name, fill_names, fill_new_inputs, fill_snap_steps, inspector_panel,
             show_inspector, show_mixed_marks, InspectorPanel,
         },
-        launcher::{enter_project, fill_launcher_name, launcher, launcher_keys, show_launcher},
+        launcher::{
+            enter_project, fill_launcher_name, follow_game_folder, launcher, launcher_keys,
+            show_launcher, show_new_folder,
+        },
         levels::{
             confirm_level_name, forget_name_problem, level_dialog, level_dialog_keys,
             show_level_dialog, LevelDialog, LevelNameProblem,
@@ -404,16 +407,18 @@ impl Plugin for EditorUiPlugin {
             .add_systems(PreUpdate, pump_editor.in_set(PumpEditor))
             .add_systems(Last, keep_drawing)
             // The project browser: its keys, the folder it asked for, the entering of the
-            // project that was chosen, and its screen. A project is entered before the
-            // Project settings look at it.
+            // project that was chosen, the game's folder when it was chosen anew, and its
+            // screen. A project is entered before the Project settings look at it.
             .add_systems(
                 Update,
                 (
                     launcher_keys,
                     choose_folder,
                     enter_project,
+                    follow_game_folder,
                     show_launcher,
                     fill_launcher_name,
+                    show_new_folder,
                 )
                     .chain()
                     .before(show_project),

@@ -19,7 +19,10 @@ use editor_core::{
     TerrainSculptRequest, TerrainSurfaceRay, TransactionId, TransformRetention, ViewSnapshot,
 };
 use editor_services::{
-    project::{GameRuntimeAvailability, GameRuntimeRequirement, ProjectStartupContext},
+    project::{
+        GameRuntimeAvailability, GameRuntimeRequirement, ProjectRuntimeContext,
+        ProjectStartupContext,
+    },
     DiskVersion, EditorHandle, JobKind, JobOperation, JobOutput, JobTicket, PlayConfig,
     PlayControl, PlayEnd, PlayEvent, PlayHandle, PlayMode, PlayRequest, PlayRole, PlayState,
     PlayStatus, RunId, ServiceEvent, VerifiedPackageReceipt,
@@ -96,6 +99,8 @@ pub struct Editor {
     /// What of the game is not in the project's folder, when that is why this editor has no
     /// game to start.
     game_missing: Vec<GameRuntimeRequirement>,
+    /// Runtime selected for the open project. None for command-line/direct-entry sessions.
+    runtime: Option<ProjectRuntimeContext>,
     /// A start that was sent and not yet answered.
     start_unanswered: bool,
     /// The last thing the coordinator refused, until the next request.
@@ -210,6 +215,7 @@ impl Editor {
             play_when_checked: None,
             local_clients: 1,
             game_missing: Vec::new(),
+            runtime: None,
             start_unanswered: false,
             play_refusal: None,
             last_end: None,
@@ -1043,6 +1049,9 @@ impl Editor {
         match Self::new(document, level_path, self.package_root.clone()) {
             Ok(mut fresh) => {
                 fresh.next_id = self.next_id;
+                fresh.emitter_game = self.emitter_game.clone();
+                fresh.game_missing = self.game_missing.clone();
+                fresh.runtime = self.runtime.clone();
                 // A game that runs keeps running on its own cooked level: the coordinator
                 // and what is known of the last run belong to the editor, not to the level.
                 fresh.play = self.play.take();
@@ -1065,20 +1074,18 @@ impl Editor {
     }
 
     /// Enters a project: the level it starts with becomes the open level, in a session of
-    /// its own whose cooked levels go into the project's folder, and the game and its
-    /// emitters are the ones of that folder. Whatever was open before is gone; the caller
-    /// has made sure that nothing of it was to be kept, and that no game runs.
+    /// its own whose cooked levels and emitter assets belong to the project. Play uses the
+    /// separately selected runtime, if one is configured. Whatever was open before is gone;
+    /// the caller has made sure that nothing of it was to be kept, and that no game runs.
     ///
-    /// A level file that is there is opened; until it is read, and without one, the level
-    /// is the game's current map, not yet saved, as when the editor is started on a folder
-    /// without a level.
+    /// A level file that is there is opened; without one, the project starts from its
+    /// unsaved starter arena, ready to be saved at the configured start-level path.
     ///
-    /// Where the game is not built in the folder the editor has no game to start, and
-    /// keeps what is missing for the Play control to say ([`Editor::game_missing`]). The
-    /// level can be edited, saved, cooked and checked all the same.
+    /// With no runtime selected the editor has no game to start. The project can still be
+    /// edited, saved, cooked and checked.
     pub fn open_project(&mut self, context: &ProjectStartupContext) {
         let fresh = Self::new(
-            scene_data::current_map(),
+            editor_services::project::starter_level(),
             context.start_level.clone(),
             context.package_root.clone(),
         );
@@ -1095,21 +1102,58 @@ impl Editor {
                 return;
             }
         }
-        self.set_emitter_game(Some(context.game_root.clone()));
-        match &context.runtime {
-            GameRuntimeAvailability::Ready => {
-                if let Err(problem) = self.connect_game(context.game_root.clone()) {
-                    self.problem = Some(problem);
-                    self.problem_from = Some(Source::Command);
-                }
-            }
-            GameRuntimeAvailability::Missing { requirements } => {
-                self.game_missing = requirements.clone();
-            }
-        }
+        self.set_emitter_game(Some(context.project_root.clone()));
+        let runtime = ProjectRuntimeContext {
+            game_root: context.game_root.clone(),
+            runtime_source: context.runtime_source,
+            runtime: context.runtime.clone(),
+        };
+        let _ = self.use_runtime(&context.project_root, runtime);
         if context.start_level_exists {
             self.open(context.start_level.clone());
         }
+    }
+
+    /// Applies a refreshed runtime selection to the open project. A live or pending Play
+    /// run keeps its runtime; the caller can retry once the run has ended.
+    pub fn use_runtime(&mut self, project_root: &Path, runtime: ProjectRuntimeContext) -> bool {
+        if self.active_run().is_some() || self.play_requested() {
+            return false;
+        }
+
+        self.play = None;
+        self.game_missing.clear();
+        let mut runtime = runtime;
+        // A ready installation always has a root. Treat an inconsistent caller value as
+        // unconfigured so the Play panel cannot claim it can launch without a connection.
+        if runtime.game_root.is_none() && runtime.runtime == GameRuntimeAvailability::Ready {
+            runtime.runtime = GameRuntimeAvailability::Unconfigured;
+            runtime.runtime_source = editor_services::project::RuntimeLocationSource::Unconfigured;
+        }
+        let runtime_root = match &runtime.runtime {
+            GameRuntimeAvailability::Ready => runtime.game_root.clone(),
+            GameRuntimeAvailability::Missing { requirements } => {
+                self.game_missing = requirements.clone();
+                None
+            }
+            GameRuntimeAvailability::Unconfigured
+            | GameRuntimeAvailability::PreferenceRefused { .. }
+            | GameRuntimeAvailability::FolderRefused { .. } => None,
+        };
+        self.runtime = Some(runtime);
+        if let Some(runtime_root) = runtime_root {
+            if let Err(problem) = self.connect_game(runtime_root, project_root.to_path_buf()) {
+                self.problem = Some(problem);
+                self.problem_from = Some(Source::Command);
+            }
+        }
+        true
+    }
+
+    /// The runtime selection for the open project. Direct-entry sessions have no project
+    /// context and return `None`.
+    pub fn runtime(&self) -> Option<&ProjectRuntimeContext> {
+        self.runtime.as_ref()
     }
 
     /// What of the game is not in the project's folder, when that is why this editor has no
@@ -1370,16 +1414,18 @@ impl Editor {
         self.play = Some(handle);
     }
 
-    /// Gives the editor the game in this folder to start: the folder its server and client
-    /// are built in, laid out as the game's repository is. The coordinator checks the
-    /// programs when a run is started, not here; a game that is not built is a start that
-    /// fails, with its reason. The game's logs go under the folder's `target`.
-    pub fn connect_game(&mut self, folder: PathBuf) -> Result<(), Diagnostic> {
-        let logs = folder.join("target/arc-editor-play-logs");
-        // The game's folder is the project's folder. The client is told so only while the
-        // folder is a ready project, which the launcher looks at each time it starts one:
-        // a project that is set up or converted during the session counts from then on.
-        let config = PlayConfig::from_game_worktree(folder.clone(), logs).with_project_root(folder);
+    /// Gives the editor the runtime in this folder to start, while preserving the content
+    /// project as a separate client root. Logs are outside the runtime, with a project-local
+    /// fallback only on platforms without a per-user data directory.
+    pub fn connect_game(
+        &mut self,
+        runtime_root: PathBuf,
+        project_root: PathBuf,
+    ) -> Result<(), Diagnostic> {
+        let logs = editor_services::runtime::default_play_logs_directory()
+            .unwrap_or_else(|| project_root.join("target/arc-editor-play-logs"));
+        let config =
+            PlayConfig::from_game_worktree(runtime_root, logs).with_project_root(project_root);
         let handle = PlayHandle::start(config)?;
         self.connect_play(handle);
         Ok(())
@@ -2920,7 +2966,8 @@ mod tests {
         let mut editor = cooked_in(folder.path());
         let view = PlayView::of(&editor);
         assert!(!view.game && !view.game_window_offered());
-        assert!(view.reason_line().contains("--game"));
+        let reason = view.reason_line();
+        assert!(!reason.contains("--game") && reason.contains("project browser"));
         editor.play_external();
         assert!(!editor.play_requested() && !editor.busy());
         assert_eq!(editor.package_check(), &PackageCheck::NotAsked);
@@ -2935,7 +2982,7 @@ mod tests {
     fn a_project_is_entered_on_its_level_and_without_the_game_built_it_has_none_to_start() {
         use editor_services::project::{
             GameRuntimeAvailability, GameRuntimeRequirement, GameRuntimeRequirementKind,
-            ProjectStartupContext,
+            ProjectStartupContext, RuntimeLocationSource,
         };
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().to_path_buf();
@@ -2958,7 +3005,8 @@ mod tests {
             project_root: project.clone(),
             start_level: level.clone(),
             start_level_exists: false,
-            game_root: project.clone(),
+            game_root: Some(project.clone()),
+            runtime_source: RuntimeLocationSource::ProjectFolder,
             package_root: project.join("cooked"),
             runtime: GameRuntimeAvailability::Missing {
                 requirements: vec![GameRuntimeRequirement {
@@ -3004,6 +3052,77 @@ mod tests {
         settle(&mut editor);
         assert_eq!(editor.problem, None);
         assert!(level.is_file() && editor.has_file());
+    }
+
+    #[test]
+    fn project_play_uses_runtime_installation_and_keeps_content_paths_in_project() {
+        use editor_services::project::{
+            GameRuntimeAvailability, ProjectRuntimeContext, ProjectStartupContext,
+            RuntimeLocationSource,
+        };
+
+        let folder = tempfile::tempdir().unwrap();
+        let project_root = folder.path().join("content");
+        let runtime_root = folder.path().join("runtime");
+        std::fs::create_dir_all(project_root.join("cooked")).unwrap();
+        let start_level = project_root.join("levels/start.level.json");
+        let context = ProjectStartupContext {
+            project_root: project_root.clone(),
+            start_level: start_level.clone(),
+            start_level_exists: false,
+            game_root: Some(runtime_root.clone()),
+            runtime_source: RuntimeLocationSource::EditorPreference,
+            package_root: project_root.join("cooked"),
+            runtime: GameRuntimeAvailability::Ready,
+        };
+
+        let mut editor = Editor::new(
+            scene_data::current_map(),
+            folder.path().join("outside/unsaved.level.json"),
+            folder.path().join("outside/cooked"),
+        )
+        .unwrap();
+        editor.open_project(&context);
+
+        assert_eq!(editor.emitter_game.as_deref(), Some(project_root.as_path()));
+        assert_eq!(editor.package_root, project_root.join("cooked"));
+        assert_eq!(editor.level_path, start_level);
+        assert_eq!(
+            editor.runtime(),
+            Some(&ProjectRuntimeContext {
+                game_root: Some(runtime_root),
+                runtime_source: RuntimeLocationSource::EditorPreference,
+                runtime: GameRuntimeAvailability::Ready,
+            })
+        );
+        assert!(editor.play_connected());
+        assert_eq!(editor.problem, None);
+    }
+
+    #[test]
+    fn a_ready_runtime_without_a_root_does_not_connect_play() {
+        use editor_services::project::{
+            GameRuntimeAvailability, ProjectRuntimeContext, RuntimeLocationSource,
+        };
+
+        let folder = tempfile::tempdir().unwrap();
+        let mut editor = cooked_in(folder.path());
+        let context = ProjectRuntimeContext {
+            game_root: None,
+            runtime_source: RuntimeLocationSource::Unconfigured,
+            runtime: GameRuntimeAvailability::Ready,
+        };
+
+        assert!(editor.use_runtime(folder.path(), context));
+        assert!(!editor.play_connected());
+        assert_eq!(
+            editor.runtime().map(|context| &context.runtime),
+            Some(&GameRuntimeAvailability::Unconfigured)
+        );
+        assert_eq!(
+            editor.runtime().map(|context| context.runtime_source),
+            Some(RuntimeLocationSource::Unconfigured)
+        );
     }
 
     #[test]

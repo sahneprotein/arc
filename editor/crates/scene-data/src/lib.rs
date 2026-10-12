@@ -4,11 +4,13 @@ pub mod layers;
 mod model;
 pub mod rules;
 mod runtime;
+mod starter;
 pub mod terrain;
 mod validation;
 pub use fixture::current_map;
 pub use model::*;
 pub use runtime::*;
+pub use starter::starter_level;
 pub use validation::{validate, validation_diagnostics, MAX_OBJECTS};
 
 use sha2::{Digest, Sha256};

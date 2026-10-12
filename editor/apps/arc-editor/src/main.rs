@@ -148,7 +148,14 @@ fn main() -> AppExit {
         check::is_scripted(),
         check::scripted_browser().is_some(),
     ) {
+        // Where the game is that plays every project is the editor's one setting for this
+        // person, kept beside the list; a check keeps its own beside its own list.
+        let game_file = match check::scripted_browser() {
+            Some(list) => Some(list.with_file_name("game-folder.json")),
+            None => editor_ui::launcher::default_game_file(),
+        };
         Launcher::at_start(check::scripted_browser().or_else(editor_ui::launcher::default_list))
+            .with_game_file(game_file)
     } else {
         Launcher::off()
     };
@@ -217,7 +224,8 @@ fn main() -> AppExit {
     // the game's processes. A scripted check may put a stand-in in the game's place.
     let connected = match (check::scripted_game(), game) {
         (Some(script), _) => script.handle().map(|handle| editor.connect_play(handle)),
-        (None, Some(folder)) => editor.connect_game(folder),
+        // A folder named on the command line is the game's and the project's at once.
+        (None, Some(folder)) => editor.connect_game(folder.clone(), folder),
         (None, None) => Ok(()),
     };
     if let Err(problem) = connected {

@@ -96,7 +96,8 @@ pub const NO_FOLDER: &str = "The editor was started without a project folder. St
 /// What the first-run setup says it will do, before the person agrees.
 pub const SETUP_HINT: &str = "Setting up writes arc-project.json into this folder. The \
     project starts with the first level in the folder's levels that can be read; if there is \
-    none, a starter level is made there. No file that is there is changed.";
+    none, a starter level is made there. The look profile the game is drawn with is made \
+    too if the folder has none. No file that is there is changed.";
 
 /// What the dialog says of the folder's level files that cannot be read, as a title and what
 /// follows from it: with another level to start with they are only left alone; without one
@@ -211,6 +212,23 @@ pub const LOCAL_CLIENTS_HINT: &str = "How many game windows Play opens on this m
 /// What the dialog says of the number of local test clients while the project file names
 /// none: that it is one, and the file's to leave unnamed.
 pub const LOCAL_CLIENTS_UNNAMED: &str = "The project file names no number, which is 1.";
+
+/// The button that makes the default look profile where the project's is not in its folder.
+pub const MAKE_LOOK: &str = "Make the default look profile";
+
+/// What the dialog says of a project whose look profile is not in its folder, as a title and
+/// what to do: the file is named, and what the button makes.
+pub fn look_missing_words(profile: &str) -> (String, String) {
+    (
+        "The project's look profile is not in its folder".into(),
+        format!(
+            "The game does not start without it, and Game look in this editor is not drawn \
+             from the project. \"{MAKE_LOOK}\" writes the profile the game has been drawn \
+             with so far to {profile}. Nothing that is there is written over, and the \
+             project file is not changed."
+        ),
+    )
+}
 
 /// What the dialog says of the game's look profile: whether the editor holds it.
 pub fn look_words(look: &LookStatus) -> String {
@@ -608,6 +626,10 @@ pub(crate) fn warning(title: String, remedy: String, more: Option<String>) -> Bo
 #[derive(Component, Default, Clone)]
 pub struct ProjectWarning;
 
+/// The button that makes the default look profile.
+#[derive(Component, Default, Clone)]
+pub struct MakeLookButton;
+
 /// The button that sets the folder up. `fresh_starter` says that it is the button of a
 /// folder whose level files cannot be read: pressing it is the person's agreement to a new
 /// starter level beside them.
@@ -723,6 +745,13 @@ fn content(project: &Project, look: &LookStatus) -> Vec<Box<dyn SceneList>> {
                         format!("{}, a starter level that is made", relative(&plan.starter)),
                     )),
                 }
+                rows.push(shown(
+                    "Look profile",
+                    match &plan.profile {
+                        Some(profile) => format!("{}, which is made", relative(profile)),
+                        None => "the one in the folder, which is kept".to_owned(),
+                    },
+                ));
                 if !plan.rejected.is_empty() {
                     let said = rejected_words(plan.existing.is_some(), plan.rejected.len());
                     let files = plan
@@ -842,7 +871,27 @@ fn content(project: &Project, look: &LookStatus) -> Vec<Box<dyn SceneList>> {
                 .look_choices()
                 .iter()
                 .any(|choice| choice.path == settings.rendering_profile && choice.read.is_ok());
-            if !chosen_usable {
+            // The profile the project file names is not there: it can be made, on the
+            // person's word. Not while another one is being chosen in its place.
+            let missing = project.look_missing()
+                && project
+                    .config()
+                    .is_some_and(|config| config.rendering.profile == settings.rendering_profile);
+            if missing {
+                let (title, remedy) = look_missing_words(&settings.rendering_profile);
+                rows.push(warning(title, remedy, None));
+                rows.push(Box::new(bsn_list![(
+                    @FeathersButton {
+                        @caption: bsn! { Text(MAKE_LOOK) ThemedText },
+                        @variant: ButtonVariant::Primary,
+                    }
+                    MakeLookButton
+                    Node { align_self: AlignSelf::FlexStart, flex_shrink: 0.0 }
+                    on(|_: On<Activate>, mut project: ResMut<Project>| {
+                        project.install_look();
+                    })
+                )]));
+            } else if !chosen_usable {
                 rows.push(warning(
                     "The project's look profile cannot be used".into(),
                     "The game does not start with it. Choose another here, or put the file \
@@ -1082,6 +1131,12 @@ mod tests {
     fn what_setting_up_and_converting_do_is_said_before_the_person_agrees() {
         assert!(SETUP_HINT.contains("arc-project.json"));
         assert!(SETUP_HINT.contains("No file that is there is changed"));
+        assert!(SETUP_HINT.contains("look profile") && SETUP_HINT.contains("has none"));
+        let (title, remedy) = look_missing_words("assets/render/look-v1.json");
+        assert_eq!(title, "The project's look profile is not in its folder");
+        assert!(remedy.contains(MAKE_LOOK) && remedy.contains("assets/render/look-v1.json"));
+        assert!(remedy.contains("Nothing that is there is written over"));
+        assert!(remedy.contains("project file is not changed"));
         assert!(CONVERT_HINT.contains("does not change the file by itself"));
         assert!(CONVERT_HINT.contains("older version"));
         // The button of a folder whose levels cannot be read says what pressing it makes.

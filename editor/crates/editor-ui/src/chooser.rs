@@ -2,8 +2,10 @@
 //!
 //! The browser asks for a folder ([`Launcher::wants_folder`]); this shows the desktop's own
 //! dialog for choosing one and hands the answer back. The dialog is the desktop's: it has
-//! the person's places and recent folders, and it can make a new folder, which is how a new
-//! project gets one of its own. While it is open the editor's window waits behind it.
+//! the person's places and recent folders, and it can make a new folder. A new project's
+//! own folder is made by the editor, inside the one that is chosen here; the game's folder
+//! is chosen here too, from the browser or from an open project. While the dialog is open
+//! the editor's window waits behind it.
 //!
 //! Where there is no desktop to show a dialog on and nobody to answer it, as in a scripted
 //! check, the application has the chooser answer from a list instead
@@ -56,7 +58,8 @@ impl FolderChooser {
 pub fn dialog_title(why: FolderFor) -> &'static str {
     match why {
         FolderFor::Open => "Open Project: choose the project's folder",
-        FolderFor::New => "New Project: choose or make the folder for the project",
+        FolderFor::New => "New Project: choose the folder to make the project's folder in",
+        FolderFor::Game => "Game folder: choose the folder the game is built in",
     }
 }
 
@@ -94,7 +97,9 @@ mod tests {
     fn the_dialog_says_what_the_folder_is_chosen_for() {
         assert!(dialog_title(FolderFor::Open).starts_with("Open Project"));
         let new = dialog_title(FolderFor::New);
-        assert!(new.starts_with("New Project") && new.contains("make the folder"));
+        assert!(new.starts_with("New Project") && new.contains("to make the project's folder in"));
+        let game = dialog_title(FolderFor::Game);
+        assert!(game.starts_with("Game folder") && game.contains("the game is built in"));
     }
 
     #[test]

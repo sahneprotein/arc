@@ -69,7 +69,10 @@
 //! makes a scripted editor start in the browser as a person's does; without it a scripted
 //! editor has no browser. `pick-folder=PATH` plays nothing: it is what the desktop's folder
 //! chooser answers the next time the browser asks for a folder, and `pick-folder=` is the
-//! person choosing none. The result line ends with what the browser shows (`launcher_words`).
+//! person choosing none. `project-name=NAME` writes a name into the field of a new project's
+//! name, as typing it would. The game's folder, the editor's one setting for it, is kept in
+//! `game-folder.json` beside that list, so no check reads or writes the setting of whoever is
+//! at the machine. The result line ends with what the browser shows (`launcher_words`).
 //!
 //! `scroll-project=PIXELS` plays nothing: it puts the content of the Project settings that
 //! far up, so that a step after it finds a setting that is lower than the dialog is tall. A
@@ -463,11 +466,19 @@ type Emitters<'w> = (
 /// person's word, to be set up (`setup`) or converted (`convert`); `launcher_refusal` why
 /// the folder last chosen was not entered: `missing`, `already`, or the refusal's code.
 /// `launcher_list` is `ok`, `none` where there is no place for a list, or the code of why
-/// it cannot be used. `launcher_entered` counts the projects entered from the browser, and
-/// `game_missing` lists what of the game is not in the project's folder.
+/// it cannot be used. `launcher_entered` counts the projects entered from the browser.
+/// `launcher_pending` is `new` for a new project that waits for its name.
+///
+/// After those come the game: `game_folder` is what the editor's setting says of the game's
+/// folder (`Launcher::game_word`), `game_refusal` the code of why the folder last chosen for
+/// it was not taken, `runtime` what the open project is played with (`none` in an editor
+/// that was not entered on a project, `ready`, `unset`, `missing`, `unreadable` or
+/// `refused`), `runtime_source` where that game is from (`editor` for the setting, `project`
+/// for the project's own folder, `unset`), `runtime_folder` its folder, and `game_missing`
+/// what of the game is not in it.
 fn launcher_words(launcher: &editor_ui::Launcher, editor: &Editor) -> String {
     use editor_ui::launcher::{Pending, Refusal};
-    use editor_ui::project_status::{Kind, Status};
+    use editor_ui::project_status::{Availability, Kind, Source, Status};
     let rows: Vec<String> = launcher
         .rows()
         .iter()
@@ -485,6 +496,7 @@ fn launcher_words(launcher: &editor_ui::Launcher, editor: &Editor) -> String {
         .collect();
     let pending = match launcher.pending() {
         None => "none",
+        Some(Pending::New { .. }) => "new",
         Some(Pending::SetUp { .. }) => "setup",
         Some(Pending::Convert { .. }) => "convert",
     };
@@ -499,24 +511,50 @@ fn launcher_words(launcher: &editor_ui::Launcher, editor: &Editor) -> String {
         (None, true) => "ok".to_owned(),
         (None, false) => "none".to_owned(),
     };
-    let missing: Vec<&str> = editor
-        .game_missing()
-        .iter()
-        .map(|part| match part.kind {
-            Kind::ServerExecutable => "server",
-            Kind::ClientExecutable => "client",
-            Kind::AssetsDirectory => "assets",
-        })
-        .collect();
+    let runtime = editor.runtime();
+    let missing: Vec<&str> = match runtime.map(|runtime| &runtime.runtime) {
+        Some(Availability::Missing { requirements }) => requirements
+            .iter()
+            .map(|part| match part.kind {
+                Kind::ServerExecutable => "server",
+                Kind::ClientExecutable => "client",
+                Kind::AssetsDirectory => "assets",
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let played_with = match runtime.map(|runtime| &runtime.runtime) {
+        None => "none",
+        Some(Availability::Ready) => "ready",
+        Some(Availability::Unconfigured) => "unset",
+        Some(Availability::Missing { .. }) => "missing",
+        Some(Availability::PreferenceRefused { .. }) => "unreadable",
+        Some(Availability::FolderRefused { .. }) => "refused",
+    };
+    let source = match runtime.map(|runtime| runtime.runtime_source) {
+        None => "none",
+        Some(Source::EditorPreference) => "editor",
+        Some(Source::ProjectFolder) => "project",
+        Some(Source::Unconfigured) => "unset",
+    };
+    let folder = runtime
+        .and_then(|runtime| runtime.game_root.as_ref())
+        .map_or_else(|| "none".to_owned(), |folder| folder.display().to_string());
+    let game_refusal = launcher
+        .game_refusal()
+        .map_or("none", |(_, refusal)| refusal.code.as_str());
     format!(
         "launcher={} launcher_rows=[{}] launcher_selected={} launcher_pending={pending} \
-         launcher_refusal={refusal} launcher_list={list} launcher_entered={} game_missing=[{}]",
+         launcher_refusal={refusal} launcher_list={list} launcher_entered={} game_folder={} \
+         game_refusal={game_refusal} runtime={played_with} runtime_source={source} \
+         runtime_folder={folder} game_missing=[{}]",
         if launcher.shown() { "shown" } else { "off" },
         rows.join(","),
         launcher
             .selected()
             .map_or_else(|| "none".to_owned(), |index| index.to_string()),
         launcher.times_entered(),
+        launcher.game_word(),
         missing.join(",")
     )
 }
@@ -1007,6 +1045,23 @@ fn scripted(
                 world
                     .resource_mut::<editor_ui::FolderChooser>()
                     .answer_next(answer);
+            });
+            script.next_step_at = script.frame + BETWEEN_STEPS;
+            redraw.write(RequestRedraw);
+            info!("check step {step}");
+            return;
+        }
+        if let Some(name) = step.strip_prefix("project-name=") {
+            // The name of a new project, written into its field as typing it would.
+            let name = name.to_owned();
+            commands.queue(move |world: &mut World| {
+                let mut fields = world.query_filtered::<&mut bevy::text::EditableText, With<
+                    editor_ui::panels::launcher::LauncherNameInput,
+                >>();
+                for mut field in fields.iter_mut(world) {
+                    field.queue_edit(bevy::text::TextEdit::SelectAll);
+                    field.queue_edit(bevy::text::TextEdit::Insert(name.as_str().into()));
+                }
             });
             script.next_step_at = script.frame + BETWEEN_STEPS;
             redraw.write(RequestRedraw);

@@ -97,6 +97,8 @@ pub struct Project {
     saved: bool,
     /// How many saves of the settings went through since the editor started.
     saves: u64,
+    /// How many look profiles were made here since the editor started.
+    looks_made: u64,
 }
 
 /// What a key is bound to, in the manifest's order.
@@ -549,6 +551,52 @@ impl Project {
         &self.looks
     }
 
+    /// Whether the look profile the manifest names is not in the folder: nothing has that
+    /// name. A profile that is there and cannot be read is another matter, and is the
+    /// person's file to put right.
+    pub fn look_missing(&self) -> bool {
+        self.config().is_some_and(|config| {
+            self.looks.iter().any(|choice| {
+                choice.path == config.rendering.profile
+                    && matches!(&choice.read, Err(refusal) if refusal.code == "look.missing")
+            })
+        })
+    }
+
+    /// Makes the default look profile where the manifest names one that is not in the
+    /// folder, on the person's word. Nothing that is there is written over, and the
+    /// manifest is not written. Whether it was made; if not, the problem says why.
+    pub fn install_look(&mut self) -> bool {
+        let (Some(root), Some(named)) = (
+            self.root.clone(),
+            self.config().map(|config| config.rendering.profile.clone()),
+        ) else {
+            return false;
+        };
+        if !self.look_missing() {
+            return false;
+        }
+        match project::install_default_look(&root, &named) {
+            Ok(_) => {
+                self.problem = None;
+                self.read();
+                self.looks_made += 1;
+                true
+            }
+            Err(refusal) => {
+                self.problem = Some(refusal);
+                self.read();
+                false
+            }
+        }
+    }
+
+    /// How many look profiles were made here since the editor started. What the editor
+    /// draws from the profile is read again when this grows.
+    pub fn looks_made(&self) -> u64 {
+        self.looks_made
+    }
+
     /// The action whose key is being asked for.
     pub fn asking(&self) -> Option<KeyAction> {
         self.asking
@@ -830,6 +878,10 @@ mod tests {
             })
         );
         assert!(!project.wants_attention() && project.problem().is_none());
+        // The look profile the project file names was made with it.
+        assert!(root.join("assets/render/look-v1.json").is_file());
+        assert!(!project.look_missing());
+        assert!(project.look_profile().unwrap().1.is_ok());
         // Another editor on the folder finds the project, and there is nothing to set up.
         let mut again = Project::of_folder(Some(root));
         assert_eq!(again.state().word(), "Ready");
@@ -1194,6 +1246,32 @@ mod tests {
         assert_eq!(named.path, "assets/render/dusk.json");
         assert_eq!(named.read.as_ref().unwrap_err().code, "look.missing");
         assert!(project.look_profile().unwrap().1.is_err());
+
+        // It is made on the person's word, from the default, where the manifest names it;
+        // the manifest is not written for it.
+        assert!(project.look_missing());
+        let manifest = std::fs::read(folder.path().join("arc-project.json")).unwrap();
+        assert_eq!(project.looks_made(), 0);
+        assert!(project.install_look());
+        assert!(!project.look_missing() && project.problem().is_none());
+        assert_eq!(project.looks_made(), 1);
+        assert_eq!(
+            std::fs::read(render.join("dusk.json")).unwrap(),
+            project::DEFAULT_LOOK_PROFILE
+        );
+        assert!(project.look_profile().unwrap().1.is_ok());
+        assert_eq!(
+            std::fs::read(folder.path().join("arc-project.json")).unwrap(),
+            manifest
+        );
+        // Once it is there nothing is made, and a file that cannot be read is the
+        // person's: it is not missing, and is not replaced.
+        assert!(!project.install_look());
+        std::fs::write(render.join("dusk.json"), "{").unwrap();
+        project.read();
+        assert!(!project.look_missing() && !project.install_look());
+        assert_eq!(std::fs::read(render.join("dusk.json")).unwrap(), b"{");
+        assert_eq!(project.looks_made(), 1);
         // Without a manifest there is no profile of a project.
         assert!(Project::of_folder(None).look_profile().is_none());
     }

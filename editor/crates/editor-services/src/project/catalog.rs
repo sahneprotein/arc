@@ -159,6 +159,21 @@ pub enum GameRuntimeAvailability {
     Missing {
         requirements: Vec<GameRuntimeRequirement>,
     },
+    Unconfigured,
+    PreferenceRefused {
+        problem: Diagnostic,
+    },
+    FolderRefused {
+        problem: Diagnostic,
+    },
+}
+
+/// The source that selected the game runtime for this project session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeLocationSource {
+    EditorPreference,
+    ProjectFolder,
+    Unconfigured,
 }
 
 /// Facts passed to the editor after a project has been selected and validated.
@@ -167,9 +182,42 @@ pub struct ProjectStartupContext {
     pub project_root: PathBuf,
     pub start_level: PathBuf,
     pub start_level_exists: bool,
-    pub game_root: PathBuf,
+    /// Runtime root, separate from `project_root`; absent when no runtime can be selected.
+    pub game_root: Option<PathBuf>,
+    pub runtime_source: RuntimeLocationSource,
     pub package_root: PathBuf,
     pub runtime: GameRuntimeAvailability,
+}
+
+/// Runtime selection facts that can be refreshed after the editor-wide preference changes,
+/// without reopening a project's document or changing its source files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectRuntimeContext {
+    pub game_root: Option<PathBuf>,
+    pub runtime_source: RuntimeLocationSource,
+    pub runtime: GameRuntimeAvailability,
+}
+
+/// Resolve the selected runtime for an already-open project using the OS preference path.
+pub fn resolve_project_runtime(project_root: &Path) -> ProjectRuntimeContext {
+    resolve_project_runtime_using(
+        project_root,
+        crate::runtime::default_runtime_preference_path().as_deref(),
+    )
+}
+
+/// Injected-path form of [`resolve_project_runtime`] for scripted use.
+pub fn resolve_project_runtime_using(
+    project_root: &Path,
+    runtime_preference_path: Option<&Path>,
+) -> ProjectRuntimeContext {
+    let (game_root, runtime_source, runtime) =
+        resolve_runtime_location(project_root, runtime_preference_path);
+    ProjectRuntimeContext {
+        game_root,
+        runtime_source,
+        runtime,
+    }
 }
 
 /// Resolve paths and runtime availability for a valid current-schema project.
@@ -178,6 +226,18 @@ pub struct ProjectStartupContext {
 /// browser behavior and are not accepted here. This returns paths only; the game still
 /// starts from the verified cooked package rather than loading the source start level.
 pub fn startup_context(root: &Path) -> Result<ProjectStartupContext, Diagnostic> {
+    startup_context_using(
+        root,
+        crate::runtime::default_runtime_preference_path().as_deref(),
+    )
+}
+
+/// As [`startup_context`], with an injected user-preference path for scripted checks.
+/// Passing `None` means the platform has no standard preference location.
+pub fn startup_context_using(
+    root: &Path,
+    runtime_preference_path: Option<&Path>,
+) -> Result<ProjectStartupContext, Diagnostic> {
     let inspection = inspect(root);
     let (inspected_start_level, start_level_exists) = match inspection.status {
         ProjectInspectionStatus::Ready { start_level, .. } => (start_level, true),
@@ -199,70 +259,138 @@ pub fn startup_context(root: &Path) -> Result<ProjectStartupContext, Diagnostic>
     let start_level = inspected_start_level;
     let start_level_exists = start_level_exists && start_level.is_file();
     let package_root = project_root.join("cooked");
-    let runtime = game_runtime(&project_root);
+    let runtime_context = resolve_project_runtime_using(&project_root, runtime_preference_path);
     Ok(ProjectStartupContext {
-        game_root: project_root.clone(),
+        game_root: runtime_context.game_root,
+        runtime_source: runtime_context.runtime_source,
         project_root,
         start_level,
         start_level_exists,
         package_root,
-        runtime,
+        runtime: runtime_context.runtime,
     })
 }
 
-fn game_runtime(root: &Path) -> GameRuntimeAvailability {
-    let suffix = std::env::consts::EXE_SUFFIX;
-    let candidates = [
-        (
-            GameRuntimeRequirementKind::ServerExecutable,
-            root.join("target/debug").join(format!("server{suffix}")),
-            false,
-        ),
-        (
-            GameRuntimeRequirementKind::ClientExecutable,
-            root.join("target/debug").join(format!("client{suffix}")),
-            false,
-        ),
-        (
-            GameRuntimeRequirementKind::AssetsDirectory,
-            root.join("assets"),
-            true,
-        ),
-    ];
-    let missing: Vec<_> = candidates
-        .into_iter()
-        .filter_map(|(kind, path, directory)| {
-            let contained = inside(root, &path).is_ok();
-            let exists = if directory {
-                path.is_dir()
-            } else {
-                is_program_file(&path)
-            };
-            (!contained || !exists).then_some(GameRuntimeRequirement { kind, path })
-        })
-        .collect();
-    if missing.is_empty() {
-        GameRuntimeAvailability::Ready
-    } else {
-        GameRuntimeAvailability::Missing {
-            requirements: missing,
+fn resolve_runtime_location(
+    project_root: &Path,
+    preference_path: Option<&Path>,
+) -> (
+    Option<PathBuf>,
+    RuntimeLocationSource,
+    GameRuntimeAvailability,
+) {
+    if let Some(path) = preference_path {
+        match crate::runtime::load_runtime_preference(path) {
+            Err(problem) => {
+                return (
+                    None,
+                    RuntimeLocationSource::EditorPreference,
+                    GameRuntimeAvailability::PreferenceRefused { problem },
+                );
+            }
+            Ok(Some(root)) => {
+                return runtime_result(&root, RuntimeLocationSource::EditorPreference);
+            }
+            Ok(None) => {}
         }
+    }
+
+    // Existing projects opened directly from a game worktree remain usable without a
+    // preference. A content-only project with no game executables stays unconfigured,
+    // even if project setup has created its own assets/ directory.
+    let (root, source, availability) =
+        runtime_result(project_root, RuntimeLocationSource::ProjectFolder);
+    if matches!(availability, GameRuntimeAvailability::Ready)
+        || matches!(availability, GameRuntimeAvailability::Missing { .. })
+            && project_has_runtime_program(project_root)
+    {
+        (root, source, availability)
+    } else {
+        (
+            None,
+            RuntimeLocationSource::Unconfigured,
+            GameRuntimeAvailability::Unconfigured,
+        )
     }
 }
 
-fn is_program_file(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
+fn runtime_result(
+    root: &Path,
+    source: RuntimeLocationSource,
+) -> (
+    Option<PathBuf>,
+    RuntimeLocationSource,
+    GameRuntimeAvailability,
+) {
+    let inspection = crate::runtime::inspect_runtime_folder(root);
+    match inspection.status {
+        crate::runtime::RuntimeFolderStatus::Missing => (
+            Some(root.to_path_buf()),
+            source,
+            GameRuntimeAvailability::Missing {
+                requirements: runtime_requirements(root),
+            },
+        ),
+        crate::runtime::RuntimeFolderStatus::Ready { installation } => (
+            Some(installation.root),
+            source,
+            GameRuntimeAvailability::Ready,
+        ),
+        crate::runtime::RuntimeFolderStatus::Incomplete { requirements } => (
+            Some(
+                inspection
+                    .canonical_root
+                    .unwrap_or(inspection.selected_root),
+            ),
+            source,
+            GameRuntimeAvailability::Missing { requirements },
+        ),
+        crate::runtime::RuntimeFolderStatus::Refused { problem } => (
+            Some(
+                inspection
+                    .canonical_root
+                    .unwrap_or(inspection.selected_root),
+            ),
+            source,
+            GameRuntimeAvailability::FolderRefused { problem },
+        ),
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+}
+
+fn runtime_requirements(root: &Path) -> Vec<GameRuntimeRequirement> {
+    let suffix = std::env::consts::EXE_SUFFIX;
+    vec![
+        GameRuntimeRequirement {
+            kind: GameRuntimeRequirementKind::ServerExecutable,
+            path: root.join("target/debug").join(format!("server{suffix}")),
+        },
+        GameRuntimeRequirement {
+            kind: GameRuntimeRequirementKind::ClientExecutable,
+            path: root.join("target/debug").join(format!("client{suffix}")),
+        },
+        GameRuntimeRequirement {
+            kind: GameRuntimeRequirementKind::AssetsDirectory,
+            path: root.join("assets"),
+        },
+    ]
+}
+
+fn project_has_runtime_program(root: &Path) -> bool {
+    runtime_requirements(root)
+        .into_iter()
+        .filter(|requirement| {
+            matches!(
+                requirement.kind,
+                GameRuntimeRequirementKind::ServerExecutable
+                    | GameRuntimeRequirementKind::ClientExecutable
+            )
+        })
+        .any(|requirement| requirement.path.is_file())
+}
+
+#[cfg(test)]
+fn game_runtime(root: &Path) -> GameRuntimeAvailability {
+    runtime_result(root, RuntimeLocationSource::ProjectFolder).2
 }
 
 /// A valid recent project, including its caller-supplied last-opened timestamp.
@@ -626,17 +754,18 @@ mod tests {
                 ref start_level,
             } if name == "Context" && start_level == &missing_start_level
         ));
-        let context = startup_context(&root).unwrap();
+        let context = startup_context_using(&root, None).unwrap();
         assert!(context.project_root.is_absolute());
         assert_eq!(context.project_root, fs::canonicalize(&root).unwrap());
-        assert_eq!(context.game_root, context.project_root);
+        assert_eq!(context.game_root, None);
+        assert_eq!(context.runtime_source, RuntimeLocationSource::Unconfigured);
         assert_eq!(context.package_root, context.project_root.join("cooked"));
         assert_eq!(context.start_level, missing_start_level);
         assert!(!context.start_level_exists);
         assert!(!context.start_level.exists());
         assert!(matches!(
             context.runtime,
-            GameRuntimeAvailability::Missing { .. }
+            GameRuntimeAvailability::Unconfigured
         ));
 
         fs::write(
@@ -644,7 +773,11 @@ mod tests {
             serde_json::to_vec(&scene_data::current_map()).unwrap(),
         )
         .unwrap();
-        assert!(startup_context(&root).unwrap().start_level_exists);
+        assert!(
+            startup_context_using(&root, None)
+                .unwrap()
+                .start_level_exists
+        );
 
         let absent = folder.path().join("absent");
         assert_eq!(
@@ -757,6 +890,59 @@ mod tests {
         }
         fs::create_dir_all(root.join("assets")).unwrap();
         assert_eq!(game_runtime(root), GameRuntimeAvailability::Ready);
+    }
+
+    #[test]
+    fn startup_context_uses_injected_editor_runtime_without_changing_project_content_root() {
+        let folder = tempfile::tempdir().unwrap();
+        let project = folder.path().join("content");
+        setup_project(&project, "Content");
+        let runtime = folder.path().join("shared-runtime");
+        make_runtime(&runtime);
+        let preference = folder.path().join("user-config/runtime-install.json");
+        crate::runtime::save_runtime_preference(&preference, &runtime).unwrap();
+
+        let context = startup_context_using(&project, Some(&preference)).unwrap();
+        assert_eq!(context.project_root, fs::canonicalize(&project).unwrap());
+        assert_eq!(context.game_root, Some(fs::canonicalize(&runtime).unwrap()));
+        assert_eq!(
+            context.runtime_source,
+            RuntimeLocationSource::EditorPreference
+        );
+        assert_eq!(context.runtime, GameRuntimeAvailability::Ready);
+        assert_eq!(context.package_root, context.project_root.join("cooked"));
+
+        let second_runtime = folder.path().join("second-runtime");
+        make_runtime(&second_runtime);
+        crate::runtime::save_runtime_preference(&preference, &second_runtime).unwrap();
+        let refreshed = resolve_project_runtime_using(&context.project_root, Some(&preference));
+        assert_eq!(
+            refreshed.game_root,
+            Some(fs::canonicalize(second_runtime).unwrap())
+        );
+        assert_eq!(
+            refreshed.runtime_source,
+            RuntimeLocationSource::EditorPreference
+        );
+        assert_eq!(refreshed.runtime, GameRuntimeAvailability::Ready);
+    }
+
+    fn make_runtime(root: &Path) {
+        let target = root.join("target/debug");
+        fs::create_dir_all(&target).unwrap();
+        for name in [
+            format!("server{}", std::env::consts::EXE_SUFFIX),
+            format!("client{}", std::env::consts::EXE_SUFFIX),
+        ] {
+            let path = target.join(name);
+            fs::write(&path, b"runtime test executable").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        fs::create_dir_all(root.join("assets")).unwrap();
     }
 
     #[test]

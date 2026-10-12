@@ -20,9 +20,15 @@
 //! two actions share a key (`project.value`, with the field), and a look profile that is
 //! newly chosen is a file in the project's folder that the look reader takes
 //! (`project.profile_unusable`).
+//!
+//! A project whose look profile is not in its folder can be given the default one
+//! ([`install_default_look`]): on the person's word, at the path the manifest names, and
+//! only where nothing has that name. The manifest is not written for it.
 
-use super::{hold, inside, project_error, project_path, read_limited, replace_atomic};
-use crate::look::{load_look_profile, LoadedLook};
+use super::{
+    create_exclusive, hold, inside, project_error, project_path, read_limited, replace_atomic,
+};
+use crate::look::{load_look_profile, parse_look_profile, LoadedLook};
 use project_spec::{ControlSettings, ProjectConfig};
 use scene_data::Diagnostic;
 use std::{fs, path::Path};
@@ -32,6 +38,10 @@ pub const LOOK_FOLDER: &str = "assets/render";
 
 /// How many look profiles are listed at most.
 pub const MAX_LOOK_CHOICES: usize = 64;
+
+/// The look profile a project is given when it has none: the game's first profile, byte
+/// for byte, so that a project made here is drawn as the game has been drawn so far.
+pub const DEFAULT_LOOK_PROFILE: &[u8] = include_bytes!("../../assets/look-v1.json");
 
 /// What a save of the settings sets: the keys, what is looked with, the look profile, and
 /// how many clients Play starts on this machine.
@@ -80,6 +90,57 @@ pub fn look_profile(root: &Path, relative: &str) -> Result<LoadedLook, Diagnosti
     let path = root.join(relative);
     inside(root, &path)?;
     load_look_profile(&path)
+}
+
+/// Makes the default look profile ([`DEFAULT_LOOK_PROFILE`]) at this path in the project's
+/// folder, and returns it as the look reader takes it. For a project whose manifest names a
+/// profile that is not there, and only on the person's word.
+///
+/// Nothing that is there is written over: anything of that name, a link that leads nowhere
+/// too, refuses it (`project.conflict`). A path that leads out of the folder, by its parts
+/// (`project.path_invalid`) or through a link (`project.outside_folder`), is refused, and so
+/// is a folder that is not there (`project.folder_missing`). The folders on the way to the
+/// file are made; the manifest is not touched.
+pub fn install_default_look(root: &Path, relative: &str) -> Result<LoadedLook, Diagnostic> {
+    let path = root.join(relative);
+    let in_folder = !relative.trim().is_empty()
+        && !relative.contains('\\')
+        && Path::new(relative).components().all(|part| {
+            matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        });
+    if !in_folder {
+        return Err(Diagnostic::new("project.path_invalid").with("path", path.display()));
+    }
+    if !root.is_dir() {
+        return Err(Diagnostic::new("project.folder_missing").with("path", root.display()));
+    }
+    // A dangling link still occupies this name. Check where its target would land so a
+    // link outside the project keeps the containment refusal, while an in-project dangling
+    // link is reported as the existing file that it is.
+    if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+        && let Err(error) = fs::canonicalize(&path)
+    {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            let target = fs::read_link(&path)
+                .map_err(|error| super::io_problem("project.read", &path, error))?;
+            let target = if target.is_absolute() {
+                target
+            } else {
+                path.parent().unwrap_or(root).join(target)
+            };
+            inside(root, &target).map_err(|_| {
+                Diagnostic::new("project.outside_folder").with("path", path.display())
+            })?;
+            return Err(Diagnostic::new("project.conflict").with("path", path.display()));
+        }
+        return Err(super::io_problem("project.read", &path, error));
+    }
+    inside(root, &path)?;
+    create_exclusive(&path, DEFAULT_LOOK_PROFILE)?;
+    parse_look_profile(DEFAULT_LOOK_PROFILE, &path)
 }
 
 /// The look profiles to choose from: the `.json` files directly in [`LOOK_FOLDER`], by
@@ -467,5 +528,100 @@ mod tests {
         let refused = save_settings(root, &config, &edit).unwrap_err();
         assert_eq!(refused.code, "project.outside_folder");
         assert_eq!(manifest(root), before);
+    }
+
+    /// The SHA-256 of the game's first look profile, which is the default one.
+    const DEFAULT_LOOK_SHA256: &str =
+        "3abf9a2fbcb48b748607934137653f334e85ab9a226bfb3383e92c78387715e6";
+
+    #[test]
+    fn the_default_profile_is_the_games_first_one_and_the_look_reader_takes_it() {
+        let read = parse_look_profile(DEFAULT_LOOK_PROFILE, Path::new("default")).unwrap();
+        assert_eq!(read.sha256_hex, DEFAULT_LOOK_SHA256);
+    }
+
+    #[test]
+    fn a_profile_that_is_not_there_is_made_from_the_default_and_nothing_else_is_written() {
+        let (folder, config) = project();
+        let root = folder.path();
+        let named = &config.rendering.profile;
+        // Not even the folder the profiles are in.
+        fs::remove_dir_all(root.join("assets")).unwrap();
+        assert_eq!(look_profile(root, named).unwrap_err().code, "look.missing");
+        let before = manifest(root);
+
+        let made = install_default_look(root, named).unwrap();
+        assert_eq!(made.sha256_hex, DEFAULT_LOOK_SHA256);
+        assert_eq!(fs::read(root.join(named)).unwrap(), DEFAULT_LOOK_PROFILE);
+        assert_eq!(look_profile(root, named).unwrap(), made);
+        assert_eq!(manifest(root), before);
+        assert_eq!(names(root), ["arc-project.json", "assets"]);
+        assert_eq!(names(&root.join(LOOK_FOLDER)), ["look-v1.json"]);
+
+        // Another name the manifest could have for it, in a folder of its own.
+        install_default_look(root, "looks/dusk.json").unwrap();
+        assert_eq!(
+            fs::read(root.join("looks/dusk.json")).unwrap(),
+            DEFAULT_LOOK_PROFILE
+        );
+    }
+
+    #[test]
+    fn a_profile_that_is_there_is_not_written_over_whatever_it_is() {
+        let (folder, config) = project();
+        let root = folder.path();
+        let named = &config.rendering.profile;
+        // One the look reader refuses is still the person's file.
+        fs::write(root.join(named), b"not a profile").unwrap();
+        let refused = install_default_look(root, named).unwrap_err();
+        assert_eq!(refused.code, "project.conflict");
+        assert_eq!(fs::read(root.join(named)).unwrap(), b"not a profile");
+
+        #[cfg(unix)]
+        {
+            // A link that leads nowhere has the name too.
+            let dangling = root.join(LOOK_FOLDER).join("gone.json");
+            std::os::unix::fs::symlink(root.join("nowhere.json"), &dangling).unwrap();
+            let refused = install_default_look(root, "assets/render/gone.json").unwrap_err();
+            assert_eq!(refused.code, "project.conflict");
+            assert!(!root.join("nowhere.json").exists());
+        }
+    }
+
+    #[test]
+    fn a_profile_is_made_in_the_projects_folder_or_not_at_all() {
+        let (folder, _) = project();
+        let root = folder.path();
+        let outside = tempfile::tempdir().unwrap();
+        for path in [
+            "",
+            " ",
+            "../look.json",
+            "assets/../../look.json",
+            "a\\b.json",
+        ] {
+            let refused = install_default_look(root, path).unwrap_err();
+            assert_eq!(refused.code, "project.path_invalid", "{path:?}");
+        }
+        let absolute = outside.path().join("look.json");
+        let refused = install_default_look(root, absolute.to_str().unwrap()).unwrap_err();
+        assert_eq!(refused.code, "project.path_invalid");
+        assert!(names(outside.path()).is_empty());
+
+        #[cfg(unix)]
+        {
+            // The folder of the profiles is a link to somewhere else.
+            fs::remove_dir_all(root.join(LOOK_FOLDER)).unwrap();
+            std::os::unix::fs::symlink(outside.path(), root.join(LOOK_FOLDER)).unwrap();
+            let refused = install_default_look(root, "assets/render/look-v1.json").unwrap_err();
+            assert_eq!(refused.code, "project.outside_folder");
+            assert!(names(outside.path()).is_empty());
+        }
+
+        // A folder that is not there is not made for it.
+        let gone = outside.path().join("gone");
+        let refused = install_default_look(&gone, "assets/render/look-v1.json").unwrap_err();
+        assert_eq!(refused.code, "project.folder_missing");
+        assert!(!gone.exists());
     }
 }

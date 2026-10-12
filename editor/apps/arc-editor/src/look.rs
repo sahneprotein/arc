@@ -112,12 +112,17 @@ pub(crate) fn follow_saved_settings(
     (project, launcher): (Res<Project>, Res<Launcher>),
     mut status: ResMut<LookStatus>,
     mut look: ResMut<GameLook>,
-    mut seen: Local<(u64, u64)>,
+    mut seen: Local<(u64, u64, u64)>,
     mut redraw: MessageWriter<RequestRedraw>,
 ) {
     // A project that was entered counts its own saves from nought, so the saves alone do
     // not tell one project's from another's.
-    let now = (project.settings_saves(), launcher.times_entered());
+    // A look profile that was made where the project's was missing is read as a save is.
+    let now = (
+        project.settings_saves(),
+        launcher.times_entered(),
+        project.looks_made(),
+    );
     if std::mem::replace(&mut *seen, now) == now {
         return;
     }

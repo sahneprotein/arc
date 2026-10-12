@@ -34,7 +34,8 @@ pub mod panels;
 /// services say them: for the application's checks to read.
 pub mod project_status {
     pub use editor_services::project::{
-        GameRuntimeRequirementKind as Kind, ProjectInspectionStatus as Status,
+        GameRuntimeAvailability as Availability, GameRuntimeRequirementKind as Kind,
+        ProjectInspectionStatus as Status, RuntimeLocationSource as Source,
     };
 }
 pub mod particles;

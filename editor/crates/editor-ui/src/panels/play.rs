@@ -36,11 +36,15 @@ use bevy::{
     window::PrimaryWindow,
 };
 use editor_services::{
-    project::{GameRuntimeRequirement, GameRuntimeRequirementKind},
+    project::{
+        GameRuntimeAvailability, GameRuntimeRequirement, GameRuntimeRequirementKind,
+        ProjectRuntimeContext, RuntimeLocationSource,
+    },
     PlayProcess, PlayRole, PlayRun, PlayStage, PlayState,
 };
 
 use crate::{
+    launcher::{FolderFor, Launcher},
     panels::{
         menu::{menu_item, menu_popup_end},
         toolbar::toolbar_folds,
@@ -63,19 +67,20 @@ pub const CHECK_COOKED_LEVEL: &str = "Check cooked level";
 pub const COOK_AND_PLAY: &str = "Cook and Play";
 
 /// Why nothing can be played, when this editor was started without a game.
-pub const NO_GAME: &str = "No game is set up for this editor: start the editor with --game \
-    and the game's folder to play from here. The cooked level can be cooked and checked.";
+pub const NO_GAME: &str = "This editor is not open on a project, so it has no game to play \
+    with. Open a project in the project browser, which the editor starts in, to play from \
+    here. The cooked level can be cooked and checked.";
 /// Why the one way to play that is always off is off.
 pub const NO_PREVIEW: &str = "Preview in Editor is not built yet.";
 
-/// Why nothing can be played in a project whose folder does not hold the game: what of the
-/// game is not there, each with where it was looked for, and what can be done all the same.
-/// The game is looked for when the project is opened, so one that is built later counts
-/// from the next time the project is opened. Empty when nothing is missing.
-pub fn game_missing_words(missing: &[GameRuntimeRequirement]) -> String {
-    if missing.is_empty() {
-        return String::new();
-    }
+/// The button that asks for the game's folder, where a project has no game to play with,
+/// and the same button where it has one: the folder is the editor's one setting for every
+/// project, and can be changed from an open project.
+pub const CHOOSE_GAME: &str = "Choose game folder";
+pub const CHANGE_GAME: &str = "Change game folder";
+
+/// What of a game is not in a folder, each with where it was looked for.
+pub fn requirement_words(missing: &[GameRuntimeRequirement]) -> String {
     let parts: Vec<String> = missing
         .iter()
         .map(|part| {
@@ -87,12 +92,54 @@ pub fn game_missing_words(missing: &[GameRuntimeRequirement]) -> String {
             format!("{what} ({})", part.path.display())
         })
         .collect();
-    format!(
-        "The game is not in this project's folder, so nothing can be played from here. Not \
-         there: {}. The level can be edited, saved, cooked and checked. Build the game in the \
-         folder and open the project again to play.",
-        parts.join(", ")
-    )
+    parts.join(", ")
+}
+
+/// Why nothing can be played in a project that has no game to play with, and what can be
+/// done all the same. A project is content: its levels and its look. The game that plays it
+/// is somewhere else, in the one folder that is set for this editor, unless the project's
+/// folder is the game's own. Empty when there is a game, and in an editor that was not
+/// entered on a project.
+pub fn game_words(runtime: Option<&ProjectRuntimeContext>) -> String {
+    const ALL_THE_SAME: &str = "The level can be edited, saved, cooked and checked.";
+    let Some(runtime) = runtime else {
+        return String::new();
+    };
+    match (&runtime.runtime, runtime.runtime_source) {
+        (GameRuntimeAvailability::Ready, _) => String::new(),
+        (GameRuntimeAvailability::Unconfigured, _) => format!(
+            "This project has no game to play it with: no game folder is set for this \
+             editor, and the project's folder holds content only. {ALL_THE_SAME} To play, \
+             choose the folder the game is built in; it is then used for every project."
+        ),
+        (
+            GameRuntimeAvailability::Missing { requirements },
+            RuntimeLocationSource::ProjectFolder,
+        ) => {
+            format!(
+                "This project's folder has part of a game and not all of it. Not there: {}. \
+                 {ALL_THE_SAME} To play, build the game in the folder and open the project \
+                 again, or choose the folder a game is built in.",
+                requirement_words(requirements)
+            )
+        }
+        (GameRuntimeAvailability::Missing { requirements }, _) => format!(
+            "The game folder that is set for this editor does not hold the whole game. Not \
+             there: {}. {ALL_THE_SAME} To play, build the game there or choose another folder.",
+            requirement_words(requirements)
+        ),
+        (
+            GameRuntimeAvailability::PreferenceRefused { problem }
+            | GameRuntimeAvailability::FolderRefused { problem },
+            _,
+        ) => {
+            // In the words of the refusal, never its code.
+            let words = wording::game_folder(&problem.code, |key| {
+                problem.parameters.get(key).map(String::as_str)
+            });
+            format!("{}. {} {ALL_THE_SAME}", words.title, words.remedy)
+        }
+    }
 }
 
 /// Where a run of the game stands, as the coordinator reports it.
@@ -123,9 +170,15 @@ pub struct PlayView {
     pub check: PackageCheck,
     /// Whether this editor has a game to start.
     pub game: bool,
-    /// Why there is no game, when it is that the project's folder does not hold it: in
-    /// words ([`game_missing_words`]). Empty otherwise.
+    /// Why there is no game, when it is that the project has none to play with: in words
+    /// ([`game_words`]). Empty otherwise.
     pub game_missing: String,
+    /// Whether the game's folder can be chosen from here: the editor was entered on a
+    /// project, whose game is the one the editor's setting names. An editor that was
+    /// started on a game's folder has no such setting.
+    pub choose_game: bool,
+    /// The folder of the game the project is played with, or was looked for in.
+    pub game_folder: Option<String>,
     pub run: RunView,
     /// The cooked level the run plays, by the same short name.
     pub run_package: Option<String>,
@@ -234,7 +287,12 @@ impl PlayView {
             cooked,
             check: editor.package_check().clone(),
             game: editor.play_connected(),
-            game_missing: game_missing_words(editor.game_missing()),
+            game_missing: game_words(editor.runtime()),
+            choose_game: editor.runtime().is_some(),
+            game_folder: editor
+                .runtime()
+                .and_then(|runtime| runtime.game_root.as_ref())
+                .map(|folder| folder.display().to_string()),
             run,
             run_package: active
                 .and_then(|run| package_id(Some(&run.identity.manifest_hash.hex()), None)),
@@ -323,6 +381,37 @@ impl PlayView {
     /// run it is still offered, and says so when chosen.
     pub fn cook_and_play_offered(&self) -> bool {
         self.game && !self.checking() && self.run == RunView::None
+    }
+
+    /// Whether the button that asks for the game's folder is shown: in an editor that was
+    /// entered on a project, with a game or without one.
+    pub fn choose_game_shown(&self) -> bool {
+        self.choose_game
+    }
+
+    /// Whether that button can be pressed. Not while a game runs or is being started or
+    /// checked: a run keeps the game it was started with.
+    pub fn choose_game_offered(&self) -> bool {
+        self.choose_game && !self.checking() && self.run == RunView::None
+    }
+
+    /// What that button says: to choose the folder where the project has no game, to
+    /// change it where it has one.
+    pub fn choose_game_caption(&self) -> &'static str {
+        if self.game {
+            CHANGE_GAME
+        } else {
+            CHOOSE_GAME
+        }
+    }
+
+    /// The line that says which folder's game the project is played with, or which folder
+    /// was looked in for one. Empty without one.
+    pub fn game_folder_line(&self) -> String {
+        match (&self.game_folder, self.choose_game) {
+            (Some(folder), true) => format!("Game folder: {folder}"),
+            _ => String::new(),
+        }
     }
 
     /// Why a way to play is off: in the menu's foot as long as one is.
@@ -464,6 +553,11 @@ pub enum PlayPiece {
     CheckLine,
     FootButton,
     FootButtonCaption,
+    /// The line that says where the game is, and the button that asks for its folder with
+    /// that button's caption.
+    GameFolderLine,
+    ChooseGame,
+    ChooseGameCaption,
 }
 
 /// A line of the menu's foot, in the design's small text style. `mono` is for a hash.
@@ -505,6 +599,21 @@ fn foot() -> impl Scene {
                 PropagateOver<TextFont>
                 ThemeTextColor(tokens::TEXT_DIM)
                 PlayPiece::ReasonLine
+            ),
+            (foot_line(true) PlayPiece::GameFolderLine),
+            (
+                @FeathersButton {
+                    @caption: bsn! { Text(CHOOSE_GAME) ThemedText PlayPiece::ChooseGameCaption },
+                }
+                PlayPiece::ChooseGame
+                Node {
+                    align_self: AlignSelf::FlexStart,
+                    margin: UiRect::top(px(spacing::SPACE_1)),
+                    display: Display::None,
+                }
+                on(|_: On<Activate>, mut launcher: ResMut<Launcher>| {
+                    launcher.ask_folder(FolderFor::Game);
+                })
             ),
             (
                 @FeathersButton {
@@ -744,6 +853,16 @@ pub(crate) fn show_play(
             }
             PlayPiece::FootButton => (None, view.foot_button().is_some()),
             PlayPiece::FootButtonCaption => (view.foot_button().map(str::to_owned), true),
+            PlayPiece::GameFolderLine => {
+                let line = view.game_folder_line();
+                let laid_out = !line.is_empty();
+                (Some(line), laid_out)
+            }
+            PlayPiece::ChooseGame => {
+                set_offered(&mut commands, entity, view.choose_game_offered(), off);
+                (None, view.choose_game_shown())
+            }
+            PlayPiece::ChooseGameCaption => (Some(view.choose_game_caption().to_owned()), true),
         };
         if let (Some(words), Some(mut text)) = (words, text)
             && text.0 != words
@@ -803,6 +922,8 @@ mod tests {
             check,
             game: true,
             game_missing: String::new(),
+            choose_game: false,
+            game_folder: None,
             run: RunView::None,
             run_package: None,
             run_older: false,
@@ -953,55 +1074,165 @@ mod tests {
             view.check_offered(),
             "the cooked level can still be checked"
         );
-        assert!(view.reason_line().contains("--game"));
+        // An editor that is not open on a project is not told of a flag: the browser is
+        // where a project comes from.
+        assert!(!view.reason_line().contains("--game"));
+        assert!(view.reason_line().contains("project browser"));
         assert!(view.reason_line().contains("cooked and checked"));
+        assert!(!view.choose_game_shown() && !view.choose_game_offered());
     }
 
     #[test]
-    fn a_project_without_the_game_built_says_what_is_missing_and_offers_no_way_to_play() {
+    fn a_project_without_a_game_says_what_it_lacks_and_offers_the_games_folder_not_a_flag() {
         use std::path::PathBuf;
-        assert_eq!(game_missing_words(&[]), "");
         let part = |kind, path: &str| GameRuntimeRequirement {
             kind,
             path: PathBuf::from(path),
         };
-        let words = game_missing_words(&[
+        let all = [
             part(
                 GameRuntimeRequirementKind::ServerExecutable,
-                "/p/target/debug/server",
+                "/g/target/debug/server",
             ),
             part(
                 GameRuntimeRequirementKind::ClientExecutable,
-                "/p/target/debug/client",
+                "/g/target/debug/client",
             ),
-            part(GameRuntimeRequirementKind::AssetsDirectory, "/p/assets"),
-        ]);
-        assert!(
-            words.contains("its server (/p/target/debug/server)"),
-            "{words}"
+            part(GameRuntimeRequirementKind::AssetsDirectory, "/g/assets"),
+        ];
+        let parts = requirement_words(&all);
+        assert_eq!(
+            parts,
+            "its server (/g/target/debug/server), its client (/g/target/debug/client), \
+             its assets folder (/g/assets)"
         );
-        assert!(
-            words.contains("its client (/p/target/debug/client)"),
-            "{words}"
+        let of = |runtime, runtime_source, game_root: Option<&str>| ProjectRuntimeContext {
+            game_root: game_root.map(PathBuf::from),
+            runtime_source,
+            runtime,
+        };
+        // An editor that was not entered on a project, and a project with its game.
+        assert_eq!(game_words(None), "");
+        let ready = of(
+            GameRuntimeAvailability::Ready,
+            RuntimeLocationSource::EditorPreference,
+            Some("/g"),
         );
-        assert!(words.contains("its assets folder (/p/assets)"), "{words}");
-        assert!(words.contains("nothing can be played from here"));
-        assert!(words.contains("edited, saved, cooked and checked"));
-        assert!(words.contains("open the project again"));
+        assert_eq!(game_words(Some(&ready)), "");
 
-        // The Play menu's foot says that, not that the editor was started without a game.
+        // A project that is content only, in an editor without a game folder.
+        let unset = of(
+            GameRuntimeAvailability::Unconfigured,
+            RuntimeLocationSource::Unconfigured,
+            None,
+        );
+        let words = game_words(Some(&unset));
+        assert!(
+            words.contains("no game folder is set for this editor"),
+            "{words}"
+        );
+        assert!(words.contains("content only"), "{words}");
+        assert!(words.contains("used for every project"), "{words}");
+        // The folder that is set lacks something, and a project folder with half a game.
+        let missing = || GameRuntimeAvailability::Missing {
+            requirements: all.to_vec(),
+        };
+        let set = game_words(Some(&of(
+            missing(),
+            RuntimeLocationSource::EditorPreference,
+            Some("/g"),
+        )));
+        assert!(
+            set.contains("game folder that is set for this editor"),
+            "{set}"
+        );
+        assert!(set.contains(&parts), "{set}");
+        let own = game_words(Some(&of(
+            missing(),
+            RuntimeLocationSource::ProjectFolder,
+            Some("/g"),
+        )));
+        assert!(
+            own.contains("This project's folder has part of a game"),
+            "{own}"
+        );
+        assert!(own.contains(&parts), "{own}");
+        // A setting or a folder that is refused is said in words, never by its code.
+        let refused = game_words(Some(&of(
+            GameRuntimeAvailability::PreferenceRefused {
+                problem: scene_data::Diagnostic::new("runtime.preference_decode")
+                    .with("path", "/settings/runtime-install.json"),
+            },
+            RuntimeLocationSource::EditorPreference,
+            None,
+        )));
+        assert!(refused.contains("cannot be read") && refused.contains("left as it is"));
+        assert!(
+            refused.contains("/settings/runtime-install.json"),
+            "{refused}"
+        );
+        let unusable = game_words(Some(&of(
+            GameRuntimeAvailability::FolderRefused {
+                problem: scene_data::Diagnostic::new("runtime.not_a_folder"),
+            },
+            RuntimeLocationSource::EditorPreference,
+            Some("/g"),
+        )));
+        assert!(unusable.contains("not a folder"), "{unusable}");
+        for said in [&words, &set, &own, &refused, &unusable] {
+            assert!(said.contains("edited, saved, cooked and checked"), "{said}");
+            assert!(
+                !said.contains("--game") && !said.contains("runtime."),
+                "{said}"
+            );
+        }
+
+        // The Play menu's foot says that, offers the folder's button and no way to play.
         let view = PlayView {
             game: false,
             game_missing: words.clone(),
+            choose_game: true,
             ..view(Some("6105ad50"), false, PackageCheck::NotAsked)
         };
         assert_eq!(view.reason_line(), words);
-        assert!(!view.reason_line().contains("--game"));
+        assert!(view.choose_game_shown() && view.choose_game_offered());
+        assert_eq!(view.choose_game_caption(), CHOOSE_GAME);
+        assert_eq!(view.game_folder_line(), "");
         assert!(!view.game_window_offered() && !view.cook_and_play_offered());
         assert!(
             view.check_offered(),
             "the cooked level can still be checked"
         );
+        // With a game the folder is said and can be changed from the open project: it is
+        // the editor's setting, for every project.
+        let with_game = PlayView {
+            game: true,
+            game_missing: String::new(),
+            game_folder: Some("/games/arc".into()),
+            ..view.clone()
+        };
+        assert!(with_game.choose_game_shown() && with_game.choose_game_offered());
+        assert_eq!(with_game.choose_game_caption(), CHANGE_GAME);
+        assert_eq!(with_game.game_folder_line(), "Game folder: /games/arc");
+        // Not while something is under way: the button is there and off.
+        let checking = PlayView {
+            check: PackageCheck::Checking,
+            ..with_game.clone()
+        };
+        assert!(checking.choose_game_shown() && !checking.choose_game_offered());
+        let running = PlayView {
+            run: RunView::Running,
+            ..with_game
+        };
+        assert!(running.choose_game_shown() && !running.choose_game_offered());
+        // An editor that was started on a game's folder has no such setting.
+        let started_on_a_game = PlayView {
+            choose_game: false,
+            game_folder: Some("/games/arc".into()),
+            ..view
+        };
+        assert!(!started_on_a_game.choose_game_shown());
+        assert_eq!(started_on_a_game.game_folder_line(), "");
     }
 
     #[test]

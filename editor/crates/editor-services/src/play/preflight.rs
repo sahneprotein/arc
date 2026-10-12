@@ -3,11 +3,10 @@ use scene_data::{CookedEmitter, Diagnostic};
 #[cfg(test)]
 use scene_data::{SimulationPayload, VisualPayload};
 use std::{path::Path, sync::atomic::AtomicBool};
-/// `asset_root` is the game's folder, which the client reads its assets from: the emitters
-/// the cooked level places are looked at there, as the client will look at them.
+/// `project_root` owns reusable emitter files referenced by the cooked visual payload.
 pub(crate) fn verify(
     receipt: &VerifiedPackageReceipt,
-    asset_root: &Path,
+    project_root: &Path,
     cancel: &AtomicBool,
 ) -> Result<(), Diagnostic> {
     let (_, simulation, visual) =
@@ -18,7 +17,7 @@ pub(crate) fn verify(
     {
         return Err(problem.diagnostic);
     }
-    placed_emitters(&visual.emitters, asset_root)
+    placed_emitters(&visual.emitters, project_root)
 }
 /// Every emitter the cooked level places is still the file the level was cooked with, can
 /// be read, and is one the game's particle runtime draws. The first that is not stops the
@@ -26,7 +25,7 @@ pub(crate) fn verify(
 /// means the level is to be cooked again, not that the client finds out.
 pub(crate) fn placed_emitters(
     emitters: &[CookedEmitter],
-    asset_root: &Path,
+    project_root: &Path,
 ) -> Result<(), Diagnostic> {
     for emitter in emitters {
         let placed = |refusal: Diagnostic| {
@@ -34,7 +33,7 @@ pub(crate) fn placed_emitters(
                 .with("emitter_id", &emitter.emitter_id.0)
                 .at(&emitter.id)
         };
-        let now = crate::emitters::cooked_emitter(Some(asset_root), &emitter.emitter_id.0)
+        let now = crate::emitters::cooked_emitter(Some(project_root), &emitter.emitter_id.0)
             .map_err(placed)?;
         if now != emitter.emitter_sha256 {
             return Err(placed(Diagnostic::new("emitter.changed_since_cook")));
@@ -98,7 +97,7 @@ pub(crate) struct Worker {
 }
 struct Work {
     receipt: VerifiedPackageReceipt,
-    asset_root: std::path::PathBuf,
+    project_root: std::path::PathBuf,
     cancel: std::sync::Arc<AtomicBool>,
     result: std::sync::mpsc::SyncSender<Result<(), Diagnostic>>,
 }
@@ -109,9 +108,11 @@ impl Worker {
             .name("play-preflight".into())
             .spawn(move || {
                 for work in receiver {
-                    let _ =
-                        work.result
-                            .try_send(verify(&work.receipt, &work.asset_root, &work.cancel));
+                    let _ = work.result.try_send(verify(
+                        &work.receipt,
+                        &work.project_root,
+                        &work.cancel,
+                    ));
                 }
             })
             .map_err(|e| Diagnostic::new("play.preflight_start_failed").with("error", e))?;
@@ -120,14 +121,14 @@ impl Worker {
     pub fn submit(
         &self,
         receipt: VerifiedPackageReceipt,
-        asset_root: std::path::PathBuf,
+        project_root: std::path::PathBuf,
         cancel: std::sync::Arc<AtomicBool>,
     ) -> Result<std::sync::mpsc::Receiver<Result<(), Diagnostic>>, Diagnostic> {
         let (result, receiver) = std::sync::mpsc::sync_channel(1);
         self.sender
             .try_send(Work {
                 receipt,
-                asset_root,
+                project_root,
                 cancel,
                 result,
             })
@@ -209,33 +210,46 @@ mod tests {
     #[test]
     fn a_placed_emitter_must_still_be_the_file_the_level_was_cooked_with() {
         use crate::emitters::{cooked_emitter, save_emitter, OnDisk};
-        let game = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let runtime = tempfile::tempdir().unwrap();
         let mut sparks = particle_spec::default_emitter();
         sparks.id = StableId::from_u128(5).0;
-        save_emitter(game.path(), &sparks, &OnDisk::Absent).unwrap();
+        save_emitter(project.path(), &sparks, &OnDisk::Absent).unwrap();
         let placed = |emitter: u128, hash| scene_data::CookedEmitter {
             id: StableId::from_u128(900 + emitter),
             emitter_id: StableId::from_u128(emitter),
             emitter_sha256: hash,
             transform: scene_data::RigidTransform::default(),
         };
-        let as_cooked = cooked_emitter(Some(game.path()), &sparks.id).unwrap();
-        assert_eq!(placed_emitters(&[], game.path()), Ok(()));
+        let as_cooked = cooked_emitter(Some(project.path()), &sparks.id).unwrap();
+        assert_eq!(placed_emitters(&[], project.path()), Ok(()));
         assert_eq!(
-            placed_emitters(&[placed(5, as_cooked)], game.path()),
+            placed_emitters(&[placed(5, as_cooked)], project.path()),
             Ok(())
+        );
+        assert_eq!(
+            placed_emitters(&[placed(5, as_cooked)], runtime.path())
+                .unwrap_err()
+                .code,
+            "emitter.asset_missing"
         );
 
         // The emitter was saved again after the cook: the level is to be cooked again.
-        let changed = placed_emitters(&[placed(5, scene_data::ContentHash([0; 32]))], game.path())
-            .unwrap_err();
+        let changed = placed_emitters(
+            &[placed(5, scene_data::ContentHash([0; 32]))],
+            project.path(),
+        )
+        .unwrap_err();
         assert_eq!(changed.code, "emitter.changed_since_cook");
         assert_eq!(changed.object, Some(StableId::from_u128(905)));
         assert_eq!(changed.parameters["emitter_id"], sparks.id);
 
         // A file that is gone is said as that, for its placement, and the first one counts.
-        let missing = placed_emitters(&[placed(5, as_cooked), placed(6, as_cooked)], game.path())
-            .unwrap_err();
+        let missing = placed_emitters(
+            &[placed(5, as_cooked), placed(6, as_cooked)],
+            project.path(),
+        )
+        .unwrap_err();
         assert_eq!(missing.code, "emitter.asset_missing");
         assert_eq!(missing.object, Some(StableId::from_u128(906)));
     }

@@ -9,6 +9,7 @@ mod measurement;
 mod package;
 mod persistence;
 pub mod project;
+pub mod runtime;
 mod viewer;
 pub use actor::*;
 pub use editor_core::{review_play_payloads, ReviewProblem, ReviewScope};

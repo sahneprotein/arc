@@ -105,9 +105,10 @@ pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
         ),
         // The game's look profile, which Game look in the 3D view is drawn from.
         "look.missing" => (
-            "The game's folder has no look profile",
-            "The game is older than this editor, or the folder named with --game is not the \
-             game's.",
+            "The look profile is not there",
+            "A project's look profile can be made in the Project settings, with \"Make the \
+             default look profile\". An editor that was started with --game looks in that \
+             folder: it is not the game's, or the game is older than this editor.",
         ),
         "look.read_failed" => (
             "The game's look profile could not be read",
@@ -499,7 +500,9 @@ pub fn play_refusal(code: &str) -> String {
         "play.already_active" => "A game is already running. Stop it first.".into(),
         "play.package_required" => "Cook the level before playing.".into(),
         "play.no_game" => {
-            "No game is set up for this editor. Start it with --game and the game's folder.".into()
+            "This editor has no game to play with. Open a project and choose the game's \
+             folder."
+                .into()
         }
         "play.blocked" => {
             "The game cannot run this level as it is: Review says why. Nothing was cooked or \
@@ -718,7 +721,113 @@ pub fn project<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
             "The level the project starts with is not in the folder",
             "Save a level under that name, or put the file back.".into(),
         ),
+        "project.folder_taken" => (
+            "A folder or a file of the project's name is there already",
+            "Nothing was made, and what is there was not changed. Give the project another \
+             name, or choose another folder to make it in."
+                .into(),
+        ),
+        "project.folder_name" => (
+            "That name cannot be the name of the project's folder",
+            "Nothing was made. The project's folder is named after the project: give it a \
+             name with letters or digits in it, and none that the system keeps for itself."
+                .into(),
+        ),
+        "project.parent_missing" => (
+            "The folder to make the project in is not there",
+            "Nothing was made. It was moved, renamed or removed, or it is no folder. Choose \
+             another."
+                .into(),
+        ),
+        "project.path_invalid" => (
+            "The project file names a path that is not in the project's folder",
+            "Nothing was made. Choose a look profile of the folder in the Project settings.".into(),
+        ),
+        "project.folder_missing" => (
+            "The project's folder is not there",
+            "Nothing was made. It was moved, renamed or removed, or it is on a disk that is \
+             not connected."
+                .into(),
+        ),
         other => return problem(other, parameter),
+    };
+    Problem {
+        title: title.into(),
+        remedy,
+    }
+}
+
+/// A refusal about the game's folder, in words: a folder that was chosen for the game and
+/// is none, or the editor's setting for it that cannot be read or kept. Never the code: a
+/// refusal this does not know is said as one about the folder. `parameter` returns the
+/// value of a named parameter of the diagnostic.
+pub fn game_folder<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> Problem {
+    let file = || match parameter("path") {
+        Some(path) => format!(" The file is {path}."),
+        None => String::new(),
+    };
+    let (title, remedy): (&str, String) = match code {
+        "runtime.folder_missing" => (
+            "The game folder is not there",
+            "It was moved, renamed or removed, or it is on a disk that is not connected. \
+             Choose the folder the game is built in."
+                .into(),
+        ),
+        "runtime.not_a_folder" => (
+            "That is not a folder",
+            "Choose the folder the game is built in.".into(),
+        ),
+        "runtime.folder_read" | "runtime.file_read" => (
+            "The game folder could not be read",
+            "Check that the folder and what is in it can be read.".into(),
+        ),
+        "runtime.outside_folder" => (
+            "Part of the game in that folder is a link that leads out of it",
+            "The editor does not follow it. Choose a folder that holds the game itself.".into(),
+        ),
+        "runtime.requirements_missing" => (
+            "That folder does not hold the whole game",
+            "A game folder has the game's server and its client as they are built \
+             (target/debug/server and target/debug/client) and its assets folder. Build \
+             the game there, or choose the folder it is built in."
+                .into(),
+        ),
+        "runtime.preference_read"
+        | "runtime.preference_decode"
+        | "runtime.preference_limit"
+        | "runtime.preference_path" => (
+            "The editor's setting for the game folder cannot be read",
+            format!(
+                "It is left as it is, and no game folder is used until it is put right or \
+                 moved away.{}",
+                file()
+            ),
+        ),
+        "runtime.preference_schema" => (
+            "The editor's setting for the game folder was written by a newer editor",
+            format!(
+                "It is left as it is, and this editor uses no game folder.{}",
+                file()
+            ),
+        ),
+        "runtime.preference_locked" => (
+            "Another editor is changing the setting for the game folder",
+            "Nothing was changed. Choose the folder again when it is done.".into(),
+        ),
+        "runtime.preference_write" | "runtime.preference_encode" => (
+            "The game folder could not be kept as the editor's setting",
+            "Nothing was changed. Check that the editor's own settings folder can be \
+             written to."
+                .into(),
+        ),
+        "runtime.preference_unavailable" => (
+            "This system has no place to keep the game folder in",
+            "None can be set. A project whose folder is the game's own can still be played.".into(),
+        ),
+        _ => (
+            "The game folder cannot be used",
+            "Choose the folder the game is built in.".into(),
+        ),
     };
     Problem {
         title: title.into(),
@@ -880,6 +989,45 @@ mod tests {
     }
 
     #[test]
+    fn every_refusal_about_the_game_folder_is_a_sentence_and_never_its_code() {
+        for code in [
+            "runtime.folder_missing",
+            "runtime.not_a_folder",
+            "runtime.folder_read",
+            "runtime.file_read",
+            "runtime.outside_folder",
+            "runtime.requirements_missing",
+            "runtime.preference_read",
+            "runtime.preference_decode",
+            "runtime.preference_limit",
+            "runtime.preference_path",
+            "runtime.preference_schema",
+            "runtime.preference_locked",
+            "runtime.preference_write",
+            "runtime.preference_encode",
+            "runtime.preference_unavailable",
+            "runtime.something_new",
+        ] {
+            let words = game_folder(code, none);
+            let said = format!("{} {}", words.title, words.remedy);
+            assert!(!said.contains("runtime."), "{code}: {said}");
+            assert!(!said.contains("--game"), "{code}: {said}");
+            assert!(
+                !words.title.is_empty() && !words.remedy.is_empty(),
+                "{code}"
+            );
+        }
+        // A setting that cannot be read names its file, which is what is to be put right.
+        let file = |key: &str| (key == "path").then_some("/settings/runtime-install.json");
+        let words = game_folder("runtime.preference_decode", file);
+        assert!(words.remedy.contains("left as it is"), "{}", words.remedy);
+        assert!(words.remedy.contains("/settings/runtime-install.json"));
+        assert!(game_folder("runtime.requirements_missing", none)
+            .remedy
+            .contains("target/debug/server"));
+    }
+
+    #[test]
     fn every_refusal_about_the_project_is_a_sentence_that_says_nothing_was_lost() {
         for code in [
             "project.convert_required",
@@ -899,6 +1047,11 @@ mod tests {
             "project.write",
             "project.create_folder",
             "project.start_level_missing",
+            "project.folder_taken",
+            "project.folder_name",
+            "project.parent_missing",
+            "project.path_invalid",
+            "project.folder_missing",
         ] {
             let words = project(code, none);
             assert!(!words.title.contains("project."), "{code}: {}", words.title);

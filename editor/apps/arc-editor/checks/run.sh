@@ -956,21 +956,24 @@ unset ARC_EDITOR_CHECK_PARTICLES
 
 # The project's settings. Without a project folder they are to be had from the Level menu and
 # say that there is none. With a folder that has no project file they open by themselves:
-# setting up writes arc-project.json and a starter level, and the editor opens that level;
+# setting up writes arc-project.json, a starter level (the arena of 32 objects, not the
+# game's map of 22 the editor has without a level) and the look profile, and the editor
+# opens that level;
 # started again on the same folder the editor finds the project, opens its start level by
 # itself and shows nothing unasked. A project file of an older version is never changed by
 # looking: converting is the person's to ask for, and keeps the old file beside the new one.
 check project-none 'choose=Level>Project settings' 'project=NoFolder' 'project_dialog=true' 'objects=22' 'problem=none'
 ARC_EDITOR_CHECK_PROJECT=project; export ARC_EDITOR_CHECK_PROJECT
 check project-setup 'click-button=Set up project,click-button=Close settings' \
-    'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'objects=22' 'question=No' 'problem=none'
+    'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'objects=32' 'question=No' 'problem=none'
 [ -s "$work/project-setup/project/arc-project.json" ] && [ -s "$work/project-setup/project/levels/first-level.level.json" ] \
-    || { wanted project-setup && { echo "project-setup: FAILED, the project file or the starter level was not written"; failed=1; }; }
+    && [ -s "$work/project-setup/project/assets/render/look-v1.json" ] \
+    || { wanted project-setup && { echo "project-setup: FAILED, the project file, the starter level or the look profile was not written"; failed=1; }; }
 # First-run setup must make more than a readable level: the starter has to cook into a
 # package that passes the same check Play requires before opening the game window.
 check project-starter-cooks 'click-button=Set up project,click-button=Close settings,choose=Level>Cook,click-button=Play,click-item=Check cooked level' \
     'project=Ready' 'has_file=true' 'cook_needed=false' 'play_check=passed' 'problem=none'
-check project-setup-again 'click-row=11' 'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'selected=Some\("Tall box"\)'
+check project-setup-again 'click-row=7' 'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'selected=Some\("Platform"\)'
 if wanted project-convert; then
     mkdir -p "$work/project-convert/project"
     printf '%s' '{"schema":1,"project":{"name":"Old"},"startup":{"start_level":"levels/old.level.json"},"rendering":{"profile":"assets/render/look-v1.json"},"controls":{"move_forward":"W","move_backward":"S","move_left":"A","move_right":"D","jump":"Space","toggle_view":"V","release_cursor":"Escape","look":{"mouse":true,"gamepad_right_stick":true}}}' \
@@ -994,7 +997,7 @@ if wanted project-legacy; then
     mkdir -p "$work/project-legacy/project/levels"
     printf 'not a level' > "$work/project-legacy/project/levels/current-map.level.json"
 fi
-check project-legacy 'click-button=Set up with a new starter level' 'project=Ready' 'project_dialog=true' 'has_file=true' 'objects=22' 'problem=none'
+check project-legacy 'click-button=Set up with a new starter level' 'project=Ready' 'project_dialog=true' 'has_file=true' 'objects=32' 'problem=none'
 if wanted project-legacy; then
     [ "$(cat "$work/project-legacy/project/levels/current-map.level.json")" = 'not a level' ] \
         && [ -s "$work/project-legacy/project/levels/first-level.level.json" ] \
@@ -1303,41 +1306,118 @@ fi
 # Choosing no folder changes nothing.
 with_browser check browser-none 'pick-folder=,click-button=Open Project' \
     'launcher=shown launcher_rows=\[\]' "$NO_BROWSER_STATE" 'launcher_entered=0' 'project=NoFolder'
-# A new project: the folder is chosen, the browser shows what a setup makes there, and on
-# the person's word the project is made and the editor entered on it, in the same window.
-# The level is the project's starter level and its cooked level goes into the project's
-# folder. The game is not built there, so the editor has none to start and says what is
-# missing; the level is cooked and checked all the same. The project is in the list.
+# A new project: the folder that is chosen is where the project's own folder goes, and it
+# holds other things, as a person's documents do. The browser asks for the project's name and
+# says where it will be made; nothing is written until the person says so. On that word the
+# project is made in a folder named after it, and the editor is entered on it in the same
+# window: the chosen folder is given that one folder and nothing else. The project has its
+# file, its first level, which is the starter arena and not the game's old map, and its look
+# profile, so Game look is read from the project at once. It is content only: no game folder
+# is set for this editor, so there is nothing to play with, which is said without a flag;
+# the level is cooked and checked all the same. The project is in the list.
+DOCS="$work/browser-new/Documents"
 if wanted browser-new; then
-    mkdir -p "$work/browser-new/Harbour"
+    mkdir -p "$DOCS" && : > "$DOCS/letter.txt"
 fi
-HARBOUR="$work/browser-new/Harbour"
+HARBOUR="$DOCS/Harbour"
 ENTERED='launcher=off launcher_rows=\[Harbour:ready\]'
-NO_RUNTIME='game_missing=\[[a-z,]+\]'
-with_browser check browser-new "pick-folder=$HARBOUR,click-button=New Project" \
-    'launcher=shown launcher_rows=\[\] launcher_selected=none launcher_pending=setup launcher_refusal=none' \
-    'launcher_entered=0' 'project=NoFolder'
+NO_RUNTIME='game_folder=unset game_refusal=none runtime=unset runtime_source=unset runtime_folder=none game_missing=\[\]'
+with_browser check browser-new "pick-folder=$DOCS,click-button=New Project" \
+    'launcher=shown launcher_rows=\[\] launcher_selected=none launcher_pending=new launcher_refusal=none' \
+    'launcher_entered=0' 'game_folder=unset' 'runtime=none' 'project=NoFolder'
 if wanted browser-new; then
-    [ -z "$(ls -A "$HARBOUR")" ] && [ ! -e "$work/browser-new/projects.json" ] \
-        || { echo "browser-new: FAILED, the folder or the list was written before the person said so"; failed=1; }
+    [ "$(ls -A "$DOCS")" = "letter.txt" ] && [ ! -e "$work/browser-new/projects.json" ] \
+        && [ ! -e "$work/browser-new/game-folder.json" ] \
+        || { echo "browser-new: FAILED, the chosen folder, the list or the game's setting was written before the person said so"; failed=1; }
 fi
-with_browser check browser-new-again-made "pick-folder=$HARBOUR,click-button=New Project,click-button=Set up project,cook,click-button=Play,click-item=Check cooked level" \
+with_browser check browser-new-again-made "pick-folder=$DOCS,click-button=New Project,project-name=Harbour,click-button=Create project,cook,click-button=Play,click-item=Check cooked level" \
     "$ENTERED" "$NO_BROWSER_STATE" 'launcher_entered=1' 'project=Ready' 'project_dialog=false' \
     'has_file=true' 'game=false' "$NO_RUNTIME" 'play_cooked=[0-9a-f]{8}' 'play_check=passed' \
-    'look=refused:look\.missing' 'view=Editor' 'problem=none'
+    'look=loaded:3abf9a2f' 'view=Editor' 'problem=none'
 if wanted browser-new-again-made; then
-    [ -f "$HARBOUR/arc-project.json" ] && [ -n "$(ls "$HARBOUR/levels")" ] && [ -d "$HARBOUR/cooked" ] \
-        && [ ! -e "$work/browser-new/cooked" ] && grep -q 'Harbour' "$work/browser-new/projects.json" \
-        || { echo "browser-new-again-made: FAILED, the project, its level, its cooked level or the list is not where it belongs"; failed=1; }
+    [ "$(ls -A "$DOCS" | tr '\n' ' ')" = "Harbour letter.txt " ] && [ ! -s "$DOCS/letter.txt" ] \
+        && [ -f "$HARBOUR/arc-project.json" ] && [ -f "$HARBOUR/assets/render/look-v1.json" ] \
+        && [ -d "$HARBOUR/cooked" ] && [ ! -e "$work/browser-new/cooked" ] && [ ! -e "$DOCS/cooked" ] \
+        && grep -q 'Harbour' "$work/browser-new/projects.json" \
+        || { echo "browser-new-again-made: FAILED, the project, its look profile, its cooked level or the list is not where it belongs, or the chosen folder was given more than the project's folder"; failed=1; }
+    grep -q '"North spawn 1"' "$HARBOUR"/levels/first-level.level.json \
+        && ! grep -q '"Tall box"' "$HARBOUR"/levels/first-level.level.json \
+        && ! grep -q '00000000000000000000000000000a7c' "$HARBOUR"/levels/first-level.level.json \
+        || { echo "browser-new-again-made: FAILED, the first level is not the starter arena under an ID of its own"; failed=1; }
+    cmp -s "$HARBOUR/assets/render/look-v1.json" "$look" \
+        || { echo "browser-new-again-made: FAILED, the project's look profile is not the default one"; failed=1; }
 fi
-# Started again, the browser lists the project, chosen, and Enter opens it. A new project is
-# not made over it.
+# Started again, the browser lists the project, chosen, and Enter opens it. A second project
+# of that name is not made over it, nor is one made inside it: nothing is written, and the
+# name that is taken is said.
 with_browser check browser-new-again-listed 'key=t' \
     'launcher=shown launcher_rows=\[Harbour:ready\] launcher_selected=0' "$NO_BROWSER_STATE" 'launcher_entered=0' 'project=NoFolder'
 with_browser check browser-new-again-opened 'key=enter' \
-    "$ENTERED" 'launcher_entered=1' 'project=Ready' 'has_file=true' "$NO_RUNTIME" 'problem=none'
-with_browser check browser-new-again-over "pick-folder=$HARBOUR,click-button=New Project" \
+    "$ENTERED" 'launcher_entered=1' 'project=Ready' 'has_file=true' "$NO_RUNTIME" 'look=loaded:3abf9a2f' 'problem=none'
+with_browser check browser-new-again-over "pick-folder=$DOCS,click-button=New Project,project-name=Harbour,click-button=Create project" \
+    'launcher=shown' 'launcher_pending=new launcher_refusal=project\.folder_taken' 'launcher_entered=0' 'project=NoFolder'
+with_browser check browser-new-again-inside "pick-folder=$HARBOUR,click-button=New Project" \
     'launcher=shown' 'launcher_pending=none launcher_refusal=already' 'launcher_entered=0' 'project=NoFolder'
+if wanted browser-new-again-over || wanted browser-new-again-inside; then
+    [ "$(ls -A "$DOCS" | tr '\n' ' ')" = "Harbour letter.txt " ] \
+        && [ "$(ls -A "$HARBOUR" | tr '\n' ' ')" = "arc-project.json assets cooked levels " ] \
+        || { echo "browser-new-again-over: FAILED, a new project that was refused wrote something"; failed=1; }
+fi
+# A project whose look profile is not in its folder: it is entered with the Project settings
+# opened, which say so, Game look is refused, and nothing is made by opening. On the
+# person's word the default profile is made where the project file names it, the project
+# file is not written, and Game look is read from the project at once.
+if wanted browser-new-again-nolook; then
+    rm -f "$HARBOUR/assets/render/look-v1.json"
+    cp "$HARBOUR/arc-project.json" "$work/browser-new/project-before.json"
+fi
+with_browser check browser-new-again-nolook 'key=enter' \
+    "$ENTERED" 'launcher_entered=1' 'project=Ready' 'project_dialog=true' 'look=refused:look\.missing' 'problem=none'
+if wanted browser-new-again-nolook; then
+    [ ! -e "$HARBOUR/assets/render/look-v1.json" ] \
+        || { echo "browser-new-again-nolook: FAILED, opening the project made its missing look profile"; failed=1; }
+fi
+with_browser check browser-new-again-nolook-made 'key=enter,click-button=Make the default look profile' \
+    "$ENTERED" 'project=Ready' 'look=loaded:3abf9a2f' 'problem=none'
+if wanted browser-new-again-nolook-made; then
+    cmp -s "$HARBOUR/assets/render/look-v1.json" "$look" \
+        && cmp -s "$HARBOUR/arc-project.json" "$work/browser-new/project-before.json" \
+        || { echo "browser-new-again-nolook-made: FAILED, the default look profile was not made, or the project file was written"; failed=1; }
+fi
+# The game's folder is the editor's one setting for every project, kept beside the list. A
+# folder that holds no game is refused and nothing is kept. A folder that holds one is taken
+# from the browser, and the project is then entered with that game: its folder is the game's,
+# the project's stays the content's. From the open project the folder can be changed in the
+# Play menu; a folder that is refused there leaves the setting and the game as they were.
+GAME="$work/browser-new/game"
+if wanted browser-new-again-game; then
+    mkdir -p "$GAME/target/debug" "$GAME/assets"
+    for program in server client; do
+        printf '#!/bin/sh\nexit 0\n' > "$GAME/target/debug/$program" && chmod +x "$GAME/target/debug/$program"
+    done
+fi
+with_browser check browser-new-again-game-refused "pick-folder=$DOCS,click-button=Choose game folder" \
+    'launcher=shown' 'game_folder=unset game_refusal=runtime\.requirements_missing' 'runtime=none' 'launcher_entered=0'
+if wanted browser-new-again-game-refused; then
+    [ ! -e "$work/browser-new/game-folder.json" ] \
+        || { echo "browser-new-again-game-refused: FAILED, a folder that holds no game was kept as the game's"; failed=1; }
+fi
+with_browser check browser-new-again-game-set "pick-folder=$GAME,click-button=Choose game folder" \
+    'launcher=shown launcher_rows=\[Harbour:ready\]' 'game_folder=ready game_refusal=none' 'runtime=none' 'launcher_entered=0'
+if wanted browser-new-again-game-set; then
+    grep -q "browser-new/game" "$work/browser-new/game-folder.json" \
+        || { echo "browser-new-again-game-set: FAILED, the game's folder was not kept"; failed=1; }
+fi
+with_browser check browser-new-again-game-opened 'key=enter' \
+    "$ENTERED" 'launcher_entered=1' 'project=Ready' 'game=true' \
+    'game_folder=ready game_refusal=none runtime=ready runtime_source=editor runtime_folder=[^ ]*browser-new/game game_missing=\[\]' 'problem=none'
+with_browser check browser-new-again-game-kept "key=enter,pick-folder=$DOCS,click-button=Play,click-button=Change game folder" \
+    "$ENTERED" 'game=true' \
+    'game_folder=ready game_refusal=runtime\.requirements_missing runtime=ready runtime_source=editor runtime_folder=[^ ]*browser-new/game' 'problem=none'
+if wanted browser-new-again-game; then
+    [ -z "$(ls -A "$GAME/assets")" ] && [ "$(ls -A "$GAME" | tr '\n' ' ')" = "assets target " ] \
+        || { echo "browser-new-again-game: FAILED, something was written into the game's folder"; failed=1; }
+fi
 # The project's folder is moved away: it is still listed, as missing, and opens nothing.
 # Opened where it is now, through the folder chooser, it is entered; taken out of the list,
 # the list has only the project where it is.
