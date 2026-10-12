@@ -150,8 +150,7 @@ pub const NO_LOOK: &str = "With neither, the player cannot look around.";
 
 /// What the group of the look profile says.
 pub const LOOK_HINT: &str = "The profile the game is drawn with. Game look in this editor is \
-    drawn from the profile that was the project's when the editor started; one that is saved \
-    here is used from the next start.";
+    drawn from the project's profile; one that is saved here is used at once.";
 
 /// What the foot says of the settings: nothing while they are the file's, that they are
 /// saved after a save, that there are changes, and why changes cannot be saved. The second
@@ -1100,7 +1099,7 @@ mod tests {
         assert!(look_choice_words(&linked).contains("outside the project's folder"));
         // What the dialog says of changing a key and of the profile is said before it is done.
         assert!(KEYS_HINT.contains("press its button and then the key"));
-        assert!(LOOK_HINT.contains("from the next start"));
+        assert!(LOOK_HINT.contains("one that is saved here is used at once"));
         assert!(KEY_REFUSED.contains("does not read that key"));
     }
 }

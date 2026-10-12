@@ -105,10 +105,11 @@ fn main() -> AppExit {
         .or_else(|| project.start_level())
         .unwrap_or_else(|| DEFAULT_LEVEL.into());
     let saved_level = level.exists().then(|| level.clone());
-    // The game's look profile, which Game look in the 3D view is drawn from: read once,
-    // before the window opens. It is the profile the project names; a folder that is no
-    // project yet has the one a game always had. A profile that is chosen in the Project
-    // settings later is the one of the next start. A scripted check may name a file.
+    // The game's look profile, which Game look in the 3D view is drawn from: read before the
+    // window opens. It is the profile the project names; a folder that is no project yet has
+    // the one a game always had. It is read again whenever the Project settings are saved
+    // (`look::follow_saved_settings`), so that a profile chosen there is the one at once. A
+    // scripted check may name a file.
     let read_look = |path: PathBuf| {
         let read = editor_ui::look::load_look_profile(&path);
         (path, read)

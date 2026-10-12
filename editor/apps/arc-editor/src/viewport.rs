@@ -80,6 +80,9 @@ impl Plugin for ViewportPlugin {
                     listen,
                     fit_camera.after(start_cameras),
                     place_camera,
+                    retake_look
+                        .after(crate::look::follow_saved_settings)
+                        .before(show_level),
                     show_level,
                     show_ground,
                     snap_turns,
@@ -176,7 +179,7 @@ pub struct ViewCamera;
 
 /// The meshes and materials every object shares.
 #[derive(Resource)]
-struct Looks {
+pub struct Looks {
     spawn_mesh: Handle<Mesh>,
     /// The mark of a placed particle emitter: a cone whose tip is the way it emits.
     emitter_mesh: Handle<Mesh>,
@@ -188,6 +191,21 @@ struct Looks {
     game_box: Option<Handle<StandardMaterial>>,
     /// How many metres one repeat of a box's texture covers: the profile's, or a metre.
     box_repeat_m: f32,
+}
+
+impl Looks {
+    /// What a box is drawn with in Game look, if the editor holds a profile: the colour of
+    /// its material as it is now, in linear RGBA, its roughness, and how many metres one
+    /// repeat of its texture covers. For checks.
+    pub fn game_box(&self, materials: &Assets<StandardMaterial>) -> Option<([f32; 4], f32, f32)> {
+        let material = materials.get(self.game_box.as_ref()?)?;
+        let color = material.base_color.to_linear();
+        Some((
+            [color.red, color.green, color.blue, color.alpha],
+            material.perceptual_roughness,
+            self.box_repeat_m,
+        ))
+    }
 }
 
 /// Where the camera looks from: around `target`, `distance` away.
@@ -245,7 +263,8 @@ struct ShownKey {
 /// One object as the view shows it.
 struct ShownObject {
     entity: Entity,
-    /// The half extents its mesh was built for, if it is a box.
+    /// The half extents its mesh was built for, if it is a box. `None` also for a box whose
+    /// mesh must be built again whatever its size (`Shown::build_boxes_again`).
     half_extents: Option<[f32; 3]>,
 }
 
@@ -261,6 +280,18 @@ pub struct Shown {
     /// How many objects have been drawn or redrawn in all. For checks: a change of one object
     /// must not redraw the level.
     pub redrawn: u64,
+}
+
+impl Shown {
+    /// Every object is drawn anew the next time the level is shown, and every box with a
+    /// mesh that is built for it again: what a box's mesh is built from besides its size
+    /// has changed.
+    fn build_boxes_again(&mut self) {
+        self.key = None;
+        for object in self.objects.values_mut() {
+            object.half_extents = None;
+        }
+    }
 }
 
 /// How much landscape the view shows.
@@ -419,6 +450,45 @@ fn setup(
             .as_ref()
             .map_or(1.0, |loaded| loaded.profile.boxes.texture_repeat_m),
     });
+}
+
+/// Takes the look profile the editor holds now, after it was read again (`look::
+/// follow_saved_settings`): the game's box has the new profile's colour and roughness, and its
+/// texture repeats as the new profile says.
+///
+/// The box's material stays the one it was, changed in place, so that every box drawn with
+/// it shows the new look without being touched. Where the profile's repeat is another, every
+/// box gets a mesh made for it; and a profile that is there now and was not, or is gone, is
+/// seen by `show_level`, which draws every object anew for it.
+fn retake_look(
+    look: Res<GameLook>,
+    mut looks: ResMut<Looks>,
+    mut shown: ResMut<Shown>,
+    (mut materials, mut images): (ResMut<Assets<StandardMaterial>>, ResMut<Assets<Image>>),
+) {
+    // What `setup` made is made from the profile of the start.
+    if !look.is_changed() || look.is_added() {
+        return;
+    }
+    let boxes = look.0.as_ref().map(|loaded| &loaded.profile.boxes);
+    let held = looks.game_box.take();
+    looks.game_box = boxes.map(|boxes| {
+        // The texture is the one every profile of this schema names.
+        if let Some(held) = held
+            && let Some(mut material) = materials.get_mut(&held)
+            && let Some(texture) = material.base_color_texture.clone()
+        {
+            *material = box_material(boxes, texture);
+            return held;
+        }
+        let texture = images.add(look_image(&procedural_brick_v1()));
+        materials.add(box_material(boxes, texture))
+    });
+    let repeat_m = boxes.map_or(1.0, |boxes| boxes.texture_repeat_m);
+    if looks.box_repeat_m != repeat_m {
+        looks.box_repeat_m = repeat_m;
+        shown.build_boxes_again();
+    }
 }
 
 /// The node the view shows through takes the camera input, once the UI exists.

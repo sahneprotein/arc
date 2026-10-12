@@ -1040,6 +1040,96 @@ if wanted project-settings-again; then
     cmp -s "$work/project-settings/project/arc-project.json" "$work/project-settings.saved" \
         || { echo "project-settings-again: FAILED, looking at the settings changed the project file"; failed=1; }
 fi
+# Game look is drawn from the look profile the project names, and a profile that is saved in
+# the Project settings is the one at once, without another start. The folder has the game's
+# profile and another, "dusk", with a weaker sun, no light from the sky, another colour and
+# roughness of the boxes and the ground, and a box texture that repeats every two metres.
+#
+# The first start has no project and so no profile. The project is set up, dusk is chosen
+# and saved, and Game look, which was off, is drawn from it. Started again, with dusk the
+# project's, Game look is chosen first and the game's profile is saved while it is drawn:
+# the sun, the ground and the boxes are the game's, and every box was drawn anew, for its
+# texture repeats otherwise. A save of a key alone reads the same profile and draws nothing
+# anew. And dusk saved over the game's profile while that is drawn is what the view is
+# drawn from, and still is after the editor's own picture was chosen in between.
+if wanted project-look; then
+    mkdir -p "$work/project-look/project/assets/render"
+    cp "$look" "$work/project-look/project/assets/render/look-v1.json"
+    cat > "$work/project-look/project/assets/render/dusk.json" <<'DUSK'
+{
+  "schema": 1,
+  "camera": {
+    "hdr": true,
+    "exposure_ev100": 11,
+    "tonemapping": "aces_fitted",
+    "bloom": {"preset": "natural", "intensity": 0.2}
+  },
+  "sky": {
+    "atmosphere": "earth",
+    "scattering_lut_size": [128, 128],
+    "environment_map": false,
+    "ambient_light": "none",
+    "clear_color_linear_rgba": [0.02, 0.01, 0.03, 1]
+  },
+  "sun": {
+    "illuminance_lux": 40000,
+    "color_linear_rgba": [1, 0.8, 0.6, 1],
+    "position_m": [1, 0.3, 0.6],
+    "look_at_m": [0, 0, 0],
+    "shadows": {
+      "enabled": true,
+      "map_size": 2048,
+      "first_cascade_far_bound_m": 8,
+      "maximum_distance_m": 60
+    }
+  },
+  "boxes": {
+    "base_color_linear_rgba": [0.5, 0.25, 0.125, 1],
+    "roughness": 0.75,
+    "texture": "procedural_brick_v1",
+    "texture_repeat_m": 2
+  },
+  "ground": {
+    "base_color_linear_rgba": [0.25, 0.5, 0.125, 1],
+    "roughness": 0.5,
+    "paint": "linear_vertex_rgba"
+  }
+}
+DUSK
+    dusk_hash="$(shasum -a 256 "$work/project-look/project/assets/render/dusk.json" | cut -c1-8)"
+fi
+DUSK_LOOK='look_sun=Some\(40000'
+DUSK_GROUND='ground_look=Some\(\(\[0\.25, 0\.5, 0\.125, 1\.0\], 0\.5\)\)'
+DUSK_BOX='box_look=Some\(\(\[0\.5, 0\.25, 0\.125, 1\.0\], 0\.75, 2\.0\)\)'
+GAME_LOOK='look_sun=Some\(130000'
+GAME_GROUND='ground_look=Some\(\(\[1\.0, 1\.0, 1\.0, 1\.0\], 0\.9\)\)'
+GAME_BOX='box_look=Some\(\(\[1\.0, 1\.0, 1\.0, 1\.0\], 1\.0, 1\.0\)\)'
+SAVE_OTHER_LOOK='choose=Level>Project settings,click-button=Use,click-button=Save project settings'
+check project-look 'click-button=Set up project,click-button=Use,click-button=Save project settings,click-button=Close settings,choose=View>Game look' \
+    'project=Ready' 'project_saved=true' 'project_profile=assets/render/dusk\.json' 'view=GameLook' \
+    "look=loaded:${dusk_hash:-none}" "$DUSK_LOOK" "$DUSK_GROUND" "$DUSK_BOX" 'problem=none'
+check project-look-again "choose=View>Game look,$SAVE_OTHER_LOOK" \
+    'project_dialog=true' 'project_saved=true' 'project_profile=assets/render/look-v1\.json' 'view=GameLook' \
+    'look=loaded:3abf9a2f' "$GAME_LOOK" "$GAME_GROUND" "$GAME_BOX" 'problem=none'
+check project-look-again-keys 'choose=View>Game look,choose=Level>Project settings,scroll-project=300,click-button=W,key=t,click-button=Save project settings' \
+    'project_saved=true' 'project_keys=T,S,A,D,Space,V,Escape' 'view=GameLook' \
+    'look=loaded:3abf9a2f' "$GAME_LOOK" "$GAME_GROUND" "$GAME_BOX" 'problem=none'
+check project-look-again-back "choose=View>Game look,$SAVE_OTHER_LOOK,click-button=Close settings,choose=View>Editor,choose=View>Game look" \
+    'project_dialog=false' 'project_profile=assets/render/dusk\.json' 'view=GameLook' \
+    "look=loaded:${dusk_hash:-none}" "$DUSK_LOOK" "$DUSK_GROUND" "$DUSK_BOX" 'problem=none'
+# A box is drawn once at the start and once for Game look. The profile of another repeat
+# draws each a third time; the save of a key draws none.
+same project-look-again-keys project-look-again objects
+if wanted project-look-again; then
+    drawn="$(field project-look-again redrawn)"; plain="$(field project-look-again-keys redrawn)"
+    objects="$(field project-look-again objects)"
+    if [ -n "$objects" ] && [ "$plain" = "$((objects * 2))" ] && [ "$drawn" = "$((objects * 3))" ]; then
+        echo "project-look-again redraws every object for the other profile, the save of a key none: ok"
+    else
+        echo "project-look-again: FAILED, $objects objects were redrawn $drawn times for another profile and $plain times for a key"
+        failed=1
+    fi
+fi
 # Closing the editor with project settings that were changed and not saved asks first, as
 # it does for a level: the Project settings are closed with the change in them, and then the
 # window. "Keep editing" leaves the editor open, the change still held and the project file

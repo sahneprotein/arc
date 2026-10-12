@@ -10,6 +10,10 @@
 //!
 //! What is chosen is the window's ([`ViewMode`]). Going back to the editor's picture takes
 //! everything off again that Game look put on.
+//!
+//! The profile is the one the project names. It is read when the editor starts and again
+//! whenever the Project settings are saved, so that a profile chosen there is what Game look
+//! is drawn from at once, without another start.
 
 use std::path::PathBuf;
 
@@ -28,12 +32,13 @@ use bevy::{
     post_process::bloom::Bloom,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    window::RequestRedraw,
 };
 use editor_core::Diagnostic;
 use editor_ui::{
     look::{LoadedLook, LookBoxes, LookTexture},
     theme::{color, feathers::to_color},
-    Editor, LookStatus, ViewMode,
+    Editor, LookStatus, Project, ViewMode,
 };
 use landscape_render::{GroundLook, GroundRenderer};
 use scene_data::ObjectData;
@@ -83,6 +88,45 @@ pub fn look_status(
             Some(loaded),
         ),
     }
+}
+
+/// What the editor knows and holds after the Project settings were saved: the profile the
+/// project names now, as it was read then. `None` means that nothing changes: there is no
+/// project that names one, or the profile is the one the editor holds already, so that a
+/// save of other settings draws nothing anew.
+pub fn look_after_save(
+    held: (&LookStatus, Option<&LoadedLook>),
+    found: Option<(PathBuf, Result<LoadedLook, Diagnostic>)>,
+) -> Option<(LookStatus, Option<LoadedLook>)> {
+    let (status, look) = look_status(Some(found?));
+    (held != (&status, look.as_ref())).then_some((status, look))
+}
+
+/// Reads the project's look profile again when its settings were saved, and holds what was
+/// read in place of the profile of the start. A profile that cannot be read then is said to
+/// be refused, as at the start, and Game look goes back to the editor's own picture.
+pub(crate) fn follow_saved_settings(
+    project: Res<Project>,
+    mut status: ResMut<LookStatus>,
+    mut look: ResMut<GameLook>,
+    mut saves: Local<u64>,
+    mut redraw: MessageWriter<RequestRedraw>,
+) {
+    let now = project.settings_saves();
+    if std::mem::replace(&mut *saves, now) == now {
+        return;
+    }
+    let Some((read, loaded)) = look_after_save((&*status, look.0.as_ref()), project.look_profile())
+    else {
+        return;
+    };
+    *status = read;
+    if look.0 != loaded {
+        look.0 = loaded;
+    }
+    // The editor draws only when something happens, and what shows the profile was partly
+    // drawn before this was known: one more frame shows it everywhere.
+    redraw.write(RequestRedraw);
 }
 
 fn linear(rgba: [f32; 4]) -> Color {
@@ -168,8 +212,40 @@ pub fn box_mesh(full_extents: Vec3, repeat_m: f32) -> Mesh {
     .with_inserted_indices(Indices::U32(indices))
 }
 
+/// The level's camera made anew, with nothing of the game's look on it, in place of the one
+/// that had it. Returns the new camera.
+///
+/// The camera is not stripped of the game's look: what the engine keeps of a camera's sky for
+/// drawing is not all taken away when the sky's settings are taken off the camera, and the
+/// sky was then still drawn, in its HDR format, into a picture that was no longer HDR. The
+/// renderer refuses that, and the editor ended. A camera that is made anew has nothing left
+/// of the sky. It is the same camera to everything else: where it looks from, its rectangle
+/// of the window, its place among the cameras, and the layer it draws.
+fn camera_anew(
+    commands: &mut Commands,
+    old: Entity,
+    camera: Camera,
+    transform: Transform,
+    layers: Option<&RenderLayers>,
+) -> Entity {
+    commands.entity(old).despawn();
+    let mut again = commands.spawn((
+        ViewCamera,
+        TransformGizmoCamera,
+        Camera3d::default(),
+        camera,
+        transform,
+    ));
+    if let Some(layers) = layers {
+        again.insert(layers.clone());
+    }
+    again.id()
+}
+
 /// Puts the game's sun, sky and camera settings on when Game look is chosen, and takes them
 /// off when the editor's own picture is. The view that was never in Game look is not touched.
+/// A profile that takes the place of another while Game look is drawn is put on in the same
+/// way: what the other profile made goes first, the camera with it.
 pub(crate) fn apply_look(
     mut commands: Commands,
     (view, look): (Res<ViewMode>, Res<GameLook>),
@@ -184,17 +260,21 @@ pub(crate) fn apply_look(
         ResMut<Assets<StandardMaterial>>,
         ResMut<Assets<ScatteringMedium>>,
     ),
-    mut applied: Local<ViewMode>,
+    // The picture that is drawn, and in Game look the profile it is drawn from.
+    mut applied: Local<(ViewMode, Option<String>)>,
 ) {
     // Without a profile there is no Game look, whatever is chosen.
-    let wanted = match (*view, &look.0) {
-        (ViewMode::GameLook, Some(_)) => ViewMode::GameLook,
-        _ => ViewMode::Editor,
+    let loaded = look.0.as_ref().filter(|_| *view == ViewMode::GameLook);
+    let wanted = match loaded {
+        Some(_) => ViewMode::GameLook,
+        None => ViewMode::Editor,
     };
-    if *applied == wanted {
+    let identity = loaded.map(|loaded| loaded.sha256_hex.as_str());
+    if applied.0 == wanted && applied.1.as_deref() == identity {
         return;
     }
-    *applied = wanted;
+    let from_game_look = applied.0 == ViewMode::GameLook;
+    *applied = (wanted, identity.map(str::to_owned));
     // Every camera of the window is HDR or none is. Cameras that draw into one window
     // draw over each other's picture only while they agree in this; when the level's
     // camera alone is HDR, the camera that draws the panels has a picture of its own, in
@@ -208,33 +288,16 @@ pub(crate) fn apply_look(
         }
     }
     let (camera_entity, mut camera, transform, layers) = camera.into_inner();
-    let Some(loaded) = look.0.as_ref().filter(|_| wanted == ViewMode::GameLook) else {
+    // The sun and the sky of the profile that was drawn from go, whatever is drawn next.
+    for made in &made {
+        commands.entity(made).despawn();
+    }
+    let Some(loaded) = loaded else {
         // Back to the editor's own picture: its light, its ambient light, and a camera
-        // that has nothing the profile asked for.
-        //
-        // The camera is not stripped of the game's look: it is made anew. What the engine
-        // keeps of a camera's sky for drawing is not all taken away when the sky's settings
-        // are taken off the camera, and the sky was then still drawn, in its HDR format,
-        // into a picture that was no longer HDR. The renderer refuses that, and the editor
-        // ended. A camera that is made anew has nothing left of the sky. It is the same
-        // camera to everything else: where it looks from, its rectangle of the window, its
-        // place among the cameras, and the layer it draws.
+        // that has nothing the profile asked for (`camera_anew`).
         let mut plain = camera.clone();
         plain.clear_color = ClearColorConfig::Custom(to_color(color::SURFACE_SUNKEN));
-        commands.entity(camera_entity).despawn();
-        let mut again = commands.spawn((
-            ViewCamera,
-            TransformGizmoCamera,
-            Camera3d::default(),
-            plain,
-            *transform,
-        ));
-        if let Some(layers) = layers {
-            again.insert(layers.clone());
-        }
-        for made in &made {
-            commands.entity(made).despawn();
-        }
+        camera_anew(&mut commands, camera_entity, plain, *transform, layers);
         for mut light in &mut editor_sun {
             light.illuminance = EDITOR_SUN_ILLUMINANCE;
         }
@@ -249,6 +312,19 @@ pub(crate) fn apply_look(
     };
     let profile = &loaded.profile;
     let (camera_look, sky, sun) = (&profile.camera, &profile.sky, &profile.sun);
+    // The profile's clear colour, on the camera the editor's picture was drawn with. A
+    // camera that has another profile's look on it is not given this one's over it: it is
+    // made anew, for the reason it is on the way back, and this profile is the only one
+    // the new camera ever had.
+    let clear_color = ClearColorConfig::Custom(linear(sky.clear_color_linear_rgba));
+    let camera_entity = if from_game_look {
+        let mut cleared = camera.clone();
+        cleared.clear_color = clear_color;
+        camera_anew(&mut commands, camera_entity, cleared, *transform, layers)
+    } else {
+        camera.clear_color = clear_color;
+        camera_entity
+    };
     let mut on_camera = commands.entity(camera_entity);
 
     // Camera: exposure, tone and bloom; the sky's settings and its light on the shadows.
@@ -273,7 +349,6 @@ pub(crate) fn apply_look(
     } else {
         on_camera.remove::<AtmosphereEnvironmentMapLight>();
     }
-    camera.clear_color = ClearColorConfig::Custom(linear(sky.clear_color_linear_rgba));
 
     // The ground's one material takes the profile's colour and roughness. Its paint stays
     // where it is, in the vertices, as the profile says the game has it.
@@ -362,8 +437,10 @@ pub struct LookPlugin;
 
 impl Plugin for LookPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<GameLook>()
-            .add_systems(Update, (apply_look, outline_selection));
+        app.init_resource::<GameLook>().add_systems(
+            Update,
+            (follow_saved_settings, apply_look, outline_selection).chain(),
+        );
     }
 }
 
@@ -450,6 +527,51 @@ mod tests {
             };
             assert_eq!((got.as_str(), at.as_deref()), (code, field));
         }
+    }
+
+    #[test]
+    fn a_save_of_the_settings_gives_the_projects_profile_unless_it_is_the_one_held() {
+        let path = || PathBuf::from("/no/such/game/assets/render/dusk.json");
+        let read = |profile: &str| parse_look_profile(profile.as_bytes(), &path());
+        let (status, look) = looked_for(Some(FIXTURE));
+        let held = (&status, look.as_ref());
+
+        // Without a project that names a profile there is nothing to take.
+        assert_eq!(look_after_save(held, None), None);
+        // The profile the editor holds, read again as it was: a save of other settings.
+        assert_eq!(look_after_save(held, Some((path(), read(FIXTURE)))), None);
+
+        // Another profile is the one held from then on, named by its own bytes.
+        let dusk = FIXTURE.replace("\"illuminance_lux\": 130000", "\"illuminance_lux\": 40000");
+        let (now, taken) = look_after_save(held, Some((path(), read(&dusk)))).unwrap();
+        let taken = taken.expect("the other profile is a profile");
+        assert_eq!(taken.profile.sun.illuminance_lux, 40_000.0);
+        assert_ne!(taken.sha256_hex, GAME_PROFILE_SHA256);
+        assert_eq!(
+            now,
+            LookStatus::Loaded {
+                identity: Some(taken.sha256_hex.clone())
+            }
+        );
+
+        // One that cannot be read is refused as at the start, and no profile is held.
+        let (refused, none) = look_after_save(held, Some((path(), read("{")))).unwrap();
+        assert!(none.is_none() && !refused.loaded());
+        let LookStatus::Refused { code, path: at, .. } = &refused else {
+            panic!("a profile that is not one is refused");
+        };
+        assert_eq!(code, "look.decode");
+        assert!(at.ends_with("dusk.json"), "{at}");
+        // Refused again in the same way, nothing changes; read at last, it is taken.
+        let held = (&refused, None);
+        assert_eq!(look_after_save(held, Some((path(), read("{")))), None);
+        assert!(look_after_save(held, Some((path(), read(FIXTURE)))).is_some());
+
+        // An editor that had no profile takes the one a project names after a save.
+        let (nothing, _) = look_status(None);
+        let (now, taken) =
+            look_after_save((&nothing, None), Some((path(), read(FIXTURE)))).unwrap();
+        assert!(now.loaded() && taken.is_some());
     }
 
     #[test]

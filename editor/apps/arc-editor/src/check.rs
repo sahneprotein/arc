@@ -927,7 +927,7 @@ fn scripted(
             })
             .collect();
         println!(
-            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} {} project={} project_dialog={} picture={} window_shown={} {} {}",
+            "ARC_EDITOR_CHECK_RESULT selected={:?} position={:?} rotation={:?} half_size={:?} objects={} dirty={} cook_needed={} cooked={} problem={} undo={:?} redo={:?} dragging={} tool={:?} camera=({:.3},{:.3},{:.2}) failed_steps={:?} gizmo_active={} gizmo_hover={:?} cursor={:?} window={}x{} redrawn={} ground_tiles={} has_file={} sculpt={} brush={:?} brush_aim={:?} stroke_active={} ground_height=({:.3},{:.3}) panels={:?} notice={} question={:?} level={:?} level_dialog={:?} empty_hint={} paint={} layers={} paint_layer={:?} layer_weights={:?} rows_shown={} folded={} rules={:?} rule={:?} grass={} filled={:?} flat_note={} authored={} cooked_source={} layer_rows={} rule_rows={} toolbar_height={:?} toolbar_fits={:?} toolbar_folded={} menu_open={} play_cooked={} play_older={} play_check={} play_stop={} play_run={:?} play_end={} play_refusal={} run_notice={} left_notice={} shutdown={:?} game={} game_wakes={} selection={} places={:?} offsets={:?} several={:?} dashes={:?} snap={} moved_notice={} notice_actions={:?} opened={} play_word={:?} duplicate={:?} snap_steps=({}, {}) active={:?} pivot={:?} gizmo_at={:?} gizmo_row={:?} sizes={:?} turns={:?} under={:?} worlds={:?} kids={:?} drop_target={:?} workspace={:?} review={:?} review_rows={} view={:?} look={} look_sun={:?} ground_look={:?} box_look={:?} {} project={} project_dialog={} picture={} window_shown={} {} {}",
             selected.map(|object| object.name.as_str()),
             selected.map(|object| object.local.translation_m.map(|v| (v * 1000.0).round() / 1000.0)),
             selected.map(|object| {
@@ -1193,6 +1193,10 @@ fn scripted(
             screen
                 .ground_look()
                 .map(|look| (look.base_color_linear_rgba, look.roughness)),
+            // What a box is drawn with in Game look, whether the view is drawn so or not:
+            // its material's colour and roughness, and the metres one repeat of its texture
+            // covers. Nothing without a profile.
+            screen.box_look(),
             emitters_words(
                 &particles,
                 &preview,

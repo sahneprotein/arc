@@ -525,6 +525,8 @@ pub struct Screen<'w, 's> {
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<EmitterNameInput>>,
     look_sun: Query<'w, 's, &'static DirectionalLight, With<LookSun>>,
     ground_renderer: Res<'w, landscape_render::GroundRenderer>,
+    looks: Res<'w, crate::viewport::Looks>,
+    materials: Res<'w, Assets<StandardMaterial>>,
     hierarchy:
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<HierarchyBody>>,
     camera: Single<'w, 's, (&'static Camera, &'static GlobalTransform), With<ViewCamera>>,
@@ -572,6 +574,12 @@ impl Screen<'_, '_> {
     /// What the ground's material is made with in place of its defaults, if anything.
     pub fn ground_look(&self) -> Option<landscape_render::GroundLook> {
         self.ground_renderer.look()
+    }
+
+    /// What a box is drawn with in Game look, if the editor holds a profile: its material's
+    /// colour and roughness, and how many metres one repeat of its texture covers.
+    pub fn box_look(&self) -> Option<([f32; 4], f32, f32)> {
+        self.looks.game_box(&self.materials)
     }
 
     /// How many problems the Review panel has laid out.

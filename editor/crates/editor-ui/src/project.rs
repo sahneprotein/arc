@@ -95,6 +95,8 @@ pub struct Project {
     refused_key: bool,
     /// Whether the last thing done to the settings was a save that went through.
     saved: bool,
+    /// How many saves of the settings went through since the editor started.
+    saves: u64,
 }
 
 /// What a key is bound to, in the manifest's order.
@@ -530,6 +532,13 @@ impl Project {
         self.saved
     }
 
+    /// How many saves of the settings went through since the editor started. What the
+    /// editor draws from the manifest, as Game look from its look profile, is read again
+    /// when this grows.
+    pub fn settings_saves(&self) -> u64 {
+        self.saves
+    }
+
     /// The look profiles of the folder to choose from.
     pub fn look_choices(&self) -> &[LookChoice] {
         &self.looks
@@ -633,6 +642,7 @@ impl Project {
                 self.draft = None;
                 self.read();
                 self.saved = true;
+                self.saves += 1;
                 true
             }
             Err(refusal) => {
@@ -1002,6 +1012,7 @@ mod tests {
         let before = manifest(&project);
         assert_eq!(project.draft_state(), DraftState::Unchanged);
         assert!(!project.settings_unsaved() && !project.settings_saved());
+        assert_eq!(project.settings_saves(), 0);
 
         // A key the game does not read is not taken, and the question stays open.
         project.ask_key(KeyAction::Jump);
@@ -1020,9 +1031,11 @@ mod tests {
         // The manifest the editor read, and the file, are as they were.
         assert_eq!(project.config().unwrap().controls.jump, "Space");
         assert_eq!(manifest(&project), before);
+        assert_eq!(project.settings_saves(), 0);
 
         assert!(project.save_settings());
         assert!(project.settings_saved() && !project.settings_unsaved());
+        assert_eq!(project.settings_saves(), 1);
         assert_eq!(project.draft_state(), DraftState::Unchanged);
         assert_eq!(project.problem(), None);
         let saved = project.config().unwrap();
@@ -1159,7 +1172,9 @@ mod tests {
         );
         assert_eq!(manifest(&project), their_bytes);
         assert_eq!(project.settings().unwrap().controls.jump, "Enter");
+        // A save that was refused is none: nothing reads the manifest again for it.
         assert!(!project.settings_saved());
+        assert_eq!(project.settings_saves(), 0);
 
         // Read again: their name is shown, the change made here is still unsaved.
         project.read_again();
