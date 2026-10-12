@@ -306,11 +306,13 @@ these up.]
    model placed as an object (steps 6 and 7 of 2.5).
 
 Progress, 2026-10-11, the fifth note, continued on 2026-10-12. The editor's
-`codex/play-backend` is at `24f57260c` and the game's `codex/play-readiness` at `7dd510d`;
+`codex/play-backend` is at `bd4182fff` and the game's `codex/play-readiness` at `7dd510d`;
 both are pushed and merged nowhere. A project's settings can now be changed in the editor,
 what is saved is a manifest the game can play with, the editor does not close over changes
-that were not saved, and a look profile that is saved is what Game look is drawn from at
-once.
+that were not saved, a look profile that is saved is what Game look is drawn from at
+once, and the number of local test clients is a setting that Play starts with. That last
+one is shown with a stand-in for the game only: no real game was started with more than
+one client.
 
 - The keys and the look profile are changed in the Project settings (`37925c13f`).
   - A key is changed by pressing its button and then the key. A key the game does not read
@@ -375,6 +377,37 @@ once.
     picture, so that nothing of the old sky stays on it. The boxes keep their material,
     which is changed in place; where the new profile's texture repeats otherwise, every box
     gets a mesh made for it again.
+- The number of local test clients is the first planned setting that is real
+  (`ea911bb25` for the coordinator, `bd4182fff` for the settings and the editor,
+  2026-10-12).
+  - What it is: how many client processes of the game Play starts on this machine, beside
+    the one server it starts, each a window of its own. One to four. It is a setting of the
+    project, in the project file's place for it (`planned.multiplayer.clients`), not of a
+    level and not of a single run as 1.9 proposed it.
+  - What it is not: it is not multiplayer for players. Every process is on this machine,
+    the clients reach the server over the machine's own loopback address, and nothing is
+    started or reached anywhere else. The other settings of the Multiplayer group, bots,
+    network conditions, where to start and the zone, are planned as before and switched
+    off.
+  - A project file that names no number means one client, and keeps naming none. The
+    dialog says that it names none, which is 1; choosing 1 there changes nothing, and a
+    save of other settings does not write a number. A number that is named stays named.
+  - In the Project settings it is "Local test clients" in the Multiplayer group, a button
+    for each number from 1 to 4 with the one that is set marked. It is changed, discarded
+    and saved as the keys and the look profile are, by the same save. Play uses the number
+    that is saved, not one that is being changed.
+  - The editor hands Play the saved number, or one, as it is. The coordinator takes one to
+    four and refuses any other; the shared format refuses any other in a project file.
+  - The coordinator starts the server with that number as the most clients it takes, and
+    the clients with the numbers 1 to N. A run counts as running only when every client
+    has shown its first frame that can be controlled. If any process fails, or the run is
+    stopped, all of them are ended, and the account of the cleanup has every client by its
+    number, one that was never started too.
+  - While a run of several clients starts, each client's step is said with its number
+    ("client 2 accepted by the server"). The notice of how such a run ended says how each
+    client left, by number, and offers the log of the first that did not leave cleanly; the
+    notice of what a run left behind names every client whose end was not seen. A run's
+    only client is called "client" as before.
 - A level is not saved in a newer schema without its file as it was (`c60aefbf2`).
   - A level goes to its second schema with its first placed emitter. The save that follows
     looks at the schema the file on disk says it is of; if it is older than the level's,
@@ -478,6 +511,38 @@ What was run, each of a different kind, and nothing more:
     Game look and into it again, on which the camera is made anew.
   - `project-settings` in its two runs: the settings are saved and are the file's, and the
     editor started again shows them with nothing to save.
+- For the local test clients, on 2026-10-12, each check chosen by name and run by itself.
+  No real game was started in any of them.
+  - The coordinator (`ea911bb25`), three tests of `editor-services`, run by the one who
+    wrote it and recorded here as reported, not run by the writer of this note: a run of
+    two clients waits for both to be ready and reports both exits, 1 of 1; the launcher
+    passes the number to the server and a number of its own to each of two clients, 1 of
+    1, with a test program in the game's place; and a second client that cannot be launched
+    ends the processes that were and is reported as not launched, 1 of 1. They did not
+    build at first, for two faults in the tests themselves, and were run after those were
+    put right.
+  - By the writer of this note (`bd4182fff`): the shared format's test of what a project
+    file may hold, `project-spec`, 1 of 1; the save of the settings with the number in it,
+    `editor-services`, 1 of 1; in `editor-ui`, seven tests, of the project's state, the
+    planned settings, the dialog's words, the steps of a start, the two notices and the
+    handing of the number to Play: 6 of 6 at once, and the seventh, of the notice of what
+    is left behind, failed for a fault in its own made-up run, a server said to have left
+    and not to have left at once, and passed when run again alone after that was put
+    right, 1 of 1; the other six were not run again. The application's test of what a
+    check's result says of a run's clients, 1 of 1. The application builds.
+  - The test of the handing over starts runs with the stand-in: three clients, numbered 1
+    to 3, each a process of its own; a number set while the game runs is the next run's,
+    which has two; and nought is refused by the coordinator and starts nothing.
+  - Scripted, in the built editor with its window hidden and the stand-in in the game's
+    place, three cases (`project-clients`): 3 of 3, run once.
+    - A folder is set up, 3 is chosen and saved, and a run is started and stopped: it has
+      three clients, numbered 1 to 3, three different processes, and the list of how each
+      left says status 0 for all three; the server left with 0 and the cleanup had nothing
+      to say. The project file holds 3, and its other planned settings as they were.
+    - The editor started again on that folder shows 3 as the file's with nothing to save,
+      and a run has three clients again.
+    - In another folder, set up and with 1 clicked, nothing is to be saved, a run has one
+      client, and the file still names no number.
 - The client's first try to be accepted, mended in the game (`7dd510d`, "let netcode own
   timed-out hello cleanup"), as the game's side reports it and not run by the writer of
   this note:
@@ -546,6 +611,23 @@ What that does not show:
     changes, the mark beside a key two actions share, a key being asked for, a refusal and
     so the warning colours are unseen. The pictures were taken before the words about the
     look profile were changed, and show the old ones.
+- **No real game was started with more than one client.** Everything above about several
+  clients is the coordinator with stand-ins: scripted processes in its tests, a test
+  program for the arguments, and the editor's stand-in game, which launches nothing. So it
+  is not shown that the game's server takes two to four local clients at once, that each
+  client is accepted with its number, that two to four windows open and each shows a frame,
+  that the run then counts as running, or that all of them leave when it is stopped. The
+  two real runs recorded here were of one client. A real run also needs the display awake,
+  and several windows on it.
+- **It is a setting for testing on one machine.** Nothing here makes the game playable by
+  several people: no remote server is started or reached, and nothing of accounts, zones,
+  bots or network conditions is built. A project that sets 4 gets four local windows, if
+  the game takes them.
+- **The control was not seen, and not driven in every state.** No picture was taken of the
+  Multiplayer group as it is now, at any width. No scripted case changes the number and
+  discards it, or plays with an unsaved number: those are unit tests of the project's
+  state. The notices of a run of several clients that ends badly are tests of their words
+  on made-up runs, not cases through the window.
 - **Game look after a saved profile was not seen.** The cases read the editor's state. A
   hidden window is given nothing drawn, so they do not show that the renderer takes the
   camera made anew and the other sky without complaint on screen, or that the picture is
@@ -581,7 +663,10 @@ What that does not show:
   The change for the saved profile restructures how Game look is put on and adds a field
   to every case's result. Of the cases that were there before, the five named above were
   run again after it; the other cases of the view's control (`view-`, `narrow-view`) and
-  every other case were not.
+  every other case were not. The change for the local test clients touches how a run is
+  started, how its steps and its notices are worded, and the stand-in game, and adds
+  fields to every result; none of the cases and tests of Play that were there before
+  (`play-`, `game-`, and the session's own) was run again after it.
 
 Known and left as it is:
 
@@ -597,17 +682,22 @@ Known and left as it is:
 
 Proposed next, in this order, none decided:
 
-1. A person at the machine looks at the Project settings, at the question on closing and
-   at Game look as a profile is saved under it, against the design's Dialog page; what is
-   found is mended. Pictures of the first two exist and were looked at by agents only; the
+1. A real run from the editor with two local test clients, on a project that sets 2, with
+   the display awake: that it reaches Running with both windows shown, and that Stop ends
+   the server and both clients with status 0. Until then the setting is shown with
+   stand-ins only. What the game's side must take for it is the game's to say.
+2. A person at the machine looks at the Project settings, with the Multiplayer group as it
+   is now, at the question on closing and at Game look as a profile is saved under it,
+   against the design's Dialog page; what is found is mended. Pictures of the first two
+   exist from before the local test clients and were looked at by agents only; the
    settings with changes in them and Game look after a save are in no picture yet
-   (`ARC_EDITOR_CHECK_VISIBLE=1` with `project-draft` and `project-look`).
-2. The full checks in both repositories on the tips named above: the linter, each package's
+   (`ARC_EDITOR_CHECK_VISIBLE=1` with `project-draft`, `project-look` and
+   `project-clients`).
+3. The full checks in both repositories on the tips named above: the linter, each package's
    tests, the application's unit tests among them, and the editor's whole scripted suite,
-   with hidden windows. Then the two branches are merged and the game's pins of the
-   editor's crates moved to the merged commit.
-3. The first planned setting made real: the number of clients, in the manifest, in the
-   Project settings and in the launch (1.9).
+   with hidden windows; the cases and tests of Play are the first to matter after the last
+   change. Then the two branches are merged and the game's pins of the editor's crates
+   moved to the merged commit.
 4. Parity by picture, the adapter's refused fields and published models, as the fourth note
    has them.
 
@@ -623,7 +713,7 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend` (commit `24f57260c`), which continues
+- The editor as it is on the branch `codex/play-backend` (commit `bd4182fff`), which continues
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
@@ -656,7 +746,7 @@ editor, from the request to the end of its cleanup.
 | Open Game Window in the UI (P1) | editor UI, the same branch | Built. The control reads "Starting", "Game window open" and "Stopping"; Stop is beside it and also cancels a check or a start. The status bar names the steps reached and an end the person asked for; an end nobody asked for is a notice that stays, and a process that was started and never seen to end is a second notice. Closing the editor during a run stops the game first. The editor does not redraw while a game runs; the coordinator wakes it. The game's folder is named with `--game <folder>`; without it the control says no game is set up |
 | The game reporting readiness and taking Stop | game, branch `codex/play-readiness` (pushed, not merged) | Built. Server and client, started by the editor, report their steps over a local connection and stop when told; the client says when its window was closed by the player |
 | Keys, and what a notice offers | editor UI, the same branch | Built (third progress note). F5 cooks, checks and plays in the game's window and Shift+F5 stops; a notice offers "Play again", "Open log" and "Cook and play again" |
-| The game folder as a project | editor and game, the same two branches | Built (fourth and fifth progress notes). The editor sets a folder up, converts an older manifest on request, and changes and saves its keys and its look profile, which Game look is drawn from as soon as it is saved; a manifest the game could not play with is refused by the shared format; a client the editor starts gets `--project-root` and the folder, a server does not; the client reads its keys from the manifest |
+| The game folder as a project | editor and game, the same two branches | Built (fourth and fifth progress notes). The editor sets a folder up, converts an older manifest on request, and changes and saves its keys, its look profile, which Game look is drawn from as soon as it is saved, and its number of local test clients, which Play starts with; a manifest the game could not play with is refused by the shared format; a client the editor starts gets `--project-root` and the folder, a server does not; the client reads its keys from the manifest |
 | Of the design below, not built | editor UI | The box in the 3D view saying a game window is open; "Try again" for a server that did not shut down |
 | Running the game inside the editor's view | editor and game | Not built. P2. "Preview in Editor" is in the menu, switched off, with the reason |
 | Design | Claude Design | Drawn: five boards and the PlayControl page. P0 follows them where it can; the Play menu is as wide as any menu, because the design has no token for the wider menu it draws |
@@ -826,6 +916,10 @@ beside the hash:
 These are settings of a run, not of the level: they are not saved into the level file and do
 not change its hashes. Each is a separate piece of work and none is needed for the first Play.
 
+[Since 2026-10-12 the number of clients is built, as a setting of the project in its
+Project settings and not in the Play menu, and shown with a stand-in for the game only: the
+fifth progress note. The others are not built.]
+
 ### 1.10 What the UI needs from the core
 
 Already in the contract: the two control requests with one answer each, `play_snapshot()`,
@@ -834,7 +928,9 @@ the waker, the outcome codes with exit facts and the log's path, and the receipt
 Asked for in addition. As of 2026-10-11 the core on `codex/play-backend` delivers 1, 4, 5 and
 6, and 3 for one server and one client. For 2 it holds the run's own package identity; the UI
 still makes the comparison with the open level. Bots and several clients (the rest of 3)
-belong to 1.9 and are not built.
+belong to 1.9 and are not built. [Since 2026-10-12 the core supervises one to four local
+clients, each a process with a number and a state of its own; no real game was started
+with more than one. Bots are not built. The fifth progress note.]
 
 1. The readiness steps of 1.6 as facts in the play status, each with the process it belongs
    to and absent until measured.
@@ -865,7 +961,7 @@ editor did not cook it, does the editor show the simulation data's hash instead.
 | P0, built | The Play control with its menu and foot; "Cook first"; "Checking" against the real `VerifyPackage`; the two ways to play shown as not available yet, with the reason | nothing new from the core |
 | P1, built on `codex/play-backend` and `codex/play-readiness` (both pushed, neither merged) | Open Game Window: Starting, Running, Stop, every end of 1.7, closing during a run; one key to cook, check and play and one to stop; "Open log", "Play again" and "Cook and play again" on the notices. Left for later: the box in the 3D view | merging the two branches; in the game, what a landscape's rules make |
 | P2 | Preview in Editor: the game in the 3D view, the pointer handed over and back | the game's client able to run inside the editor's window |
-| P3 | Play settings of 1.9, one at a time | per setting, see its row |
+| P3 | Play settings of 1.9, one at a time. The number of local clients is built, as a project setting, and not yet run with the real game | per setting, see its row |
 
 ### 1.12 Open, for the owner
 
