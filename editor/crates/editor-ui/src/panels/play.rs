@@ -42,13 +42,16 @@ use editor_services::{
     },
     PlayProcess, PlayRole, PlayRun, PlayStage, PlayState,
 };
+use scene_data::Diagnostic;
 
 use crate::{
     launcher::{FolderFor, Launcher},
     panels::{
         menu::{menu_item, menu_popup_end},
+        project::ProjectDialog,
         toolbar::toolbar_folds,
     },
+    project::Project,
     session::{play_blockers, Editor, PackageCheck},
     theme::{
         feathers::{BORDER, SIGNAL_ERROR, SIGNAL_PLAY, SIGNAL_WARN},
@@ -78,6 +81,9 @@ pub const NO_PREVIEW: &str = "Preview in Editor is not built yet.";
 /// project, and can be changed from an open project.
 pub const CHOOSE_GAME: &str = "Choose game folder";
 pub const CHANGE_GAME: &str = "Change game folder";
+/// The button that opens the Project settings from the menu's foot, while something of the
+/// project's own files stops the game from being started: that is where it is mended.
+pub const PROJECT_SETTINGS: &str = "Project settings";
 
 /// What of a game is not in a folder, each with where it was looked for.
 pub fn requirement_words(missing: &[GameRuntimeRequirement]) -> String {
@@ -88,6 +94,7 @@ pub fn requirement_words(missing: &[GameRuntimeRequirement]) -> String {
                 GameRuntimeRequirementKind::ServerExecutable => "its server",
                 GameRuntimeRequirementKind::ClientExecutable => "its client",
                 GameRuntimeRequirementKind::AssetsDirectory => "its assets folder",
+                GameRuntimeRequirementKind::PipCharacterModel => "its player model",
             };
             format!("{what} ({})", part.path.display())
         })
@@ -140,6 +147,50 @@ pub fn game_words(runtime: Option<&ProjectRuntimeContext>) -> String {
             format!("{}. {} {ALL_THE_SAME}", words.title, words.remedy)
         }
     }
+}
+
+/// What of a project's own files stops the game from being started with it, in words: the
+/// refusal of the check that is made before every start, as one sentence and what mends it.
+/// Never its code.
+pub fn project_words(blocker: &Diagnostic) -> String {
+    let words = wording::play_project(&blocker.code, |key| {
+        blocker.parameters.get(key).map(String::as_str)
+    })
+    .unwrap_or_else(wording::play_project_plain);
+    format!("{}. {}", words.title, words.remedy)
+}
+
+/// The same refusal as one word for a scripted check: its code, and after a colon the code
+/// of what lay behind it where the refusal names that.
+pub fn project_blocked_word(blocker: &Diagnostic) -> String {
+    match blocker.parameters.get("cause") {
+        Some(cause) => format!("{}:{cause}", blocker.code),
+        None => blocker.code.clone(),
+    }
+}
+
+/// Whether the project lets the game be started now, asked of its files afresh: the Play
+/// menu's rows and the key ask this before they start anything. When it does not, the
+/// Project settings are opened, where what is wrong is said and mended, and nothing is
+/// cooked or started. The check before the start itself is made again by the core, and
+/// that one decides.
+///
+/// Without a game, and while a game runs, the editor has something else to say first, and
+/// the project is not asked.
+pub fn project_lets_play(
+    project: &mut Project,
+    dialog: &mut ProjectDialog,
+    editor: &Editor,
+) -> bool {
+    if !editor.play_connected() || editor.active_run().is_some() {
+        return true;
+    }
+    project.check_play();
+    if project.play_blocker().is_some() {
+        dialog.open = true;
+        return false;
+    }
+    true
 }
 
 /// Where a run of the game stands, as the coordinator reports it.
@@ -197,6 +248,12 @@ pub struct PlayView {
     pub restarting: bool,
     /// How many things in the open level stop the game from running it, by the core's review.
     pub blockers: usize,
+    /// What of the project's own files stops the game from being started with it, as one
+    /// word ([`project_blocked_word`]). `None` when nothing does, and for a view that was
+    /// not told of the project ([`PlayView::with_project`]).
+    pub project_blocked: Option<String>,
+    /// The same in words ([`project_words`]). Empty when nothing does.
+    pub project_words: String,
 }
 
 /// A step a process reports while it starts, in words.
@@ -315,7 +372,30 @@ impl PlayView {
             cooking: editor.cooking_to_play(),
             restarting: editor.restarting(),
             blockers,
+            project_blocked: None,
+            project_words: String::new(),
         }
+    }
+
+    /// The same view with what the project's own files say of a start, as the project last
+    /// checked them. While something of them stops the game, neither way to play is
+    /// offered, and the menu's foot says what it is.
+    pub fn with_project(mut self, project: &Project) -> Self {
+        if let Some(blocker) = project.play_blocker() {
+            self.project_blocked = Some(project_blocked_word(blocker));
+            self.project_words = project_words(blocker);
+        }
+        self
+    }
+
+    /// Whether something of the project's own files stops the game from being started.
+    pub fn project_blocks(&self) -> bool {
+        self.project_blocked.is_some()
+    }
+
+    /// What that is, for the menu's foot. Empty when nothing does.
+    pub fn project_line(&self) -> &str {
+        &self.project_words
     }
 
     fn checking(&self) -> bool {
@@ -370,17 +450,18 @@ impl PlayView {
         self.can_check && !self.checking() && self.run == RunView::None
     }
 
-    /// Whether "Open Game Window" can be chosen: there is a game, a cooked level this editor
-    /// holds the receipt of, and nothing under way.
+    /// Whether "Open Game Window" can be chosen: there is a game, a project it can be
+    /// started with, a cooked level this editor holds the receipt of, and nothing under way.
     pub fn game_window_offered(&self) -> bool {
-        self.game && self.check_offered()
+        self.game && !self.project_blocks() && self.check_offered()
     }
 
-    /// Whether "Cook and Play" can be chosen: there is a game and nothing under way. It needs
-    /// no cooked level, it makes one; and with something in the level that the game cannot
-    /// run it is still offered, and says so when chosen.
+    /// Whether "Cook and Play" can be chosen: there is a game, a project it can be started
+    /// with, and nothing under way. It needs no cooked level, it makes one; and with
+    /// something in the level that the game cannot run it is still offered, and says so
+    /// when chosen.
     pub fn cook_and_play_offered(&self) -> bool {
-        self.game && !self.checking() && self.run == RunView::None
+        self.game && !self.project_blocks() && !self.checking() && self.run == RunView::None
     }
 
     /// Whether the button that asks for the game's folder is shown: in an editor that was
@@ -558,6 +639,10 @@ pub enum PlayPiece {
     GameFolderLine,
     ChooseGame,
     ChooseGameCaption,
+    /// What of the project's own files stops the game from being started, and the button
+    /// that opens the Project settings.
+    ProjectLine,
+    ProjectButton,
 }
 
 /// A line of the menu's foot, in the design's small text style. `mono` is for a hash.
@@ -599,6 +684,21 @@ fn foot() -> impl Scene {
                 PropagateOver<TextFont>
                 ThemeTextColor(tokens::TEXT_DIM)
                 PlayPiece::ReasonLine
+            ),
+            (foot_line(false) PlayPiece::ProjectLine Node { display: Display::None }),
+            (
+                @FeathersButton {
+                    @caption: bsn! { Text(PROJECT_SETTINGS) ThemedText },
+                }
+                PlayPiece::ProjectButton
+                Node {
+                    align_self: AlignSelf::FlexStart,
+                    margin: UiRect::top(px(spacing::SPACE_1)),
+                    display: Display::None,
+                }
+                on(|_: On<Activate>, mut dialog: ResMut<ProjectDialog>| {
+                    dialog.open = true;
+                })
             ),
             (foot_line(true) PlayPiece::GameFolderLine),
             (
@@ -674,7 +774,14 @@ pub fn play_control() -> impl Scene {
                                 menu_item(OPEN_GAME_WINDOW, "")
                                 PlayPiece::GameWindowRow
                                 InteractionDisabled
-                                on(|_: On<Activate>, mut editor: NonSendMut<Editor>| editor.play_external())
+                                on(|_: On<Activate>,
+                                    mut project: ResMut<Project>,
+                                    mut dialog: ResMut<ProjectDialog>,
+                                    mut editor: NonSendMut<Editor>| {
+                                    if project_lets_play(&mut project, &mut dialog, &editor) {
+                                        editor.play_external();
+                                    }
+                                })
                             ),
                             (
                                 menu_item(COOK_AND_PLAY, "F5")
@@ -682,8 +789,12 @@ pub fn play_control() -> impl Scene {
                                 InteractionDisabled
                                 on(|_: On<Activate>,
                                     mut tool: ResMut<Tool>,
+                                    mut project: ResMut<Project>,
+                                    mut dialog: ResMut<ProjectDialog>,
                                     mut editor: NonSendMut<Editor>| {
-                                    cook_and_play(&mut editor, &mut tool);
+                                    if project_lets_play(&mut project, &mut dialog, &editor) {
+                                        cook_and_play(&mut editor, &mut tool);
+                                    }
                                 })
                             ),
                             @FeathersMenuDivider,
@@ -746,6 +857,27 @@ pub fn cook_and_play(editor: &mut Editor, tool: &mut Tool) {
     }
 }
 
+/// Has the project check again what of its files stops the game, when the level's file was
+/// written or the level was changed: a save may have made the level the project starts
+/// with, or put one right. The project checks by itself when it is read, which is whenever
+/// its file or its look profile was changed from here; what changes on disk by another
+/// hand is found by the check before the start.
+pub(crate) fn follow_play_inputs(
+    editor: NonSend<Editor>,
+    mut project: ResMut<Project>,
+    mut seen: Local<Option<(bool, bool)>>,
+) {
+    let now = (editor.has_file(), editor.snapshot().status.dirty);
+    if *seen == Some(now) {
+        return;
+    }
+    let first = seen.is_none();
+    *seen = Some(now);
+    if !first && project.root().is_some() {
+        project.check_play();
+    }
+}
+
 /// Sets whether a row or a button can be chosen. It stays in its place either way.
 fn set_offered(commands: &mut Commands, entity: Entity, offered: bool, off: bool) {
     if !offered && !off {
@@ -764,6 +896,7 @@ fn set_offered(commands: &mut Commands, entity: Entity, offered: bool, off: bool
 pub(crate) fn show_play(
     mut commands: Commands,
     editor: NonSend<Editor>,
+    project: Res<Project>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut shown: Local<Option<(PlayView, bool)>>,
     mut pieces: Query<(
@@ -780,7 +913,7 @@ pub(crate) fn show_play(
     // In a narrow window the word shortens to its dot; Stop stays, and the status bar
     // carries the words.
     let narrow = toolbar_folds(window.width());
-    let view = PlayView::of(&editor);
+    let view = PlayView::of(&editor).with_project(&project);
     if shown.as_ref() == Some(&(view.clone(), narrow)) {
         return;
     }
@@ -863,6 +996,11 @@ pub(crate) fn show_play(
                 (None, view.choose_game_shown())
             }
             PlayPiece::ChooseGameCaption => (Some(view.choose_game_caption().to_owned()), true),
+            PlayPiece::ProjectLine => {
+                commands.entity(entity).insert(ThemeTextColor(SIGNAL_WARN));
+                (Some(view.project_line().to_owned()), view.project_blocks())
+            }
+            PlayPiece::ProjectButton => (None, view.project_blocks()),
         };
         if let (Some(words), Some(mut text)) = (words, text)
             && text.0 != words
@@ -933,7 +1071,50 @@ mod tests {
             cooking: false,
             restarting: false,
             blockers: 0,
+            project_blocked: None,
+            project_words: String::new(),
         }
+    }
+
+    #[test]
+    fn a_project_the_game_cannot_be_started_with_switches_both_ways_to_play_off_and_says_why() {
+        let ready = view(Some("6105ad50"), false, PackageCheck::NotAsked);
+        assert!(ready.game_window_offered() && ready.cook_and_play_offered());
+        assert!(!ready.project_blocks() && ready.project_line().is_empty());
+
+        let blocker = Diagnostic::new("play.project_profile_unavailable")
+            .with("profile", "assets/render/look-v1.json")
+            .with("cause", "look.missing");
+        let blocked = PlayView {
+            project_blocked: Some(project_blocked_word(&blocker)),
+            project_words: project_words(&blocker),
+            ..ready.clone()
+        };
+        assert!(!blocked.game_window_offered() && !blocked.cook_and_play_offered());
+        // The cooked level is checked all the same, and the game's folder can be changed.
+        assert!(blocked.check_offered());
+        assert_eq!(
+            blocked.project_blocked.as_deref(),
+            Some("play.project_profile_unavailable:look.missing")
+        );
+        let said = blocked.project_line();
+        assert!(said.contains("look profile") && said.contains("Project settings"));
+        assert!(said.contains("assets/render/look-v1.json"));
+        assert!(!said.contains("play.") && !said.contains("look."), "{said}");
+
+        // A refusal without a reason behind it is its own code, and one nobody has words
+        // for is still said in words.
+        let missing = Diagnostic::new("play.project_start_level_missing")
+            .with("path", "/p/levels/first-level.level.json");
+        assert_eq!(
+            project_blocked_word(&missing),
+            "play.project_start_level_missing"
+        );
+        assert!(project_words(&missing).contains("/p/levels/first-level.level.json"));
+        let unknown = Diagnostic::new("something.new");
+        assert_eq!(project_blocked_word(&unknown), "something.new");
+        assert!(!project_words(&unknown).contains("something.new"));
+        assert!(project_words(&unknown).contains("Project settings"));
     }
 
     /// A view of a run of the cooked level `6105ad50` in this state.

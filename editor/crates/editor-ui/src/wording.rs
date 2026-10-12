@@ -757,6 +757,119 @@ pub fn project<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
     }
 }
 
+/// What of a project stops the game from being started with it, in words: what the check of
+/// the project's own files finds, before a start and whenever the project, its level or its
+/// look profile changes. The game is given the project's folder and opens the project file,
+/// the level the project starts with and its look profile there, so a project in which one
+/// of them cannot be used is not played. Never the code, and never what a reader said
+/// besides it. `parameter` returns the value of a named parameter of the diagnostic.
+///
+/// `None` for a code that is not about the project's files. A refusal of the level the
+/// project starts with comes under the reader's own code, under which other files are
+/// refused too: it is known by the file it names.
+pub fn play_project<'a>(
+    code: &str,
+    parameter: impl Fn(&str) -> Option<&'a str>,
+) -> Option<Problem> {
+    const ANOTHER: &str = "Choose another profile in the Project settings, or put the file right";
+    let path = parameter("path");
+    let file = match path {
+        Some(path) => format!(" The file is {path}."),
+        None => String::new(),
+    };
+    let of_level = path.is_some_and(|path| path.ends_with(".level.json"));
+    let (title, remedy): (String, String) = match code {
+        "play.project_start_level_missing" => (
+            "The level the project starts with is not in its folder".into(),
+            format!(
+                "The game opens the project with it.{file} Save a level under that name, or \
+                 put the file back, and play again."
+            ),
+        ),
+        "play.project_manifest_unavailable" => (
+            "The folder has no project file the game can open".into(),
+            format!(
+                "The game is started with the project's folder.{file} Set the folder up as a \
+                 project in the Project settings, and play again."
+            ),
+        ),
+        "play.project_profile_unavailable" => {
+            let named = match parameter("profile") {
+                Some(profile) => format!(" The project names {profile}."),
+                None => String::new(),
+            };
+            let (what, mend) = match parameter("cause") {
+                Some("look.missing") => (
+                    "it is not in the project's folder",
+                    "Make it in the Project settings, with \"Make the default look profile\", \
+                     or choose another profile there",
+                ),
+                Some("look.read_failed" | "project.read") => ("it could not be read", ANOTHER),
+                Some("look.limit") => ("it is larger than a profile can be", ANOTHER),
+                Some("look.decode") => ("it is not a look profile this editor can read", ANOTHER),
+                Some("look.schema") => ("it is of another version than this editor reads", ANOTHER),
+                Some("look.value") => ("it holds a value that cannot be drawn", ANOTHER),
+                Some("project.outside_folder") => (
+                    "it is outside the project's folder, or a link that leads out of it",
+                    ANOTHER,
+                ),
+                _ => ("it cannot be used", ANOTHER),
+            };
+            (
+                "The project's look profile cannot be used".into(),
+                format!("The game is drawn with it, and {what}.{named} {mend}, and play again."),
+            )
+        }
+        // The level the project starts with is there and is not one the game can open.
+        "source.decode" | "schema.unsupported" => start_level_unusable(code, &file),
+        _ if of_level => start_level_unusable(code, &file),
+        // The project file itself, in the words a refusal of it has everywhere, without
+        // what the reader said.
+        _ if code.starts_with("project.") => {
+            let words = project(code, |key| parameter(key).filter(|_| key != "detail"));
+            if words.title.contains(code) || words.remedy.contains(code) {
+                (
+                    "The project's file cannot be used".into(),
+                    "The Project settings say what is wrong with it.".into(),
+                )
+            } else {
+                (words.title, words.remedy)
+            }
+        }
+        _ => return None,
+    };
+    Some(Problem { title, remedy })
+}
+
+/// The words for a level the project starts with that is there and cannot be used, by the
+/// reader's code. What a level's own check refuses is said as that, without its code.
+fn start_level_unusable(code: &str, file: &str) -> (String, String) {
+    let how = match code {
+        "source.decode"
+        | "schema.unsupported"
+        | "project.outside_folder"
+        | "project.limit"
+        | "project.read"
+        | "project.not_a_file" => level_rejection(code, ""),
+        _ => "it is not a valid level".to_owned(),
+    };
+    (
+        "The level the project starts with cannot be used".into(),
+        format!(
+            "The game opens the project with it, and {how}.{file} Save a level under that \
+             name, or put a file there that can be read, and play again."
+        ),
+    )
+}
+
+/// What is said of a project that is not played and whose refusal has no words of its own.
+pub fn play_project_plain() -> Problem {
+    Problem {
+        title: "The project cannot be played as it is".into(),
+        remedy: "The Project settings say what is wrong with it.".into(),
+    }
+}
+
 /// A refusal about the game's folder, in words: a folder that was chosen for the game and
 /// is none, or the editor's setting for it that cannot be read or kept. Never the code: a
 /// refusal this does not know is said as one about the folder. `parameter` returns the
@@ -788,9 +901,33 @@ pub fn game_folder<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) 
         "runtime.requirements_missing" => (
             "That folder does not hold the whole game",
             "A game folder has the game's server and its client as they are built \
-             (target/debug/server and target/debug/client) and its assets folder. Build \
-             the game there, or choose the folder it is built in."
+             (target/debug/server and target/debug/client) and its assets folder with the \
+             player model. Build the game there, or choose the folder it is built in."
                 .into(),
+        ),
+        "runtime.pip_model_lfs_pointer" => (
+            "The game's player model was not fetched",
+            format!(
+                "What is in its place is a pointer of Git LFS, not the model.{} Run git lfs \
+                 pull in the game's folder, then choose the folder again.",
+                file()
+            ),
+        ),
+        "runtime.pip_model_invalid" => (
+            "The game's player model is not a whole model file",
+            format!(
+                "{}{} Fetch it again (git lfs pull in the game's folder), then choose the \
+                 folder again.",
+                match parameter("reason") {
+                    Some("not_a_file") => "What is under its name is not a file.",
+                    _ => "It is cut short, or it is another kind of file.",
+                },
+                file()
+            ),
+        ),
+        "runtime.pip_model_read" => (
+            "The game's player model could not be read",
+            format!("Check that the file can be read.{}", file()),
         ),
         "runtime.preference_read"
         | "runtime.preference_decode"
@@ -989,6 +1126,154 @@ mod tests {
     }
 
     #[test]
+    fn what_of_a_project_stops_a_start_is_said_without_a_code_or_a_readers_words() {
+        const LEVEL: &str = "/p/levels/first-level.level.json";
+        const READER: &str = "expected value at line 1 column 1";
+        let of = |code: &'static str, cause: Option<&'static str>, path: Option<&'static str>| {
+            play_project(code, move |key| match key {
+                "path" => path,
+                "profile" => Some("assets/render/look-v1.json"),
+                "cause" => cause,
+                "detail" => Some(READER),
+                _ => None,
+            })
+        };
+        let plain = |words: &Problem, what: &str| {
+            // The project file's own name is no code, though it reads like the start of one.
+            let said = format!("{} {}", words.title, words.remedy).replace("arc-project.json", "");
+            for code in [
+                "play.",
+                "look.",
+                "project.",
+                "source.",
+                "schema.",
+                "hierarchy.",
+            ] {
+                assert!(!said.contains(code), "{what}: {said}");
+            }
+            assert!(!said.contains(READER), "{what}: {said}");
+            assert!(
+                !words.title.is_empty() && !words.remedy.is_empty(),
+                "{what}"
+            );
+        };
+
+        // The level is not there: the file is named, and what mends it.
+        let missing = of("play.project_start_level_missing", None, Some(LEVEL)).unwrap();
+        plain(&missing, "missing level");
+        assert!(missing.title.contains("is not in its folder"));
+        assert!(missing.remedy.contains(LEVEL) && missing.remedy.contains("Save a level"));
+
+        // The folder is no project the game can open.
+        let no_file = of(
+            "play.project_manifest_unavailable",
+            None,
+            Some("/p/arc-project.json"),
+        )
+        .unwrap();
+        plain(&no_file, "no project file");
+        assert!(no_file.remedy.contains("Set the folder up"));
+
+        // The look profile, for every reason the check gives: the profile is named, and
+        // only one that is not there is made by the button.
+        for cause in [
+            "look.missing",
+            "look.read_failed",
+            "look.limit",
+            "look.decode",
+            "look.schema",
+            "look.value",
+            "project.read",
+            "project.outside_folder",
+            "look.something_new",
+        ] {
+            let words = of("play.project_profile_unavailable", Some(cause), None).unwrap();
+            plain(&words, cause);
+            assert_eq!(words.title, "The project's look profile cannot be used");
+            assert!(
+                words.remedy.contains("assets/render/look-v1.json"),
+                "{cause}"
+            );
+            assert_eq!(
+                words.remedy.contains("Make the default look profile"),
+                cause == "look.missing",
+                "{cause}"
+            );
+            assert!(words.remedy.contains("Project settings"), "{cause}");
+        }
+        let outside = of(
+            "play.project_profile_unavailable",
+            Some("project.outside_folder"),
+            None,
+        )
+        .unwrap();
+        assert!(outside.remedy.contains("outside the project's folder"));
+
+        // A level that is there and cannot be used, under the reader's own code or under
+        // one of a level's own check: known by the file, and never said with the code.
+        for code in [
+            "source.decode",
+            "schema.unsupported",
+            "project.read",
+            "project.limit",
+            "project.not_a_file",
+            "project.outside_folder",
+            "hierarchy.cycle",
+            "terrain.invalid",
+        ] {
+            let words = of(code, None, Some(LEVEL)).unwrap();
+            plain(&words, code);
+            assert_eq!(
+                words.title,
+                "The level the project starts with cannot be used"
+            );
+            assert!(words.remedy.contains(LEVEL), "{code}");
+        }
+        assert!(of("source.decode", None, Some(LEVEL))
+            .unwrap()
+            .remedy
+            .contains("it is not a level this editor can read"));
+        assert!(of("hierarchy.cycle", None, Some(LEVEL))
+            .unwrap()
+            .remedy
+            .contains("it is not a valid level"));
+
+        // The project file itself, in the words it has everywhere, and one of an older
+        // version says to convert it.
+        let unread = of("project.decode", None, Some("/p/arc-project.json")).unwrap();
+        plain(&unread, "project file");
+        assert_eq!(unread.title, project("project.decode", none).title);
+        let older = of("project.convert_required", None, None).unwrap();
+        assert!(older.remedy.contains("Convert it in the Project settings"));
+        let unknown = of("project.something_new", None, None).unwrap();
+        plain(&unknown, "unknown");
+
+        // What is not about the project's files is not said as that.
+        assert_eq!(of("play.readiness_timeout", None, None), None);
+        assert_eq!(of("runtime.panic", None, None), None);
+        assert_eq!(of("hierarchy.cycle", None, None), None);
+    }
+
+    #[test]
+    fn a_player_model_that_is_no_model_is_said_with_what_mends_it() {
+        let model = |key: &str| (key == "path").then_some("/g/assets/characters/pip/pip.glb");
+        let pointer = game_folder("runtime.pip_model_lfs_pointer", model);
+        assert!(pointer.remedy.contains("git lfs pull"));
+        assert!(pointer.remedy.contains("/g/assets/characters/pip/pip.glb"));
+        let not_a_file = game_folder("runtime.pip_model_invalid", |key| match key {
+            "reason" => Some("not_a_file"),
+            _ => None,
+        });
+        assert!(not_a_file.remedy.contains("is not a file"));
+        let cut_short = game_folder("runtime.pip_model_invalid", |key| match key {
+            "reason" => Some("not_a_whole_glb"),
+            _ => None,
+        });
+        assert!(cut_short.remedy.contains("cut short"));
+        assert!(!cut_short.remedy.contains("not_a_whole_glb"));
+    }
+
+    #[test]
     fn every_refusal_about_the_game_folder_is_a_sentence_and_never_its_code() {
         for code in [
             "runtime.folder_missing",
@@ -997,6 +1282,9 @@ mod tests {
             "runtime.file_read",
             "runtime.outside_folder",
             "runtime.requirements_missing",
+            "runtime.pip_model_lfs_pointer",
+            "runtime.pip_model_invalid",
+            "runtime.pip_model_read",
             "runtime.preference_read",
             "runtime.preference_decode",
             "runtime.preference_limit",

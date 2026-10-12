@@ -16,6 +16,7 @@ mod process;
 mod wire;
 
 mod preflight;
+pub use preflight::check_project_play_inputs;
 
 #[cfg(test)]
 mod process_tests;

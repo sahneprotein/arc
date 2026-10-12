@@ -46,7 +46,7 @@ use crate::{
         menu::{keys_show_row_focus, mark_menu_open, menu_scrim, show_row_focus, MenuOpen},
         notice::{notice, show_notice},
         paint::{commit_layer_name, fill_layer_names, show_layers},
-        play::show_play,
+        play::{follow_play_inputs, show_play},
         project::{
             fill_project_name, fit_project_foot, hand_local_clients_to_play, press_project_key,
             project_dialog, show_project, ProjectDialog,
@@ -469,7 +469,7 @@ impl Plugin for EditorUiPlugin {
                         fold_toolbar,
                         show_tool,
                         show_duplicate,
-                        show_play,
+                        (follow_play_inputs, show_play).chain(),
                         show_view,
                         (mirror_snap, show_snap).chain(),
                     ),

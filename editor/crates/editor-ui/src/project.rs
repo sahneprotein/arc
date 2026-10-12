@@ -99,6 +99,9 @@ pub struct Project {
     saves: u64,
     /// How many look profiles were made here since the editor started.
     looks_made: u64,
+    /// What of the project's own files stops the game from being started with it, as the
+    /// last check found it ([`Project::check_play`]).
+    play_blocker: Option<Diagnostic>,
 }
 
 /// What a key is bound to, in the manifest's order.
@@ -290,6 +293,27 @@ impl Project {
             self.draft = None;
         }
         self.settle();
+        self.check_play();
+    }
+
+    /// Asks the services whether the game could be started with this project as its files
+    /// are now: the project file, the level it starts with and its look profile, which the
+    /// game opens in the project's folder. The same check is made before every start, and
+    /// that one decides; this one is what the Play menu says in the meantime. It reads
+    /// files, so it is asked for when something changed and not while drawing: when the
+    /// manifest is read, which is also after a setup, a conversion, a save of the settings
+    /// and a look profile that was made, and by whoever knows that a level was saved.
+    pub fn check_play(&mut self) {
+        self.play_blocker = match &self.root {
+            Some(root) => editor_services::play::check_project_play_inputs(root).err(),
+            None => None,
+        };
+    }
+
+    /// What stops the game from being started with this project, as the last check found
+    /// it. `None` without a project folder: such an editor has no project to answer for.
+    pub fn play_blocker(&self) -> Option<&Diagnostic> {
+        self.play_blocker.as_ref()
     }
 
     fn read_manifest(&mut self) {
@@ -887,6 +911,73 @@ mod tests {
         assert_eq!(again.state().word(), "Ready");
         assert_eq!(again.set_up("Another", false), None);
         assert_eq!(again.config().unwrap().project.name, "My Game");
+    }
+
+    #[test]
+    fn what_stops_play_is_found_when_the_project_is_read_and_goes_when_it_is_mended() {
+        let code = |project: &Project| project.play_blocker().map(|blocker| blocker.code.clone());
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("my-game");
+        std::fs::create_dir_all(&root).unwrap();
+        // Without a folder there is no project to answer for.
+        assert_eq!(code(&Project::of_folder(None)), None);
+        // A folder that is no project yet is not played; set up, it has all the game opens.
+        let mut project = Project::of_folder(Some(root.clone()));
+        assert_eq!(
+            code(&project).as_deref(),
+            Some("play.project_manifest_unavailable")
+        );
+        let level = project.set_up("My Game", false).unwrap();
+        assert_eq!(code(&project), None);
+
+        // The look profile goes. Nothing is read while nothing is said to have changed;
+        // read again, the project says so, and making the profile mends it at once.
+        let look = root.join("assets/render/look-v1.json");
+        std::fs::remove_file(&look).unwrap();
+        assert_eq!(code(&project), None);
+        project.read_again();
+        let blocker = project.play_blocker().unwrap();
+        assert_eq!(blocker.code, "play.project_profile_unavailable");
+        assert_eq!(
+            blocker.parameters.get("cause").map(String::as_str),
+            Some("look.missing")
+        );
+        assert_eq!(
+            blocker.parameters.get("profile").map(String::as_str),
+            Some("assets/render/look-v1.json")
+        );
+        assert!(project.install_look());
+        assert_eq!(code(&project), None);
+
+        // A file under the profile's name that is no profile.
+        let profile = std::fs::read(&look).unwrap();
+        std::fs::write(&look, b"not a look profile").unwrap();
+        project.check_play();
+        assert_eq!(
+            project
+                .play_blocker()
+                .and_then(|blocker| blocker.parameters.get("cause"))
+                .map(String::as_str),
+            Some("look.decode")
+        );
+        std::fs::write(&look, profile).unwrap();
+        project.check_play();
+        assert_eq!(code(&project), None);
+
+        // The level the project starts with goes, is no level, and is put back.
+        let saved = std::fs::read(&level).unwrap();
+        std::fs::remove_file(&level).unwrap();
+        project.check_play();
+        assert_eq!(
+            code(&project).as_deref(),
+            Some("play.project_start_level_missing")
+        );
+        std::fs::write(&level, b"not a level").unwrap();
+        project.check_play();
+        assert_eq!(code(&project).as_deref(), Some("source.decode"));
+        std::fs::write(&level, saved).unwrap();
+        project.check_play();
+        assert_eq!(code(&project), None);
     }
 
     #[test]

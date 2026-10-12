@@ -63,7 +63,10 @@
 //! `ARC_EDITOR_CHECK_PROJECT` names a folder that stands in the game's place for the project
 //! file; the result line says what the editor found of it (`project=`) and whether the
 //! Project settings are open (`project_dialog=`). At its end it says what the settings are
-//! as the dialog shows them (`settings_words`).
+//! as the dialog shows them (`settings_words`), and what of the project's own files stops
+//! the game from being started with it, as the Play menu has it (`play_blocked=`): `none`,
+//! or the code of the refusal, with the code of what lay behind it after a colon where the
+//! refusal names one (`play.project_profile_unavailable:look.missing`).
 //!
 //! `ARC_EDITOR_CHECK_LAUNCHER` names the file the project browser keeps its list in, and
 //! makes a scripted editor start in the browser as a person's does; without it a scripted
@@ -519,6 +522,7 @@ fn launcher_words(launcher: &editor_ui::Launcher, editor: &Editor) -> String {
                 Kind::ServerExecutable => "server",
                 Kind::ClientExecutable => "client",
                 Kind::AssetsDirectory => "assets",
+                Kind::PipCharacterModel => "model",
             })
             .collect(),
         _ => Vec::new(),
@@ -1447,7 +1451,18 @@ fn scripted(
             // Whether the window was on the desktop while the check ran.
             window_shown(),
             // The project's settings as the dialog shows them.
-            settings_words(&project),
+            format!(
+                "{} play_blocked={}",
+                settings_words(&project),
+                // What of the project's own files stops the game from being started, as
+                // the Play menu has it: the refusal's code, and after a colon the code
+                // behind it where there is one.
+                play.clone()
+                    .with_project(&project)
+                    .project_blocked
+                    .as_deref()
+                    .unwrap_or("none")
+            ),
             // How the last run of the game ended and its processes left.
             play_exit_words(&editor),
             // The project browser, and what of the game the project's folder lacks.

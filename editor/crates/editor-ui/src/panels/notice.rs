@@ -30,7 +30,10 @@ use std::path::PathBuf;
 use editor_services::{PlayCleanup, PlayEnd, PlayProcess, PlayRole, PlayStatus};
 
 use crate::{
-    panels::play::{PlayView, RunView},
+    panels::{
+        play::{PlayView, RunView},
+        project::ProjectDialog,
+    },
     session::Editor,
     theme::{
         feathers::{SIGNAL_ERROR, SIGNAL_WARN},
@@ -60,7 +63,11 @@ impl NoticeSlot {
     fn actions(self) -> &'static [NoticeAction] {
         match self {
             Self::Problem => &[NoticeAction::RetrySave],
-            Self::RunEnd => &[NoticeAction::PlayAgain, NoticeAction::OpenLog],
+            Self::RunEnd => &[
+                NoticeAction::PlayAgain,
+                NoticeAction::ProjectSettings,
+                NoticeAction::OpenLog,
+            ],
             Self::LeftBehind => &[],
             Self::MovedOn => &[NoticeAction::CookAndPlayAgain],
         }
@@ -79,6 +86,9 @@ pub enum NoticeAction {
     PlayAgain,
     /// Stop the run, cook the level as it is now, and play that.
     CookAndPlayAgain,
+    /// Open the Project settings: the game was not started for something of the project's
+    /// own files, which is mended there and not by playing again.
+    ProjectSettings,
 }
 
 impl NoticeAction {
@@ -88,6 +98,7 @@ impl NoticeAction {
             Self::OpenLog => "Open log",
             Self::PlayAgain => "Play again",
             Self::CookAndPlayAgain => "Cook and play again",
+            Self::ProjectSettings => "Project settings",
         }
     }
 
@@ -133,7 +144,12 @@ fn dismiss(activate: On<Activate>, buttons: Query<&DismissButton>, mut editor: N
     }
 }
 
-fn act(activate: On<Activate>, buttons: Query<&ActionButton>, mut editor: NonSendMut<Editor>) {
+fn act(
+    activate: On<Activate>,
+    buttons: Query<&ActionButton>,
+    mut dialog: ResMut<ProjectDialog>,
+    mut editor: NonSendMut<Editor>,
+) {
     match buttons.get(activate.entity).map(|button| button.1) {
         Ok(NoticeAction::RetrySave) => editor.retry_save(),
         Ok(NoticeAction::OpenLog) => {
@@ -143,6 +159,7 @@ fn act(activate: On<Activate>, buttons: Query<&ActionButton>, mut editor: NonSen
         }
         Ok(NoticeAction::PlayAgain) => editor.play_again(),
         Ok(NoticeAction::CookAndPlayAgain) => editor.cook_and_play_again(),
+        Ok(NoticeAction::ProjectSettings) => dialog.open = true,
         Err(_) => {}
     }
 }
@@ -342,6 +359,9 @@ pub fn run_log(status: Option<&PlayStatus>) -> Option<PathBuf> {
 /// offers the log where there is one, and to play again unless the level itself is what the
 /// game refused: the same cooked level would be refused again.
 pub fn run_end_words(end: &PlayEnd, status: Option<&PlayStatus>) -> Option<NoticeWords> {
+    if let Some(words) = project_end_words(end, status) {
+        return Some(words);
+    }
     let cause = end.cause.as_ref().map(|cause| cause.code.as_str());
     let shown = wording::play_end(&end.primary.code, cause)?;
     let mut actions = Vec::new();
@@ -354,6 +374,31 @@ pub fn run_end_words(end: &PlayEnd, status: Option<&PlayStatus>) -> Option<Notic
     Some(NoticeWords {
         title: shown.title,
         remedy: shown.remedy,
+        facts: end_facts(processes(status)),
+        actions,
+    })
+}
+
+/// The notice of a start that failed for something of the project's own files: the level
+/// the project starts with, its look profile or its project file, which the check before a
+/// start found missing or unusable. It says which and what mends it, in words, and offers
+/// the Project settings in place of playing again: the same cooked level would be refused
+/// again until the project is mended.
+fn project_end_words(end: &PlayEnd, status: Option<&PlayStatus>) -> Option<NoticeWords> {
+    if end.primary.code != "play.start_failed" {
+        return None;
+    }
+    let cause = end.cause.as_ref()?;
+    let of_project = wording::play_project(&cause.code, |key| {
+        cause.parameters.get(key).map(String::as_str)
+    })?;
+    let mut actions = vec![NoticeAction::ProjectSettings];
+    if run_log(status).is_some() {
+        actions.push(NoticeAction::OpenLog);
+    }
+    Some(NoticeWords {
+        title: "The game did not start".into(),
+        remedy: format!("{}. {}", of_project.title, of_project.remedy),
         facts: end_facts(processes(status)),
         actions,
     })
@@ -615,6 +660,71 @@ mod tests {
         ];
         assert_eq!(end_facts(&none), "exit code 2   logs/server.log");
         assert_eq!(end_facts(&[]), "");
+    }
+
+    #[test]
+    fn a_start_that_failed_for_the_project_says_what_and_offers_the_project_settings() {
+        use scene_data::Diagnostic;
+        let failed = |cause: Diagnostic| PlayEnd {
+            primary: Diagnostic::new("play.start_failed"),
+            cause: Some(cause),
+            cleanup: PlayCleanup {
+                server: None,
+                client: None,
+                clients: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+        };
+        // The look profile is not there: said in words, with what makes it, and the way on
+        // is the Project settings, not the same start once more.
+        let no_look = run_end_words(
+            &failed(
+                Diagnostic::new("play.project_profile_unavailable")
+                    .with("profile", "assets/render/look-v1.json")
+                    .with("cause", "look.missing"),
+            ),
+            None,
+        )
+        .unwrap();
+        assert_eq!(no_look.title, "The game did not start");
+        assert!(no_look.remedy.contains("look profile cannot be used"));
+        assert!(no_look.remedy.contains("Make the default look profile"));
+        assert!(!no_look.remedy.contains("play.") && !no_look.remedy.contains("look."));
+        assert_eq!(no_look.actions, [NoticeAction::ProjectSettings]);
+
+        // The level the project starts with is not there, or is there and is no level:
+        // the file is named, and what the reader said of it is not.
+        let level = "/p/levels/first-level.level.json";
+        let no_level = run_end_words(
+            &failed(Diagnostic::new("play.project_start_level_missing").with("path", level)),
+            None,
+        )
+        .unwrap();
+        assert!(no_level.remedy.contains(level) && no_level.remedy.contains("Save a level"));
+        assert_eq!(no_level.actions, [NoticeAction::ProjectSettings]);
+        let bad_level = run_end_words(
+            &failed(
+                Diagnostic::new("source.decode")
+                    .with("path", level)
+                    .with("detail", "expected value at line 1 column 1"),
+            ),
+            None,
+        )
+        .unwrap();
+        assert!(bad_level
+            .remedy
+            .contains("The level the project starts with cannot be used"));
+        assert!(!bad_level.remedy.contains("expected value"));
+        assert!(!bad_level.remedy.contains("source.decode"));
+        assert_eq!(bad_level.actions, [NoticeAction::ProjectSettings]);
+
+        // A start that failed for something else is offered again as before.
+        let slow = run_end_words(&failed(Diagnostic::new("play.readiness_timeout")), None).unwrap();
+        assert_eq!(slow.actions, [NoticeAction::PlayAgain]);
+        // And the slot holds a button for each thing it can offer.
+        assert!(NoticeSlot::RunEnd
+            .actions()
+            .contains(&NoticeAction::ProjectSettings));
     }
 
     #[test]

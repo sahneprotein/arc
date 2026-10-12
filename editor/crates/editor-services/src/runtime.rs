@@ -265,22 +265,27 @@ fn inspect_canonical_runtime(root: &Path) -> RuntimeFolderStatus {
         (
             GameRuntimeRequirementKind::ServerExecutable,
             root.join("target/debug").join(format!("server{suffix}")),
-            false,
+            RequirementType::Executable,
         ),
         (
             GameRuntimeRequirementKind::ClientExecutable,
             root.join("target/debug").join(format!("client{suffix}")),
-            false,
+            RequirementType::Executable,
         ),
         (
             GameRuntimeRequirementKind::AssetsDirectory,
             root.join("assets"),
-            true,
+            RequirementType::Directory,
+        ),
+        (
+            GameRuntimeRequirementKind::PipCharacterModel,
+            root.join("assets/characters/pip/pip_robe_lod0.glb"),
+            RequirementType::PipGlb,
         ),
     ];
     let mut missing = Vec::new();
-    let mut resolved = Vec::with_capacity(candidates.len());
-    for (kind, candidate, directory) in candidates {
+    let mut resolved = Vec::with_capacity(3);
+    for (kind, candidate, requirement_type) in candidates {
         let path = match candidate.canonicalize() {
             Ok(path) if !path.starts_with(root) => {
                 return RuntimeFolderStatus::Refused {
@@ -302,13 +307,18 @@ fn inspect_canonical_runtime(root: &Path) -> RuntimeFolderStatus {
                 };
             }
         };
-        let present = if directory {
-            path.is_dir()
-        } else {
-            is_program_file(&path)
+        let present = match requirement_type {
+            RequirementType::Directory => path.is_dir(),
+            RequirementType::Executable => is_program_file(&path),
+            RequirementType::PipGlb => match validate_pip_model(&path) {
+                Ok(()) => true,
+                Err(problem) => return RuntimeFolderStatus::Refused { problem },
+            },
         };
         if present {
-            resolved.push(path);
+            if !matches!(requirement_type, RequirementType::PipGlb) {
+                resolved.push(path);
+            }
         } else {
             missing.push(crate::project::GameRuntimeRequirement {
                 kind,
@@ -329,6 +339,47 @@ fn inspect_canonical_runtime(root: &Path) -> RuntimeFolderStatus {
             asset_root: root.to_path_buf(),
         },
     }
+}
+
+#[derive(Clone, Copy)]
+enum RequirementType {
+    Executable,
+    Directory,
+    PipGlb,
+}
+
+const LFS_POINTER_START: &[u8] = b"version https://git-lfs.github.com/spec/";
+
+/// Match the client's early model check: reject LFS pointer bytes and require a complete
+/// GLB header whose declared total length is exactly the file length.
+fn validate_pip_model(path: &Path) -> Result<(), Diagnostic> {
+    let metadata =
+        fs::metadata(path).map_err(|error| runtime_io("runtime.pip_model_read", path, error))?;
+    if !metadata.is_file() {
+        return Err(Diagnostic::new("runtime.pip_model_invalid")
+            .with("path", path.display())
+            .with("reason", "not_a_file"));
+    }
+    let mut file =
+        File::open(path).map_err(|error| runtime_io("runtime.pip_model_read", path, error))?;
+    let mut prefix = [0; 64];
+    let read = file
+        .read(&mut prefix)
+        .map_err(|error| runtime_io("runtime.pip_model_read", path, error))?;
+    if prefix[..read].starts_with(LFS_POINTER_START) {
+        return Err(Diagnostic::new("runtime.pip_model_lfs_pointer").with("path", path.display()));
+    }
+    if metadata.len() < 12
+        || read < 12
+        || &prefix[..4] != b"glTF"
+        || u32::from_le_bytes(prefix[8..12].try_into().expect("four-byte GLB length")) as u64
+            != metadata.len()
+    {
+        return Err(Diagnostic::new("runtime.pip_model_invalid")
+            .with("path", path.display())
+            .with("reason", "not_a_whole_glb"));
+    }
+    Ok(())
 }
 
 fn is_program_file(path: &Path) -> bool {
@@ -380,6 +431,14 @@ mod tests {
             }
         }
         fs::create_dir_all(root.join("assets")).unwrap();
+        let model = root.join("assets/characters/pip/pip_robe_lod0.glb");
+        fs::create_dir_all(model.parent().unwrap()).unwrap();
+        // The client's startup check verifies the GLB header and declared file length.
+        fs::write(
+            model,
+            [b"glTF".as_slice(), &[2, 0, 0, 0], &[12, 0, 0, 0]].concat(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -445,7 +504,11 @@ mod tests {
         let RuntimeFolderStatus::Incomplete { requirements } = inspection.status else {
             panic!("expected missing runtime requirements: {inspection:?}");
         };
-        assert_eq!(requirements.len(), 3);
+        assert_eq!(requirements.len(), 4);
+        assert_eq!(
+            requirements[3].kind,
+            GameRuntimeRequirementKind::PipCharacterModel
+        );
 
         #[cfg(unix)]
         {
@@ -463,7 +526,7 @@ mod tests {
             make_runtime(&runtime);
             let external_assets = folder.path().join("assets-outside");
             fs::create_dir(&external_assets).unwrap();
-            fs::remove_dir(runtime.join("assets")).unwrap();
+            fs::remove_dir_all(runtime.join("assets")).unwrap();
             symlink(&external_assets, runtime.join("assets")).unwrap();
             assert!(matches!(
                 inspect_runtime_folder(&runtime).status,
@@ -471,6 +534,79 @@ mod tests {
                     if problem.code == "runtime.outside_folder"
             ));
         }
+    }
+
+    #[test]
+    fn pip_model_is_required_and_lfs_or_incomplete_glb_bytes_refuse_the_runtime() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("runtime");
+        make_runtime(&root);
+        let root = fs::canonicalize(root).unwrap();
+        let model = root.join("assets/characters/pip/pip_robe_lod0.glb");
+        assert!(matches!(
+            inspect_runtime_folder(&root).status,
+            RuntimeFolderStatus::Ready { .. }
+        ));
+
+        fs::remove_file(&model).unwrap();
+        let RuntimeFolderStatus::Incomplete { requirements } = inspect_runtime_folder(&root).status
+        else {
+            panic!("a missing model must be a missing runtime requirement");
+        };
+        assert_eq!(requirements.len(), 1);
+        assert_eq!(
+            requirements[0].kind,
+            GameRuntimeRequirementKind::PipCharacterModel
+        );
+        assert_eq!(requirements[0].path, model);
+
+        fs::write(
+            &model,
+            b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\n",
+        )
+        .unwrap();
+        assert_eq!(
+            inspect_runtime_folder(&root).status,
+            RuntimeFolderStatus::Refused {
+                problem: Diagnostic::new("runtime.pip_model_lfs_pointer")
+                    .with("path", model.display()),
+            }
+        );
+
+        fs::write(&model, b"glTF\x02\0\0\0\x40\0\0\0short").unwrap();
+        assert_eq!(
+            inspect_runtime_folder(&root).status,
+            RuntimeFolderStatus::Refused {
+                problem: Diagnostic::new("runtime.pip_model_invalid")
+                    .with("path", model.display())
+                    .with("reason", "not_a_whole_glb"),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pip_model_symlink_cannot_escape_the_runtime_root() {
+        use std::os::unix::fs::symlink;
+
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("runtime");
+        make_runtime(&root);
+        let model = root.join("assets/characters/pip/pip_robe_lod0.glb");
+        fs::remove_file(&model).unwrap();
+        let external = folder.path().join("outside.glb");
+        fs::write(
+            &external,
+            [b"glTF".as_slice(), &[2, 0, 0, 0], &[12, 0, 0, 0]].concat(),
+        )
+        .unwrap();
+        symlink(&external, &model).unwrap();
+
+        assert!(matches!(
+            inspect_runtime_folder(&root).status,
+            RuntimeFolderStatus::Refused { ref problem }
+                if problem.code == "runtime.outside_folder"
+        ));
     }
 
     #[test]

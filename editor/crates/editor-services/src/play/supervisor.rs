@@ -59,10 +59,8 @@ pub(crate) fn run(
                                     verifier.as_ref().map_err(Clone::clone).and_then(|worker| {
                                         worker.submit(
                                             receipt,
-                                            config
-                                                .project_root
-                                                .clone()
-                                                .unwrap_or_else(|| config.asset_root.clone()),
+                                            config.project_root.clone(),
+                                            config.asset_root.clone(),
                                             cancel.clone(),
                                         )
                                     });

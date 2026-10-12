@@ -1280,6 +1280,95 @@ if wanted project-draft-close-conflict; then
     renamed_and project-draft-close-conflict W \
         || { echo "project-draft-close-conflict: FAILED, the other program's project file was written over, or was not written in time"; failed=1; }
 fi
+# What of a project's own files stops the game. The game is started with the project's
+# folder and opens there the level the project starts with and its look profile, so a project
+# in which one of them is missing or cannot be used is not played: both ways to play are off,
+# the Play menu's foot says what it is (`play_blocked=` is the refusal's code, with the code
+# behind it after a colon), and F5 cooks nothing, starts nothing and opens the Project
+# settings, where it is mended. Nothing is made or changed by looking or by the key. A
+# stand-in is in the game's place throughout, so there is a game and only the project is in
+# the way; the editor is started anew for each case, on the same folder.
+PP="$work/play-project/project"
+PP_LOOK="$PP/assets/render/look-v1.json"
+PP_LEVEL="$PP/levels/first-level.level.json"
+PP_RUN="$PLAY,wait-run=running,click-button=Stop,wait-run=none"
+NOT_STARTED='play_run=None play_end=none play_refusal=none'
+# How many files the folder's cooked levels are: F5 on a project that is not played cooks none.
+pp_cooked() { find "$work/play-project" -type f -path '*cooked*' 2>/dev/null | wc -l | tr -d ' '; }
+# A project as a setup makes it has all the game opens: it is played and stopped.
+with_game runs check play-project "click-button=Set up project,click-button=Close settings,$PP_RUN" \
+    'project=Ready' 'game=true' 'play_blocked=none' 'play_end=play\.stopped' 'problem=none'
+# Its look profile is taken away. F5 opens the Project settings; nothing is cooked or started,
+# and the profile is not made by that.
+if wanted play-project-again-nolook; then
+    cp "$PP_LOOK" "$work/play-project/look-kept.json" && rm -f "$PP_LOOK"
+    pp_before="$(pp_cooked)"
+fi
+with_game runs check play-project-again-nolook 'key=f5' \
+    'project=Ready' 'game=true' 'play_blocked=play\.project_profile_unavailable:look\.missing' \
+    'project_dialog=true' "$NOT_STARTED"
+if wanted play-project-again-nolook; then
+    [ ! -e "$PP_LOOK" ] && [ "$(pp_cooked)" = "$pp_before" ] \
+        || { echo "play-project-again-nolook: FAILED, the missing look profile was made, or a level was cooked for a project that is not played"; failed=1; }
+fi
+# Made on the person's word in the Project settings, the profile is there and the game is
+# started in the same editor: the project is asked again when the profile is made.
+with_game runs check play-project-again-look-made "choose=Level>Project settings,click-button=Make the default look profile,click-button=Close settings,$PP_RUN" \
+    'project=Ready' 'play_blocked=none' 'play_end=play\.stopped' 'problem=none'
+if wanted play-project-again-look-made; then
+    cmp -s "$PP_LOOK" "$look" \
+        || { echo "play-project-again-look-made: FAILED, the default look profile was not made"; failed=1; }
+fi
+# A file under the profile's name that is no look profile, and a link there that leads out of
+# the project's folder: each is said as what it is, and the file is left as it is.
+if wanted play-project-again-badlook; then
+    printf 'not a look profile' > "$PP_LOOK"
+fi
+with_game runs check play-project-again-badlook 'key=f5' \
+    'project=Ready' 'play_blocked=play\.project_profile_unavailable:look\.decode' \
+    'project_dialog=true' "$NOT_STARTED"
+if wanted play-project-again-badlook; then
+    [ "$(cat "$PP_LOOK")" = 'not a look profile' ] \
+        || { echo "play-project-again-badlook: FAILED, the file under the profile's name was changed"; failed=1; }
+fi
+if wanted play-project-again-outside-look; then
+    rm -f "$PP_LOOK" && ln -s "$look" "$PP_LOOK"
+fi
+with_game runs check play-project-again-outside-look 'key=f5' \
+    'project=Ready' 'play_blocked=play\.project_profile_unavailable:project\.outside_folder' \
+    'project_dialog=true' "$NOT_STARTED"
+# The profile is put back and the level the project starts with is taken away. The project
+# is opened all the same, on an unsaved map with its settings open; closed, F5 opens them
+# again, and the level's file is not made.
+if wanted play-project-again-nolevel; then
+    rm -f "$PP_LOOK" && cp "$work/play-project/look-kept.json" "$PP_LOOK"
+    cp "$PP_LEVEL" "$work/play-project/level-kept.json" && rm -f "$PP_LEVEL"
+    pp_before="$(pp_cooked)"
+fi
+with_game runs check play-project-again-nolevel 'click-button=Close settings,key=f5' \
+    'project=Ready' 'has_file=false' 'play_blocked=play\.project_start_level_missing' \
+    'project_dialog=true' "$NOT_STARTED"
+if wanted play-project-again-nolevel; then
+    [ ! -e "$PP_LEVEL" ] && [ "$(pp_cooked)" = "$pp_before" ] \
+        || { echo "play-project-again-nolevel: FAILED, the missing level was made, or a level was cooked for a project that is not played"; failed=1; }
+fi
+# A file under the level's name that is no level: said as a level that cannot be used, under
+# the reader's own refusal, and left as it is.
+if wanted play-project-again-badlevel; then
+    printf 'not a level' > "$PP_LEVEL"
+fi
+with_game runs check play-project-again-badlevel 'key=f5' \
+    'project=Ready' 'play_blocked=source\.decode' 'project_dialog=true' "$NOT_STARTED"
+if wanted play-project-again-badlevel; then
+    [ "$(cat "$PP_LEVEL")" = 'not a level' ] \
+        || { echo "play-project-again-badlevel: FAILED, the file under the level's name was changed"; failed=1; }
+fi
+# With the level put back the project is played again.
+if wanted play-project-again-mended; then
+    cp "$work/play-project/level-kept.json" "$PP_LEVEL"
+fi
+with_game runs check play-project-again-mended "$PP_RUN" \
+    'project=Ready' 'has_file=true' 'play_blocked=none' 'play_end=play\.stopped' 'problem=none'
 unset ARC_EDITOR_CHECK_PROJECT
 
 # The project browser. A person's editor starts in it; a scripted one only when the case
@@ -1391,10 +1480,14 @@ fi
 # Play menu; a folder that is refused there leaves the setting and the game as they were.
 GAME="$work/browser-new/game"
 if wanted browser-new-again-game; then
-    mkdir -p "$GAME/target/debug" "$GAME/assets"
+    mkdir -p "$GAME/target/debug" "$GAME/assets/characters/pip"
     for program in server client; do
         printf '#!/bin/sh\nexit 0\n' > "$GAME/target/debug/$program" && chmod +x "$GAME/target/debug/$program"
     done
+    # The player model a game folder must hold: the twelve bytes of a GLB file's header
+    # that says it is twelve bytes long. It is whole as far as the editor looks, and no
+    # model the game could draw.
+    printf 'glTF\002\000\000\000\014\000\000\000' > "$GAME/assets/characters/pip/pip_robe_lod0.glb"
 fi
 with_browser check browser-new-again-game-refused "pick-folder=$DOCS,click-button=Choose game folder" \
     'launcher=shown' 'game_folder=unset game_refusal=runtime\.requirements_missing' 'runtime=none' 'launcher_entered=0'
@@ -1415,7 +1508,7 @@ with_browser check browser-new-again-game-kept "key=enter,pick-folder=$DOCS,clic
     "$ENTERED" 'game=true' \
     'game_folder=ready game_refusal=runtime\.requirements_missing runtime=ready runtime_source=editor runtime_folder=[^ ]*browser-new/game' 'problem=none'
 if wanted browser-new-again-game; then
-    [ -z "$(ls -A "$GAME/assets")" ] && [ "$(ls -A "$GAME" | tr '\n' ' ')" = "assets target " ] \
+    [ "$(find "$GAME" -type f | wc -l | tr -d ' ')" = 3 ] && [ "$(ls -A "$GAME" | tr '\n' ' ')" = "assets target " ] \
         || { echo "browser-new-again-game: FAILED, something was written into the game's folder"; failed=1; }
 fi
 # The project's folder is moved away: it is still listed, as missing, and opens nothing.

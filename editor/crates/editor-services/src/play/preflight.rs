@@ -3,10 +3,12 @@ use scene_data::{CookedEmitter, Diagnostic};
 #[cfg(test)]
 use scene_data::{SimulationPayload, VisualPayload};
 use std::{path::Path, sync::atomic::AtomicBool};
-/// `project_root` owns reusable emitter files referenced by the cooked visual payload.
+/// The optional project root owns project settings and reusable emitter files referenced
+/// by the cooked visual payload. Standalone launches keep using the runtime asset root.
 pub(crate) fn verify(
     receipt: &VerifiedPackageReceipt,
-    project_root: &Path,
+    project_root: Option<&Path>,
+    standalone_content_root: &Path,
     cancel: &AtomicBool,
 ) -> Result<(), Diagnostic> {
     let (_, simulation, visual) =
@@ -17,7 +19,42 @@ pub(crate) fn verify(
     {
         return Err(problem.diagnostic);
     }
-    placed_emitters(&visual.emitters, project_root)
+    let emitter_root = project_root.unwrap_or(standalone_content_root);
+    if let Some(project_root) = project_root {
+        check_project_play_inputs(project_root)?;
+    }
+    placed_emitters(&visual.emitters, emitter_root)
+}
+
+/// Read-only project prerequisites for Play. The editor may cache this result and refresh
+/// it after project, level or profile changes; coordinator preflight calls the same checker
+/// again immediately before launching children.
+pub fn check_project_play_inputs(project_root: &Path) -> Result<(), Diagnostic> {
+    match crate::project::inspect(project_root).status {
+        crate::project::ProjectInspectionStatus::Ready { .. } => {}
+        crate::project::ProjectInspectionStatus::MissingStartLevel { start_level, .. } => {
+            return Err(Diagnostic::new("play.project_start_level_missing")
+                .with("path", start_level.display()));
+        }
+        crate::project::ProjectInspectionStatus::Refused { problem }
+        | crate::project::ProjectInspectionStatus::ConversionRequired { problem } => {
+            return Err(problem);
+        }
+        crate::project::ProjectInspectionStatus::Missing
+        | crate::project::ProjectInspectionStatus::SetupRequired { .. } => {
+            return Err(Diagnostic::new("play.project_manifest_unavailable").with(
+                "path",
+                project_root.join(crate::project::PROJECT_FILE).display(),
+            ));
+        }
+    }
+    let config = crate::project::load_project(project_root)?;
+    crate::project::look_profile(project_root, &config.rendering.profile).map_err(|problem| {
+        Diagnostic::new("play.project_profile_unavailable")
+            .with("profile", &config.rendering.profile)
+            .with("cause", &problem.code)
+    })?;
+    Ok(())
 }
 /// Every emitter the cooked level places is still the file the level was cooked with, can
 /// be read, and is one the game's particle runtime draws. The first that is not stops the
@@ -97,7 +134,8 @@ pub(crate) struct Worker {
 }
 struct Work {
     receipt: VerifiedPackageReceipt,
-    project_root: std::path::PathBuf,
+    project_root: Option<std::path::PathBuf>,
+    standalone_content_root: std::path::PathBuf,
     cancel: std::sync::Arc<AtomicBool>,
     result: std::sync::mpsc::SyncSender<Result<(), Diagnostic>>,
 }
@@ -110,7 +148,8 @@ impl Worker {
                 for work in receiver {
                     let _ = work.result.try_send(verify(
                         &work.receipt,
-                        &work.project_root,
+                        work.project_root.as_deref(),
+                        &work.standalone_content_root,
                         &work.cancel,
                     ));
                 }
@@ -121,7 +160,8 @@ impl Worker {
     pub fn submit(
         &self,
         receipt: VerifiedPackageReceipt,
-        project_root: std::path::PathBuf,
+        project_root: Option<std::path::PathBuf>,
+        standalone_content_root: std::path::PathBuf,
         cancel: std::sync::Arc<AtomicBool>,
     ) -> Result<std::sync::mpsc::Receiver<Result<(), Diagnostic>>, Diagnostic> {
         let (result, receiver) = std::sync::mpsc::sync_channel(1);
@@ -129,6 +169,7 @@ impl Worker {
             .try_send(Work {
                 receipt,
                 project_root,
+                standalone_content_root,
                 cancel,
                 result,
             })
@@ -146,6 +187,63 @@ impl Worker {
 mod tests {
     use super::*;
     use scene_data::{DerivedTerrainLayer, StableId, VisualTerrain, COOK_SCHEMA};
+
+    #[test]
+    fn project_preflight_refuses_a_missing_configured_source_level() {
+        let folder = tempfile::tempdir().unwrap();
+        let setup = crate::project::create_project(folder.path(), "Missing Level").unwrap();
+        std::fs::remove_file(&setup.start_level_path).unwrap();
+
+        let problem = check_project_play_inputs(folder.path()).unwrap_err();
+        assert_eq!(problem.code, "play.project_start_level_missing");
+        let relative_level = setup.start_level_path.strip_prefix(folder.path()).unwrap();
+        let expected_level = std::fs::canonicalize(folder.path())
+            .unwrap()
+            .join(relative_level);
+        assert_eq!(
+            problem.parameters.get("path"),
+            Some(&expected_level.display().to_string())
+        );
+    }
+
+    #[test]
+    fn project_preflight_reads_the_configured_render_profile_before_play() {
+        let folder = tempfile::tempdir().unwrap();
+        crate::project::create_project(folder.path(), "Missing Look").unwrap();
+        let profile = folder.path().join("assets/render/look-v1.json");
+        std::fs::remove_file(&profile).unwrap();
+
+        let problem = check_project_play_inputs(folder.path()).unwrap_err();
+        assert_eq!(problem.code, "play.project_profile_unavailable");
+        assert_eq!(
+            problem.parameters.get("profile").unwrap(),
+            "assets/render/look-v1.json"
+        );
+        assert_eq!(problem.parameters.get("cause").unwrap(), "look.missing");
+
+        std::fs::write(&profile, b"not a look profile").unwrap();
+        let problem = check_project_play_inputs(folder.path()).unwrap_err();
+        assert_eq!(problem.code, "play.project_profile_unavailable");
+        assert_eq!(problem.parameters.get("cause").unwrap(), "look.decode");
+    }
+
+    #[test]
+    fn coordinator_preflight_rechecks_project_inputs_after_package_verification() {
+        let folder = tempfile::tempdir().unwrap();
+        let project = folder.path().join("project");
+        let setup = crate::project::create_project(&project, "Missing Level").unwrap();
+        let scene = scene_data::starter_level(StableId::from_u128(700));
+        let cooked = editor_cook::cook(&scene).unwrap();
+        let cancel = AtomicBool::new(false);
+        let package_root = folder.path().join("packages");
+        let package_path = crate::publish_package(&package_root, &cooked, &cancel).unwrap();
+        let receipt = crate::verify_package(&package_path, None, &cancel).unwrap();
+        assert!(verify(&receipt, None, folder.path(), &cancel).is_ok());
+        std::fs::remove_file(&setup.start_level_path).unwrap();
+
+        let problem = verify(&receipt, Some(&project), folder.path(), &cancel).unwrap_err();
+        assert_eq!(problem.code, "play.project_start_level_missing");
+    }
 
     #[test]
     fn preflight_refusal_is_the_same_object_scoped_problem_as_review() {

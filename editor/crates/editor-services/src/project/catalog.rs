@@ -143,6 +143,7 @@ pub enum GameRuntimeRequirementKind {
     ServerExecutable,
     ClientExecutable,
     AssetsDirectory,
+    PipCharacterModel,
 }
 
 /// A runtime requirement which is absent or points outside the selected game folder.
@@ -371,6 +372,10 @@ fn runtime_requirements(root: &Path) -> Vec<GameRuntimeRequirement> {
         GameRuntimeRequirement {
             kind: GameRuntimeRequirementKind::AssetsDirectory,
             path: root.join("assets"),
+        },
+        GameRuntimeRequirement {
+            kind: GameRuntimeRequirementKind::PipCharacterModel,
+            path: root.join("assets/characters/pip/pip_robe_lod0.glb"),
         },
     ]
 }
@@ -849,7 +854,7 @@ mod tests {
         let GameRuntimeAvailability::Missing { requirements } = game_runtime(root) else {
             panic!("empty folder should not have a runtime");
         };
-        assert_eq!(requirements.len(), 3);
+        assert_eq!(requirements.len(), 4);
         assert_eq!(
             requirements[0].kind,
             GameRuntimeRequirementKind::ServerExecutable
@@ -864,6 +869,10 @@ mod tests {
         assert_eq!(
             requirements[2].kind,
             GameRuntimeRequirementKind::AssetsDirectory
+        );
+        assert_eq!(
+            requirements[3].kind,
+            GameRuntimeRequirementKind::PipCharacterModel
         );
 
         let target = root.join("target/debug");
@@ -889,6 +898,13 @@ mod tests {
             }
         }
         fs::create_dir_all(root.join("assets")).unwrap();
+        let model = root.join("assets/characters/pip/pip_robe_lod0.glb");
+        fs::create_dir_all(model.parent().unwrap()).unwrap();
+        fs::write(
+            model,
+            [b"glTF".as_slice(), &[2, 0, 0, 0], &[12, 0, 0, 0]].concat(),
+        )
+        .unwrap();
         assert_eq!(game_runtime(root), GameRuntimeAvailability::Ready);
     }
 
@@ -943,6 +959,13 @@ mod tests {
             }
         }
         fs::create_dir_all(root.join("assets")).unwrap();
+        let model = root.join("assets/characters/pip/pip_robe_lod0.glb");
+        fs::create_dir_all(model.parent().unwrap()).unwrap();
+        fs::write(
+            model,
+            [b"glTF".as_slice(), &[2, 0, 0, 0], &[12, 0, 0, 0]].concat(),
+        )
+        .unwrap();
     }
 
     #[test]

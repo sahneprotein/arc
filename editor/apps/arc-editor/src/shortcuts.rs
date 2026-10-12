@@ -21,7 +21,9 @@ use bevy::{
     prelude::*,
     text::EditableText,
 };
-use editor_ui::{panels::toolbar, Editor, LevelDialog, Modal, Particles, Tool};
+use editor_ui::{
+    panels::toolbar, Editor, LevelDialog, Modal, Particles, Project, ProjectDialog, Tool,
+};
 
 pub struct ShortcutsPlugin;
 
@@ -38,6 +40,7 @@ fn shortcuts(
     mut gizmo: ResMut<TransformGizmoSettings>,
     mut tool: ResMut<Tool>,
     (modal, mut levels, mut particles): (Res<Modal>, ResMut<LevelDialog>, ResMut<Particles>),
+    (mut project, mut project_dialog): (ResMut<Project>, ResMut<ProjectDialog>),
     mut editor: NonSendMut<Editor>,
 ) {
     if modal.0 {
@@ -54,7 +57,13 @@ fn shortcuts(
     if keys.just_pressed(KeyCode::F5) && !command {
         if shift {
             editor.stop_play();
-        } else {
+        } else if editor_ui::panels::play::project_lets_play(
+            &mut project,
+            &mut project_dialog,
+            &editor,
+        ) {
+            // A project the game cannot be started with has its settings opened instead,
+            // and nothing is cooked.
             editor_ui::panels::play::cook_and_play(&mut editor, &mut tool);
         }
         return;
