@@ -1,7 +1,8 @@
 # Play and Stop, and how the editor's features are grouped
 
 A proposal, 2026-10-09, brought up to date on 2026-10-10, five times on 2026-10-11 and twice
-on 2026-10-12 with what has been built since: seven progress notes. The earlier ones are left
+on 2026-10-12, the last continued on 2026-10-13, with what has been built since: seven
+progress notes. The earlier ones are left
 as records of their moment; where one says what is no longer so, a bracket says it. The fifth,
 the sixth and the seventh note have the present state, and the later one holds where they
 differ.
@@ -310,7 +311,7 @@ these up.]
 Progress, 2026-10-11, the fifth note, continued on 2026-10-12. The editor's
 `codex/play-backend` is at `30c0f7bb5` and the game's `codex/play-readiness` at `7dd510d`;
 both are pushed and merged nowhere. [The editor's branch was at `325385e54` with the
-sixth note and is at `f81213374` with the seventh.] A project's settings can now be changed in the editor,
+sixth note and is at `f81213374` with the seventh, `e68f86e2a` with its continuation.] A project's settings can now be changed in the editor,
 what is saved is a manifest the game can play with, the editor does not close over changes
 that were not saved, a look profile that is saved is what Game look is drawn from at
 once, and the number of local test clients is a setting that Play starts with. That last
@@ -943,7 +944,9 @@ Limits, which this note does not claim past:
   names its folder to the editor directly.
 - The Project settings themselves have no new words: a level that is missing and the button
   for a missing look profile were there, and a profile or level that cannot be read is
-  explained only in the Play menu and in the notice.
+  explained only in the Play menu and in the notice. [Not so for the profile, then or now:
+  the settings said of one that cannot be used that the game does not start with it. And
+  no longer so for the level: see the end of this note.]
 - No picture was taken of any of the new states and no person has seen them.
 - Not run: the whole scripted suite, the other packages' tests, the linter.
 
@@ -952,6 +955,28 @@ looked at the picture of the Project settings among the six, 1440 by 900 pixels,
 the dialog legible and centred and the planned rows of Multiplayer and Gameplay clearly
 switched off. The writer of this note did not look at that picture, and no person at the
 machine is known to have.
+
+Continued on 2026-10-13, commit `e68f86e2a` of the same branch, pushed and merged nowhere.
+Two things the above left open in what a person meets:
+
+- F5 on a project whose start level is there and is no level opened the Project settings,
+  and they said nothing of it. They now say, under the start level, that it cannot be used,
+  which file it is and what mends it, in the Play menu's words and without a code.
+- What the project kept of the check was from when it was read or a level was saved, so a
+  file that another program spoiled or put right left the Play menu saying the old thing
+  until F5 was pressed. The project is now asked again when a menu is opened or closed and
+  when the Project settings are; still never while the window is drawn, and it counts as
+  changed only when the answer is another one.
+
+Run for it by the writer of this note, through the same guard: the same four groups of
+`editor-ui` unit tests, 68 of 68; the build; and scripted with hidden windows `play-project`,
+10 of 10, two of them new (the start level written over under an open editor, then the Play
+menu opened, and the same with the Project settings opened); the 26 other cases of the
+Project settings and their two extra comparisons; and `browser-new`, 16 of 16. Chosen by
+the name part `project-`, the cases `play-project-again-*` run without the case that sets
+their folder up and fail for that alone. That the new case fails without the change was
+reasoned and not tried. The limits above stand otherwise: no real game, no picture, no
+person, no whole suite, no linter.
 
 Sources:
 
@@ -965,7 +990,7 @@ Sources:
 - The game's foundation design (`arc-game`, `docs/superpowers/specs/2026-10-03-foundation-design.md`):
   zoned shards with one server process per zone, client-predicted movement with server
   reconciliation, and a roadmap of accounts, multi-zone, art pipeline, combat and deployment.
-- The editor as it is on the branch `codex/play-backend` (commit `f81213374`), which continues
+- The editor as it is on the branch `codex/play-backend` (commit `e68f86e2a`), which continues
   `codex/play-workflow`. Pushed, not merged.
 - The game as it is on its branch `codex/cooked-level-play` (commit `df87d04`), with that
   branch's own account in `docs/cooked-package-runtime.md`, and on `codex/play-readiness`
