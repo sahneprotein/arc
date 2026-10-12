@@ -14,6 +14,7 @@ struct Preparation {
 }
 struct Owned {
     role: PlayRole,
+    client_id: Option<u8>,
     child: Box<dyn PlayChild>,
     exit: Option<PlayExit>,
     close: bool,
@@ -41,7 +42,11 @@ pub(crate) fn run(
             match requests.try_recv() {
                 Ok(request) => {
                     let (run, result) = match request.control {
-                        PlayControl::Start { mode, receipt } => match model.start(mode, receipt) {
+                        PlayControl::Start {
+                            mode,
+                            receipt,
+                            local_clients,
+                        } => match model.start(mode, receipt, local_clients) {
                             Ok(id) => {
                                 startup = Instant::now();
                                 stopping = None;
@@ -118,12 +123,16 @@ pub(crate) fn run(
                         let launch = PlayLaunch {
                             run: run.id,
                             role: PlayRole::Server,
+                            client_id: None,
+                            local_clients: run.local_clients,
                             receipt: run.receipt.clone(),
                             server_address: None,
                             config: config.clone(),
                         };
                         match backend.launch(launch) {
-                            Ok(child) => attach(&mut model, &mut children, PlayRole::Server, child),
+                            Ok(child) => {
+                                attach(&mut model, &mut children, PlayRole::Server, None, child)
+                            }
                             Err(error) => model.fail("play.start_failed", Some(error)),
                         }
                     }
@@ -137,19 +146,19 @@ pub(crate) fn run(
                     Ok(reports) => {
                         for report in reports {
                             let result = match report {
-                                PlayRuntimeEvent::Stage(stage) => {
-                                    model.stage(owned.role, stage).map(|changed| {
+                                PlayRuntimeEvent::Stage(stage) => model
+                                    .stage(owned.role, owned.client_id, stage)
+                                    .map(|changed| {
                                         if changed {
                                             shared.publish(&mut model.status);
                                         }
-                                    })
-                                }
+                                    }),
                                 PlayRuntimeEvent::Listening(address) => {
                                     if owned.role != PlayRole::Server
                                         || !address.ip().is_loopback()
                                         || address.port() == 0
                                         || !model
-                                            .process(owned.role)
+                                            .process(owned.role, owned.client_id)
                                             .stages
                                             .contains(&PlayStage::CollisionReady)
                                     {
@@ -158,11 +167,13 @@ pub(crate) fn run(
                                         model.status.run.as_ref().unwrap().state,
                                         PlayState::Stopping
                                     ) {
-                                        let previous = model.process(owned.role).listening;
+                                        let previous =
+                                            model.process(owned.role, owned.client_id).listening;
                                         if previous.is_some_and(|old| old != address) {
                                             Err(Diagnostic::new("play.listening_changed"))
                                         } else {
-                                            model.process(owned.role).listening = Some(address);
+                                            model.process(owned.role, owned.client_id).listening =
+                                                Some(address);
                                             if previous.is_none() {
                                                 shared.publish(&mut model.status);
                                             }
@@ -209,6 +220,11 @@ pub(crate) fn run(
                             if owned.close && exit.success() {
                                 model.fail("play.window_closed", None);
                             } else {
+                                let mut cause = Diagnostic::new("play.unexpected_exit")
+                                    .with("role", format!("{:?}", owned.role));
+                                if let Some(client_id) = owned.client_id {
+                                    cause = cause.with("client_id", client_id);
+                                }
                                 model.fail(
                                     if matches!(
                                         model.status.run.as_ref().unwrap().state,
@@ -218,28 +234,27 @@ pub(crate) fn run(
                                     } else {
                                         "play.crashed"
                                     },
-                                    Some(
-                                        Diagnostic::new("play.unexpected_exit")
-                                            .with("role", format!("{:?}", owned.role)),
-                                    ),
+                                    Some(cause),
                                 );
                             }
                         } else if !exit.success() && !owned.killed {
-                            diagnostics.push(
-                                Diagnostic::new(if owned.role == PlayRole::Server {
-                                    "play.server_cleanup_failed"
-                                } else {
-                                    "play.client_cleanup_failed"
-                                })
-                                .with("reason", "unclean_exit"),
-                            );
+                            let mut problem = Diagnostic::new(if owned.role == PlayRole::Server {
+                                "play.server_cleanup_failed"
+                            } else {
+                                "play.client_cleanup_failed"
+                            })
+                            .with("reason", "unclean_exit");
+                            if let Some(client_id) = owned.client_id {
+                                problem = problem.with("client_id", client_id);
+                            }
+                            diagnostics.push(problem);
 
                             model.fail(
                                 "play.crashed",
                                 Some(Diagnostic::new("play.exit_during_stop")),
                             );
                         }
-                        model.process(owned.role).exit = Some(exit.clone());
+                        model.process(owned.role, owned.client_id).exit = Some(exit.clone());
                         owned.exit = Some(exit);
                     }
                     Ok(None) => (),
@@ -253,20 +268,43 @@ pub(crate) fn run(
                 model.status.run.as_ref().unwrap().state,
                 PlayState::Stopping
             );
-            if !stopping_now
-                && !children.iter().any(|p| p.role == PlayRole::Client)
-                && let Some(address) = model.process(PlayRole::Server).listening
+            if !stopping_now && let Some(address) = model.process(PlayRole::Server, None).listening
             {
-                let launch = PlayLaunch {
-                    run: model.status.run.as_ref().unwrap().id,
-                    role: PlayRole::Client,
-                    receipt: model.status.run.as_ref().unwrap().receipt.clone(),
-                    server_address: Some(address),
-                    config: config.clone(),
-                };
-                match backend.launch(launch) {
-                    Ok(child) => attach(&mut model, &mut children, PlayRole::Client, child),
-                    Err(error) => model.fail("play.start_failed", Some(error)),
+                let run = model.status.run.as_ref().unwrap();
+                let local_clients = run.local_clients;
+                let receipt = run.receipt.clone();
+                let run_id = run.id;
+                let mut next_client_id = children
+                    .iter()
+                    .filter_map(|owned| owned.client_id)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                while next_client_id <= local_clients {
+                    let client_id = next_client_id;
+                    let launch = PlayLaunch {
+                        run: run_id,
+                        role: PlayRole::Client,
+                        client_id: Some(client_id),
+                        local_clients,
+                        receipt: receipt.clone(),
+                        server_address: Some(address),
+                        config: config.clone(),
+                    };
+                    match backend.launch(launch) {
+                        Ok(child) => attach(
+                            &mut model,
+                            &mut children,
+                            PlayRole::Client,
+                            Some(client_id),
+                            child,
+                        ),
+                        Err(error) => {
+                            model.fail("play.start_failed", Some(error));
+                            break;
+                        }
+                    }
+                    next_client_id = next_client_id.saturating_add(1);
                 }
             }
             if matches!(
@@ -296,14 +334,16 @@ pub(crate) fn run(
                     }
                     if since.elapsed() >= config.stop_timeout && !owned.killed {
                         owned.killed = true;
-                        diagnostics.push(
-                            Diagnostic::new(if owned.role == PlayRole::Server {
-                                "play.server_cleanup_failed"
-                            } else {
-                                "play.client_cleanup_failed"
-                            })
-                            .with("reason", "grace_deadline"),
-                        );
+                        let mut problem = Diagnostic::new(if owned.role == PlayRole::Server {
+                            "play.server_cleanup_failed"
+                        } else {
+                            "play.client_cleanup_failed"
+                        })
+                        .with("reason", "grace_deadline");
+                        if let Some(client_id) = owned.client_id {
+                            problem = problem.with("client_id", client_id);
+                        }
+                        diagnostics.push(problem);
                         if let Err(error) = owned.child.kill() {
                             record(&mut diagnostics, error);
                         }
@@ -314,14 +354,16 @@ pub(crate) fn run(
                     || since.elapsed() >= config.stop_timeout.saturating_add(config.reap_timeout)
                 {
                     for owned in children.iter().filter(|child| child.exit.is_none()) {
-                        diagnostics.push(
-                            Diagnostic::new(if owned.role == PlayRole::Server {
-                                "play.server_cleanup_failed"
-                            } else {
-                                "play.client_cleanup_failed"
-                            })
-                            .with("reason", "reap_deadline"),
-                        );
+                        let mut problem = Diagnostic::new(if owned.role == PlayRole::Server {
+                            "play.server_cleanup_failed"
+                        } else {
+                            "play.client_cleanup_failed"
+                        })
+                        .with("reason", "reap_deadline");
+                        if let Some(client_id) = owned.client_id {
+                            problem = problem.with("client_id", client_id);
+                        }
+                        diagnostics.push(problem);
                     }
                     let cleanup = PlayCleanup {
                         server: children
@@ -330,8 +372,21 @@ pub(crate) fn run(
                             .and_then(|p| p.exit.clone()),
                         client: children
                             .iter()
-                            .find(|p| p.role == PlayRole::Client)
+                            .find(|p| p.client_id == Some(1))
                             .and_then(|p| p.exit.clone()),
+                        clients: model
+                            .status
+                            .run
+                            .as_ref()
+                            .unwrap()
+                            .processes
+                            .iter()
+                            .filter(|process| process.role == PlayRole::Client)
+                            .map(|process| PlayClientExit {
+                                client_id: process.client_id.expect("client row has an ID"),
+                                exit: process.exit.clone(),
+                            })
+                            .collect(),
                         diagnostics: std::mem::take(&mut diagnostics),
                     };
                     if let Some((run, end)) = model.finish(cleanup) {
@@ -356,12 +411,19 @@ pub(crate) fn run(
         std::thread::sleep(Duration::from_millis(5));
     }
 }
-fn attach(model: &mut Model, children: &mut Vec<Owned>, role: PlayRole, child: Box<dyn PlayChild>) {
-    let process = model.process(role);
+fn attach(
+    model: &mut Model,
+    children: &mut Vec<Owned>,
+    role: PlayRole,
+    client_id: Option<u8>,
+    child: Box<dyn PlayChild>,
+) {
+    let process = model.process(role, client_id);
     process.pid = Some(child.pid());
     process.log_path = child.log_path();
     children.push(Owned {
         role,
+        client_id,
         child,
         exit: None,
         close: false,

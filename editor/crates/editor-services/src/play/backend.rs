@@ -13,6 +13,10 @@ pub enum PlayRuntimeEvent {
 pub struct PlayLaunch {
     pub run: RunId,
     pub role: PlayRole,
+    /// `None` for the server; `Some(1..=N)` for a local client process.
+    pub client_id: Option<u8>,
+    /// Local client count requested for this run, passed to the server as its capacity.
+    pub local_clients: u8,
     pub receipt: crate::VerifiedPackageReceipt,
     pub server_address: Option<SocketAddr>,
     pub config: PlayConfig,

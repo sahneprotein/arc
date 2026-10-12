@@ -1,5 +1,6 @@
 //! Explicit executable paths + loopback channel. Never scrape stdout for readiness.
 use super::{wire::*, *};
+use project_spec::{MAX_LOCAL_CLIENTS, MIN_LOCAL_CLIENTS};
 use scene_data::Diagnostic;
 use std::{
     ffi::OsString,
@@ -42,6 +43,17 @@ pub(crate) struct ExternalBackend {
 }
 impl PlayBackend for ExternalBackend {
     fn launch(&self, launch: PlayLaunch) -> Result<Box<dyn PlayChild>, Diagnostic> {
+        if !(MIN_LOCAL_CLIENTS..=MAX_LOCAL_CLIENTS).contains(&launch.local_clients)
+            || (launch.role == PlayRole::Server && launch.client_id.is_some())
+            || (launch.role == PlayRole::Client
+                && !launch
+                    .client_id
+                    .is_some_and(|client_id| (1..=launch.local_clients).contains(&client_id)))
+        {
+            return Err(
+                Diagnostic::new("play.local_clients_invalid").with("clients", launch.local_clients)
+            );
+        }
         for executable in [&launch.config.server, &launch.config.client] {
             if !executable.is_absolute() || !executable.is_file() {
                 return Err(Diagnostic::new("play.executable_missing")
@@ -96,7 +108,7 @@ impl PlayBackend for ExternalBackend {
             cmd.arg("--bind")
                 .arg(bind.to_string())
                 .arg("--max-clients")
-                .arg("1")
+                .arg(launch.local_clients.to_string())
                 .arg("--metrics-addr")
                 .arg("127.0.0.1:0")
                 .arg("--allow-dev-key");
@@ -110,7 +122,12 @@ impl PlayBackend for ExternalBackend {
             cmd.arg("--server")
                 .arg(server.to_string())
                 .arg("--client-id")
-                .arg(launch.run.0.to_string());
+                .arg(
+                    launch
+                        .client_id
+                        .expect("client ID checked above")
+                        .to_string(),
+                );
         }
         // After everything a child always got, so that those arguments are as they were.
         cmd.args(project_arguments(&launch.config, launch.role));

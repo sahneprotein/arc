@@ -46,6 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             control: PlayControl::Start {
                 mode: PlayMode::ExternalGame,
                 receipt,
+                local_clients: 1,
             },
         })
         .map_err(|e| format!("start: {e:?}"))?;

@@ -1,4 +1,5 @@
 use super::*;
+use project_spec::{MAX_LOCAL_CLIENTS, MIN_LOCAL_CLIENTS};
 use scene_data::Diagnostic;
 use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
@@ -26,12 +27,18 @@ impl Model {
         &mut self,
         mode: PlayMode,
         receipt: crate::VerifiedPackageReceipt,
+        local_clients: u8,
     ) -> Result<RunId, Diagnostic> {
         if self.active() {
             return Err(Diagnostic::new("play.already_active"));
         }
         if mode != PlayMode::ExternalGame {
             return Err(Diagnostic::new("play.mode_unsupported"));
+        }
+        if !(MIN_LOCAL_CLIENTS..=MAX_LOCAL_CLIENTS).contains(&local_clients) {
+            return Err(
+                Diagnostic::new("play.local_clients_invalid").with("clients", local_clients)
+            );
         }
         let id = RunId(NEXT_RUN.fetch_add(1, Ordering::Relaxed));
         self.primary = None;
@@ -41,17 +48,27 @@ impl Model {
             mode,
             identity: receipt.identity().clone(),
             receipt,
+            local_clients,
             state: PlayState::Starting,
-            processes: [PlayRole::Server, PlayRole::Client]
-                .map(|role| PlayProcess {
-                    role,
-                    pid: None,
-                    stages: vec![],
-                    listening: None,
-                    log_path: None,
-                    exit: None,
-                })
-                .into(),
+            processes: std::iter::once(PlayProcess {
+                role: PlayRole::Server,
+                client_id: None,
+                pid: None,
+                stages: vec![],
+                listening: None,
+                log_path: None,
+                exit: None,
+            })
+            .chain((1..=local_clients).map(|client_id| PlayProcess {
+                role: PlayRole::Client,
+                client_id: Some(client_id),
+                pid: None,
+                stages: vec![],
+                listening: None,
+                log_path: None,
+                exit: None,
+            }))
+            .collect(),
         });
         Ok(id)
     }
@@ -71,20 +88,36 @@ impl Model {
         run.state = PlayState::Stopping;
         Ok(())
     }
-    pub fn process(&mut self, role: PlayRole) -> &mut PlayProcess {
+    pub fn process(&mut self, role: PlayRole, client_id: Option<u8>) -> &mut PlayProcess {
         self.status
             .run
             .as_mut()
             .unwrap()
             .processes
             .iter_mut()
-            .find(|p| p.role == role)
+            .find(|p| p.role == role && p.client_id == client_id)
             .unwrap()
     }
-    pub fn stage(&mut self, role: PlayRole, stage: PlayStage) -> Result<bool, Diagnostic> {
+    pub fn stage(
+        &mut self,
+        role: PlayRole,
+        client_id: Option<u8>,
+        stage: PlayStage,
+    ) -> Result<bool, Diagnostic> {
         if !self.active() || matches!(self.status.run.as_ref().unwrap().state, PlayState::Stopping)
         {
             return Ok(false);
+        }
+        let known_process = self
+            .status
+            .run
+            .as_ref()
+            .unwrap()
+            .processes
+            .iter()
+            .any(|process| process.role == role && process.client_id == client_id);
+        if !known_process {
+            return Err(Diagnostic::new("play.process_unknown"));
         }
         let expected: &[PlayStage] = match role {
             PlayRole::Server => &[PlayStage::PackageVerified, PlayStage::CollisionReady],
@@ -105,7 +138,7 @@ impl Model {
                 return Err(Diagnostic::new("play.server_not_ready"));
             }
         }
-        let process = self.process(role);
+        let process = self.process(role, client_id);
         if process.stages.contains(&stage) {
             return Ok(false);
         }
@@ -115,7 +148,14 @@ impl Model {
         process.stages.push(stage);
         if role == PlayRole::Client && stage == PlayStage::FirstControllableFrame {
             let run = self.status.run.as_mut().unwrap();
-            run.state = PlayState::Running;
+            let all_clients_ready = run
+                .processes
+                .iter()
+                .filter(|p| p.role == PlayRole::Client)
+                .all(|p| p.stages.contains(&PlayStage::FirstControllableFrame));
+            if all_clients_ready {
+                run.state = PlayState::Running;
+            }
         }
         Ok(true)
     }
@@ -163,18 +203,18 @@ mod tests {
     fn readiness_is_measured_and_first_frame_requires_all_stages() {
         let (_root, receipt) = receipt();
         let mut model = Model::new();
-        model.start(PlayMode::ExternalGame, receipt).unwrap();
+        model.start(PlayMode::ExternalGame, receipt, 2).unwrap();
         assert!(model
-            .stage(PlayRole::Client, PlayStage::FirstControllableFrame)
+            .stage(PlayRole::Client, Some(1), PlayStage::FirstControllableFrame)
             .is_err());
         assert_eq!(
             model.status.run.as_ref().unwrap().state,
             PlayState::Starting
         );
         for stage in [PlayStage::PackageVerified, PlayStage::CollisionReady] {
-            model.stage(PlayRole::Server, stage).unwrap();
+            model.stage(PlayRole::Server, None, stage).unwrap();
         }
-        model.process(PlayRole::Server).listening = Some("127.0.0.1:7777".parse().unwrap());
+        model.process(PlayRole::Server, None).listening = Some("127.0.0.1:7777".parse().unwrap());
         for stage in [
             PlayStage::PackageVerified,
             PlayStage::CollisionReady,
@@ -183,24 +223,66 @@ mod tests {
             PlayStage::LevelDrawn,
             PlayStage::FirstControllableFrame,
         ] {
-            model.stage(PlayRole::Client, stage).unwrap();
+            model.stage(PlayRole::Client, Some(1), stage).unwrap();
+        }
+        assert_eq!(
+            model.status.run.as_ref().unwrap().state,
+            PlayState::Starting
+        );
+        for stage in [
+            PlayStage::PackageVerified,
+            PlayStage::CollisionReady,
+            PlayStage::HandshakeAccepted,
+            PlayStage::Simulating,
+            PlayStage::LevelDrawn,
+            PlayStage::FirstControllableFrame,
+        ] {
+            model.stage(PlayRole::Client, Some(2), stage).unwrap();
         }
         assert_eq!(model.status.run.as_ref().unwrap().state, PlayState::Running);
+    }
+
+    #[test]
+    fn client_count_is_explicit_bounded_and_expanded_into_processes() {
+        let (_root, receipt) = receipt();
+        for count in [0, 5] {
+            assert_eq!(
+                Model::new()
+                    .start(PlayMode::ExternalGame, receipt.clone(), count)
+                    .unwrap_err()
+                    .code,
+                "play.local_clients_invalid"
+            );
+        }
+        let mut model = Model::new();
+        model.start(PlayMode::ExternalGame, receipt, 4).unwrap();
+        let processes = &model.status.run.as_ref().unwrap().processes;
+        assert_eq!(model.status.run.as_ref().unwrap().local_clients, 4);
+        assert_eq!(processes.len(), 5);
+        assert_eq!(processes[0].role, PlayRole::Server);
+        assert_eq!(processes[0].client_id, None);
+        assert_eq!(
+            processes[1..]
+                .iter()
+                .map(|process| process.client_id.unwrap())
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
     }
     #[test]
     fn stop_start_and_stale_run_are_fenced_and_terminal_is_once() {
         let (_root, receipt) = receipt();
         let mut m = Model::new();
-        let id = m.start(PlayMode::ExternalGame, receipt.clone()).unwrap();
+        let id = m.start(PlayMode::ExternalGame, receipt.clone(), 1).unwrap();
         assert_eq!(
-            m.start(PlayMode::ExternalGame, receipt.clone())
+            m.start(PlayMode::ExternalGame, receipt.clone(), 1)
                 .unwrap_err()
                 .code,
             "play.already_active"
         );
         m.stop(id).unwrap();
         assert_eq!(
-            m.start(PlayMode::ExternalGame, receipt.clone())
+            m.start(PlayMode::ExternalGame, receipt.clone(), 1)
                 .unwrap_err()
                 .code,
             "play.already_active"
@@ -208,7 +290,7 @@ mod tests {
         let (_, end) = m.finish(PlayCleanup::default()).unwrap();
         assert_eq!(end.primary.code, "play.stopped");
         assert!(m.finish(PlayCleanup::default()).is_none());
-        let next = m.start(PlayMode::ExternalGame, receipt).unwrap();
+        let next = m.start(PlayMode::ExternalGame, receipt, 1).unwrap();
         assert_ne!(id, next);
         assert_eq!(m.stop(id).unwrap_err().code, "play.stale_run");
         assert_eq!(m.status.run.as_ref().unwrap().state, PlayState::Starting);
@@ -217,7 +299,7 @@ mod tests {
     fn cleanup_failure_preserves_crash_and_exit_facts() {
         let (_root, receipt) = receipt();
         let mut m = Model::new();
-        m.start(PlayMode::ExternalGame, receipt).unwrap();
+        m.start(PlayMode::ExternalGame, receipt, 1).unwrap();
         m.fail("play.crashed", Some(Diagnostic::new("runtime.panic")));
         let cleanup = PlayCleanup {
             server: Some(PlayExit {
@@ -226,6 +308,10 @@ mod tests {
                 forced: true,
             }),
             client: None,
+            clients: vec![PlayClientExit {
+                client_id: 1,
+                exit: None,
+            }],
             diagnostics: vec![Diagnostic::new("play.server_cleanup_failed")],
         };
         let (_, end) = m.finish(cleanup.clone()).unwrap();

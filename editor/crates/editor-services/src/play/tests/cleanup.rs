@@ -41,6 +41,7 @@ fn failed_kill_and_unreaped_server_end_at_the_cleanup_deadline() {
             control: PlayControl::Start {
                 mode: PlayMode::ExternalGame,
                 receipt,
+                local_clients: 1,
             },
         })
         .unwrap();
@@ -102,6 +103,7 @@ fn unexpected_exit_before_readiness_is_a_start_failure() {
             control: PlayControl::Start {
                 mode: PlayMode::ExternalGame,
                 receipt,
+                local_clients: 1,
             },
         })
         .unwrap();

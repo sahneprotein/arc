@@ -26,6 +26,9 @@ pub enum PlayControl {
     Start {
         mode: PlayMode,
         receipt: VerifiedPackageReceipt,
+        /// Number of local test client processes. The caller resolves the project setting
+        /// (`None` means one); the coordinator accepts only 1 through 4.
+        local_clients: u8,
     },
     Stop {
         run: RunId,
@@ -71,6 +74,8 @@ impl PlayExit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlayProcess {
     pub role: PlayRole,
+    /// `None` for the server; 1 through N for local client processes.
+    pub client_id: Option<u8>,
     pub pid: Option<u32>,
     pub stages: Vec<PlayStage>,
     pub listening: Option<std::net::SocketAddr>,
@@ -80,9 +85,18 @@ pub struct PlayProcess {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PlayCleanup {
     pub server: Option<PlayExit>,
+    /// Compatibility view of local client 1. Use `clients` for all client outcomes.
     pub client: Option<PlayExit>,
+    /// Every local client, in ascending client ID order, including a missing exit when it
+    /// could not be reaped before the cleanup deadline.
+    pub clients: Vec<PlayClientExit>,
     /// Includes play.server_cleanup_failed without replacing the primary outcome.
     pub diagnostics: Vec<Diagnostic>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayClientExit {
+    pub client_id: u8,
+    pub exit: Option<PlayExit>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlayEnd {
@@ -107,6 +121,8 @@ pub struct PlayRun {
     pub mode: PlayMode,
     pub receipt: VerifiedPackageReceipt,
     pub identity: PackageIdentity,
+    /// Number of local client processes requested for this run.
+    pub local_clients: u8,
     pub state: PlayState,
     pub processes: Vec<PlayProcess>,
 }

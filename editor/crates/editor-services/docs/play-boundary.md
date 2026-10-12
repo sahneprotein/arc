@@ -106,7 +106,11 @@ let mut play = PlayHandle::start(config)?;
 play.set_waker(Box::new(move || wake_event_loop()));
 play.submit(PlayRequest {
     id: request_id,
-    control: PlayControl::Start { mode: PlayMode::ExternalGame, receipt },
+    control: PlayControl::Start {
+        mode: PlayMode::ExternalGame,
+        receipt,
+        local_clients: 1, // caller resolves planned.multiplayer.clients.unwrap_or(1)
+    },
 })?;
 for event in play.poll(32) { /* PlayEvent::Answer or PlayEvent::Ended */ }
 let status: std::sync::Arc<PlayStatus> = play.snapshot();
@@ -117,6 +121,12 @@ play.submit(PlayRequest { id: stop_id, control: PlayControl::Stop { run } })?;
 acknowledges admission, not readiness. Queue rejection (`play.queue_full` or
 `play.coordinator_closed`) means the request was not accepted. Each accepted
 control has one answer; each admitted run has a separate terminal event.
+`local_clients` is explicit and must be in `1..=4`; the caller resolves an unset
+project value to one. The server receives `--max-clients N`, and the coordinator
+starts client IDs `1..=N`. `PlayRun.local_clients` and its process rows expose the
+requested count and each process identity; Running waits for the first
+controllable frame from every client. End cleanup reports every client exit by
+ID, including a missing exit when a child could not be reaped by the deadline.
 `PlayHandle::with_backend(config, Arc<dyn PlayBackend>)` supports scripted UI and
 coordinator checks without game binaries. Injected backends still pass the common
 receipt revalidation/capability check. `PlayChild::poll/stop/kill/try_wait` must be

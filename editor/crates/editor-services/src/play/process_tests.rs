@@ -32,6 +32,8 @@ while [ "$#" -gt 0 ]; do
     --cooked-package) export PLAY_FIXTURE_PACKAGE="$2" ;;
     --cooked-package-hash) export PLAY_FIXTURE_HASH="$2" ;;
     --bind) export PLAY_FIXTURE_BIND="$2" ;;
+    --max-clients) export PLAY_FIXTURE_MAX_CLIENTS="$2" ;;
+    --client-id) export PLAY_FIXTURE_CLIENT_ID="$2" ;;
     --allow-dev-key) shift; continue ;;
   esac
   shift 2
@@ -83,6 +85,7 @@ fn real_adapter_cook_to_running_to_stop_reaps_both_children() {
             control: PlayControl::Start {
                 mode: PlayMode::ExternalGame,
                 receipt,
+                local_clients: 1,
             },
         })
         .unwrap();
@@ -120,6 +123,74 @@ fn real_adapter_cook_to_running_to_stop_reaps_both_children() {
     assert!(end.cleanup.diagnostics.is_empty(), "{end:?}");
     assert!(end.cleanup.server.as_ref().unwrap().success());
     assert!(end.cleanup.client.as_ref().unwrap().success());
+    assert_eq!(end.cleanup.clients.len(), 1);
+    assert!(end.cleanup.clients[0].exit.as_ref().unwrap().success());
+}
+
+#[test]
+fn real_adapter_passes_capacity_and_unique_ids_for_two_local_clients() {
+    let (_root, receipt, config) = fixture("multi");
+    let mut handle = PlayHandle::start(config.clone()).unwrap();
+    handle
+        .submit(PlayRequest {
+            id: 1,
+            control: PlayControl::Start {
+                mode: PlayMode::ExternalGame,
+                receipt,
+                local_clients: 2,
+            },
+        })
+        .unwrap();
+    wait(&mut handle, |status| {
+        status
+            .run
+            .as_ref()
+            .is_some_and(|run| run.state == PlayState::Running)
+    });
+
+    let run = handle.snapshot().run.clone().unwrap();
+    assert_eq!(run.local_clients, 2);
+    assert_eq!(run.processes.len(), 3);
+    assert_eq!(run.processes[0].role, PlayRole::Server);
+    assert_eq!(run.processes[0].client_id, None);
+    for client_id in 1..=2 {
+        let process = run
+            .processes
+            .iter()
+            .find(|process| process.client_id == Some(client_id))
+            .unwrap();
+        assert!(process.stages.contains(&PlayStage::FirstControllableFrame));
+        assert!(config
+            .asset_root
+            .join(format!("play-client-id-{client_id}"))
+            .is_file());
+    }
+    let run_id = run.id;
+    handle
+        .submit(PlayRequest {
+            id: 2,
+            control: PlayControl::Stop { run: run_id },
+        })
+        .unwrap();
+    wait(&mut handle, ended);
+    let run = handle.snapshot().run.clone().unwrap();
+    let PlayState::Ended(end) = &run.state else {
+        panic!()
+    };
+    assert!(end.cleanup.server.as_ref().unwrap().success());
+    assert_eq!(end.cleanup.clients.len(), 2);
+    assert_eq!(
+        end.cleanup
+            .clients
+            .iter()
+            .map(|client| (client.client_id, client.exit.as_ref().unwrap().success()))
+            .collect::<Vec<_>>(),
+        [(1, true), (2, true)]
+    );
+    assert!(run
+        .processes
+        .iter()
+        .all(|process| { process.exit.as_ref().is_some_and(PlayExit::success) }));
 }
 #[test]
 fn real_adapter_distinguishes_expected_close_crash_and_protocol_failure() {
@@ -136,6 +207,7 @@ fn real_adapter_distinguishes_expected_close_crash_and_protocol_failure() {
                 control: PlayControl::Start {
                     mode: PlayMode::ExternalGame,
                     receipt,
+                    local_clients: 1,
                 },
             })
             .unwrap();
@@ -167,6 +239,18 @@ fn runtime_child_fixture() {
         Role::Client
     };
     let mode = env("PLAY_FIXTURE_MODE");
+    if mode == "multi" {
+        match role {
+            Role::Server => assert_eq!(env("PLAY_FIXTURE_MAX_CLIENTS"), "2"),
+            Role::Client => {
+                let client_id: u8 = env("PLAY_FIXTURE_CLIENT_ID").parse().unwrap();
+                assert!((1..=2).contains(&client_id));
+                let marker = Path::new(&std::env::var("BEVY_ASSET_ROOT").unwrap())
+                    .join(format!("play-client-id-{client_id}"));
+                std::fs::write(marker, b"launched").unwrap();
+            }
+        }
+    }
     let path = env("PLAY_FIXTURE_PACKAGE");
     let receipt = crate::verify_package(Path::new(&path), None, &AtomicBool::new(false)).unwrap();
     let hash = env("PLAY_FIXTURE_HASH");
