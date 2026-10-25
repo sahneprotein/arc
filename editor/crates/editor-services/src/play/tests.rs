@@ -31,6 +31,7 @@ struct FakeChild {
     stubborn: bool,
     withhold_first_frame: Option<Arc<AtomicBool>>,
     unexpected_exit: Option<PlayExit>,
+    allow_exit: Option<Arc<AtomicBool>>,
 }
 impl PlayChild for FakeChild {
     fn pid(&self) -> u32 {
@@ -65,7 +66,12 @@ impl PlayChild for FakeChild {
         Ok(())
     }
     fn try_wait(&mut self) -> Result<Option<PlayExit>, Diagnostic> {
-        if self.unexpected_exit.is_some() {
+        if self.unexpected_exit.is_some()
+            && self
+                .allow_exit
+                .as_ref()
+                .is_none_or(|ready| ready.load(Ordering::SeqCst))
+        {
             return Ok(self.unexpected_exit.take());
         }
         Ok(
@@ -118,6 +124,7 @@ fn server(stubborn: bool) -> FakeChild {
         stubborn,
         withhold_first_frame: None,
         unexpected_exit: None,
+        allow_exit: None,
     }
 }
 fn client() -> FakeChild {
@@ -138,6 +145,7 @@ fn client() -> FakeChild {
         stubborn: false,
         withhold_first_frame: None,
         unexpected_exit: None,
+        allow_exit: None,
     }
 }
 fn gated_client(ready: Arc<AtomicBool>) -> FakeChild {
@@ -343,8 +351,16 @@ fn coordinator_runs_two_local_clients_gates_all_readiness_and_reports_every_exit
 #[test]
 fn a_failed_local_client_stops_and_reports_the_server_and_every_client() {
     let (_root, receipt, config) = fixture();
+    // Exercise a crash during play, after every client has reported readiness.
+    // An exited_client has no readiness reports and instead exercises startup failure.
+    let allow_exit = Arc::new(AtomicBool::new(false));
+    let failing_client = FakeChild {
+        unexpected_exit: exited_client(17).unexpected_exit,
+        allow_exit: Some(allow_exit.clone()),
+        ..client()
+    };
     let backend = Arc::new(FakeBackend {
-        children: Mutex::new(VecDeque::from([server(false), client(), exited_client(17)])),
+        children: Mutex::new(VecDeque::from([server(false), client(), failing_client])),
         ..Default::default()
     });
     let mut handle = PlayHandle::with_backend(config, backend).unwrap();
@@ -358,6 +374,13 @@ fn a_failed_local_client_stops_and_reports_the_server_and_every_client() {
             },
         })
         .unwrap();
+    wait(&mut handle, |status| {
+        status
+            .run
+            .as_ref()
+            .is_some_and(|run| run.state == PlayState::Running)
+    });
+    allow_exit.store(true, Ordering::SeqCst);
     wait(&mut handle, |status| {
         status
             .run
