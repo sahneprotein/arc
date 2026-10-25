@@ -10,7 +10,7 @@
 //! What needs the person's word first is shown in the list's place, with what will be done
 //! and the button that does it: a new project, with its name and the folder it will be made
 //! as, which is said again whenever the name changes; a folder that was opened and is to be
-//! set up; and a project file that is to be converted.
+//! set up.
 //!
 //! Under the list the browser says where the game is that plays every project, or that
 //! none is set, with the button that chooses its folder. A project is content and can be
@@ -44,7 +44,7 @@ use crate::{
     panels::{
         inspector::group_title,
         play::{requirement_words, CHANGE_GAME, CHOOSE_GAME},
-        project::{rejected_words, set_up_caption, warning, CONVERT_HINT, SETUP_HINT},
+        project::{rejected_words, set_up_caption, warning, SETUP_HINT},
     },
     particles::Particles,
     project::Project,
@@ -83,7 +83,7 @@ pub const NO_PROJECTS: (&str, &str) = (
 pub const NEW_TITLE: &str = "New project";
 pub const NEW_HINT: &str = "The project gets a folder of its own, named after it, inside \
     the folder you chose; nothing else is put into that folder, and nothing in it is \
-    changed. In the project's folder are made: arc-project.json, a first level (a small \
+    changed. In the project's folder are made: project.aproj, a first level (a small \
     arena for two teams) and the look profile the game is drawn with. The game itself is \
     not part of a project.";
 pub const CREATE: &str = "Create project";
@@ -106,7 +106,6 @@ pub const FORGET_ROW: &str = "Remove from list";
 /// What a new project's field is called, and what leaves a setup or a conversion.
 pub const PROJECT_NAME: &str = "Project name";
 pub const BACK: &str = "Back to projects";
-pub const CONVERT: &str = "Convert and open";
 
 /// What a row says of its folder besides its path, and whether it is said as a warning: a
 /// project that is ready says nothing.
@@ -127,11 +126,7 @@ pub fn row_words(status: &ProjectInspectionStatus) -> Option<(String, bool)> {
             ))
         }
         ProjectInspectionStatus::SetupRequired { .. } => Some((
-            "Not a project any more: opening it offers to set the folder up.".into(),
-            false,
-        )),
-        ProjectInspectionStatus::ConversionRequired { .. } => Some((
-            "Its project file is of an older version: opening it offers to convert it.".into(),
+            "Not a project yet: opening it offers to set the folder up.".into(),
             false,
         )),
         ProjectInspectionStatus::Missing => Some(("The folder is not there.".into(), true)),
@@ -701,40 +696,6 @@ fn pending_rows(pending: &Pending) -> Vec<Box<dyn SceneList>> {
                 ),
             ]));
         }
-        Pending::Convert { detail, .. } => {
-            let detail = if detail.is_empty() {
-                String::new()
-            } else {
-                format!("What the reader said: {detail}.")
-            };
-            rows.push(Box::new(bsn_list![
-                label("This project file is of an older version"),
-                path_line(folder),
-                label_dim(CONVERT_HINT),
-                label_dim(detail),
-                (
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        justify_content: JustifyContent::End,
-                        column_gap: px(spacing::SPACE_4),
-                        flex_shrink: 0.0,
-                    }
-                    Children [
-                        back_button(),
-                        (
-                            @FeathersButton {
-                                @caption: bsn! { Text(CONVERT) ThemedText },
-                                @variant: ButtonVariant::Primary,
-                            }
-                            Node { flex_shrink: 0.0 }
-                            on(|_: On<Activate>, mut launcher: ResMut<Launcher>| {
-                                launcher.convert();
-                            })
-                        ),
-                    ]
-                ),
-            ]));
-        }
     }
     rows
 }
@@ -1077,11 +1038,6 @@ mod tests {
         assert!(warned, "{words}");
         assert!(words.contains("first.level.json") && words.contains("not in the folder"));
         assert!(words.contains("unsaved map") && words.contains("Project settings"));
-        let older = ProjectInspectionStatus::ConversionRequired {
-            problem: Diagnostic::new("project.convert_required"),
-        };
-        let (words, warned) = row_words(&older).unwrap();
-        assert!(!warned && words.contains("older version") && words.contains("convert"));
         let refused = ProjectInspectionStatus::Refused {
             problem: Diagnostic::new("project.schema_unsupported"),
         };
@@ -1124,7 +1080,7 @@ mod tests {
     fn a_new_project_says_what_is_made_and_where_before_it_is_made() {
         assert!(NEW_HINT.contains("a folder of its own, named after it"));
         assert!(NEW_HINT.contains("nothing in it is changed"));
-        assert!(NEW_HINT.contains("arc-project.json"));
+        assert!(NEW_HINT.contains("project.aproj"));
         assert!(NEW_HINT.contains("a first level") && NEW_HINT.contains("look profile"));
         assert!(NEW_HINT.contains("The game itself is not part of a project"));
         let (words, warns) = new_folder_words(&Ok(PathBuf::from("/docs/Harbour Duel")));

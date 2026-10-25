@@ -473,18 +473,9 @@ mod project_argument_tests {
         let named = config(folder.path(), true);
         assert_eq!(arguments(&named, PlayRole::Client), [] as [&str; 0]);
 
-        // A manifest of an older version, which waits to be converted, and one of a newer.
+        // An unsupported schema is not passed to a client.
         let project = project_spec::ProjectConfig::new("Game");
-        let older = project_spec::ProjectConfigV1 {
-            schema: 1,
-            project: project.project.clone(),
-            startup: project.startup.clone(),
-            rendering: project.rendering.clone(),
-            controls: project.controls.clone(),
-        };
         let manifest = crate::project::project_path(folder.path());
-        std::fs::write(&manifest, serde_json::to_vec(&older).unwrap()).unwrap();
-        assert_eq!(arguments(&named, PlayRole::Client), [] as [&str; 0]);
         let mut newer = serde_json::to_value(&project).unwrap();
         newer["schema"] = (project_spec::SCHEMA + 1).into();
         std::fs::write(&manifest, serde_json::to_vec(&newer).unwrap()).unwrap();

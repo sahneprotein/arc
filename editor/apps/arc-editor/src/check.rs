@@ -265,7 +265,7 @@ pub fn scripted_particles() -> Option<PathBuf> {
 }
 
 /// The folder a scripted check names with `ARC_EDITOR_CHECK_PROJECT`: it stands in the
-/// game's place for the project file, `arc-project.json`, and for what a setup makes there.
+/// game's place for the project file, `project.aproj`, and for what a setup makes there.
 pub fn scripted_project() -> Option<PathBuf> {
     if !is_scripted() {
         return None;
@@ -468,8 +468,8 @@ type Emitters<'w> = (
 ///
 /// `launcher` is whether the browser is the window's screen (`shown`) or not (`off`). Each
 /// row of the list is the project's name and what its folder is now: `ready`, `nolevel`
-/// (its start level is not in the folder), `setup`, `convert`, `missing` or `refused`. `launcher_pending` is the folder that waits for the
-/// person's word, to be set up (`setup`) or converted (`convert`); `launcher_refusal` why
+/// (its start level is not in the folder), `setup`, `missing` or `refused`. `launcher_pending` is the folder that waits for the
+/// person's word, to be set up (`setup`); `launcher_refusal` why
 /// the folder last chosen was not entered: `missing`, `already`, or the refusal's code.
 /// `launcher_list` is `ok`, `none` where there is no place for a list, or the code of why
 /// it cannot be used. `launcher_entered` counts the projects entered from the browser.
@@ -494,7 +494,6 @@ fn launcher_words(launcher: &editor_ui::Launcher, editor: &Editor) -> String {
                 Status::Ready { .. } => "ready",
                 Status::MissingStartLevel { .. } => "nolevel",
                 Status::SetupRequired { .. } => "setup",
-                Status::ConversionRequired { .. } => "convert",
                 Status::Missing => "missing",
                 Status::Refused { .. } => "refused",
             };
@@ -505,7 +504,6 @@ fn launcher_words(launcher: &editor_ui::Launcher, editor: &Editor) -> String {
         None => "none",
         Some(Pending::New { .. }) => "new",
         Some(Pending::SetUp { .. }) => "setup",
-        Some(Pending::Convert { .. }) => "convert",
     };
     let refusal = match launcher.refusal() {
         None => "none".to_owned(),

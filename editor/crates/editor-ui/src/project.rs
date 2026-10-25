@@ -1,23 +1,4 @@
-//! The project as the editor holds it: the folder's `arc-project.json`, and what can be done
-//! about it when it is not there or is of an older version.
-//!
-//! A project is the game's folder with a manifest at its root. The manifest names the level
-//! the game starts with, the game's look profile and the keys the game uses now; it also has
-//! places for settings the game does not read yet, which are shown and cannot be set.
-//!
-//! Nothing here writes by itself. A folder without a manifest is set up only when the person
-//! asks: the manifest is written, and it names the first level of the folder that can be
-//! read, or a starter level that is made beside the others. No file that is there is
-//! changed. A manifest of an older version is converted only when the person asks, and the
-//! file as it was is kept beside it first. Reading and writing are the services'
-//! (`editor_services::project`); the format is `project_spec`'s.
-//!
-//! The keys and the look profile of a project that is read can be changed. What is changed
-//! is a draft the editor holds beside the manifest: looking at the settings and changing
-//! them writes nothing. Only a save writes, on the person's word, and the services refuse
-//! it rather than write over a manifest that is no longer the one that was read. A draft
-//! in which two actions share a key is kept, so that two keys can be exchanged, and is not
-//! saved while it is so.
+//! Project file state, explicit setup, and settings drafts. Inspection never writes.
 
 use std::path::{Path, PathBuf};
 
@@ -40,9 +21,6 @@ pub enum ProjectState {
     NoFolder,
     /// The folder has no manifest: it can be set up.
     NotSetUp,
-    /// The manifest is of another version than this editor reads. It is not changed until
-    /// the person asks for the conversion. `detail` is what the reader said.
-    NeedsConversion { detail: String },
     /// The manifest is there and cannot be used, with the reader's refusal.
     Refused(Diagnostic),
     /// The manifest is read. `start_level_there` says whether the level it starts with is a
@@ -59,7 +37,6 @@ impl ProjectState {
         match self {
             Self::NoFolder => "NoFolder",
             Self::NotSetUp => "NotSetUp",
-            Self::NeedsConversion { .. } => "NeedsConversion",
             Self::Refused(_) => "Refused",
             Self::Ready { .. } => "Ready",
         }
@@ -79,7 +56,7 @@ pub struct SetUp {
 pub struct Project {
     root: Option<PathBuf>,
     state: ProjectState,
-    /// What a setup or a conversion was last refused for.
+    /// What a setup was last refused for.
     problem: Option<Diagnostic>,
     /// What the setup of this session made.
     set_up: Option<SetUp>,
@@ -330,7 +307,26 @@ impl Project {
         };
         // Anything of the manifest's name counts as a manifest, a link that leads nowhere
         // too: it is then refused, not taken for a folder to set up.
-        self.state = if std::fs::symlink_metadata(project::project_path(root)).is_err() {
+        let path = match project::resolve_project_path(root) {
+            Ok(path) => path,
+            Err(problem) => {
+                self.state = ProjectState::Refused(problem);
+                return;
+            }
+        };
+        let missing = match std::fs::symlink_metadata(&path) {
+            Ok(_) => false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(error) => {
+                self.state = ProjectState::Refused(
+                    Diagnostic::new("project.read")
+                        .with("path", path.display())
+                        .with("detail", error),
+                );
+                return;
+            }
+        };
+        self.state = if missing {
             match project::plan_setup(root) {
                 Ok(plan) => {
                     self.plan = Some(plan);
@@ -349,15 +345,6 @@ impl Project {
                     },
                     Err(refusal) => ProjectState::Refused(refusal),
                 },
-                Err(refusal) if refusal.code == "project.convert_required" => {
-                    ProjectState::NeedsConversion {
-                        detail: refusal
-                            .parameters
-                            .get("detail")
-                            .cloned()
-                            .unwrap_or_default(),
-                    }
-                }
                 Err(refusal) => ProjectState::Refused(refusal),
             }
         };
@@ -381,10 +368,12 @@ impl Project {
 
     /// The manifest's file, whether it is there or not.
     pub fn manifest_path(&self) -> Option<PathBuf> {
-        self.root.as_deref().map(project::project_path)
+        self.root
+            .as_deref()
+            .and_then(|root| project::resolve_project_path(root).ok())
     }
 
-    /// What a setup or a conversion was last refused for.
+    /// What a setup was last refused for.
     pub fn problem(&self) -> Option<&Diagnostic> {
         self.problem.as_ref()
     }
@@ -401,14 +390,13 @@ impl Project {
     }
 
     /// Whether the person is to be shown the project's panel without asking for it: the
-    /// folder has no manifest yet, one that waits to be converted, or one that cannot be
+    /// folder has no manifest yet, one that cannot be
     /// used; or the project is read and the level it starts with is not in the folder,
     /// which the panel says with what to do about it.
     pub fn wants_attention(&self) -> bool {
         matches!(
             self.state,
             ProjectState::NotSetUp
-                | ProjectState::NeedsConversion { .. }
                 | ProjectState::Refused(_)
                 | ProjectState::Ready {
                     start_level_there: false,
@@ -490,30 +478,6 @@ impl Project {
                 self.problem = Some(refusal);
                 self.read();
                 None
-            }
-        }
-    }
-
-    /// Converts the manifest to the version this editor reads, keeping the file as it was
-    /// beside it first. Only on the person's word. Whether it is read now; if not, the
-    /// problem says why, and the manifest is as it was.
-    pub fn convert(&mut self) -> bool {
-        let Some(root) = self.root.clone() else {
-            return false;
-        };
-        if !matches!(self.state, ProjectState::NeedsConversion { .. }) {
-            return false;
-        }
-        match project::convert_project(&root) {
-            Ok(_) => {
-                self.problem = None;
-                self.read();
-                matches!(self.state, ProjectState::Ready { .. })
-            }
-            Err(refusal) => {
-                self.problem = Some(refusal);
-                self.read();
-                false
             }
         }
     }
@@ -853,21 +817,21 @@ pub fn planned_rows(config: &ProjectConfig) -> [(&'static str, Vec<(&'static str
 mod tests {
     use super::*;
 
-    /// A manifest of the first version, as an older editor wrote it.
-    fn old_manifest(root: &Path, start_level: &str) -> Vec<u8> {
-        let config = ProjectConfig::new("Old Project");
-        let old = project_spec::ProjectConfigV1 {
-            schema: 1,
-            project: config.project,
-            startup: project_spec::StartupSettings {
-                start_level: start_level.into(),
-            },
-            rendering: config.rendering,
-            controls: config.controls,
-        };
-        let bytes = serde_json::to_vec_pretty(&old).unwrap();
-        std::fs::write(project::project_path(root), &bytes).unwrap();
-        bytes
+    #[test]
+    fn project_state_uses_the_unique_renamed_file_and_refuses_ambiguity() {
+        let folder = tempfile::tempdir().unwrap();
+        let setup = project::create_project(folder.path(), "Renamed").unwrap();
+        let renamed = folder.path().join("Renamed.ApRoJ");
+        std::fs::rename(&setup.config_path, &renamed).unwrap();
+        let mut project = Project::of_folder(Some(folder.path().into()));
+        assert!(matches!(project.state(), ProjectState::Ready { .. }));
+        assert_eq!(project.manifest_path(), Some(renamed.clone()));
+        assert!(!setup.config_path.exists());
+        std::fs::create_dir(&setup.config_path).unwrap();
+        project.read();
+        assert!(matches!(project.state(), ProjectState::Refused(problem)
+            if problem.code == "project.multiple_files"));
+        assert!(renamed.is_file() && setup.config_path.is_dir());
     }
 
     #[test]
@@ -876,7 +840,6 @@ mod tests {
         assert_eq!(*project.state(), ProjectState::NoFolder);
         assert!(!project.wants_attention());
         assert_eq!(project.set_up("Anything", false), None);
-        assert!(!project.convert());
         assert_eq!(project.manifest_path(), None);
         assert_eq!(project.default_name(), "Arc project");
     }
@@ -1019,73 +982,7 @@ mod tests {
     }
 
     #[test]
-    fn an_older_manifest_is_never_changed_by_looking_and_is_converted_with_a_backup_on_request() {
-        let folder = tempfile::tempdir().unwrap();
-        let root = folder.path();
-        let old = old_manifest(root, "levels/legacy.level.json");
-        let manifest = project::project_path(root);
-
-        let mut project = Project::of_folder(Some(root.into()));
-        assert_eq!(project.state().word(), "NeedsConversion");
-        assert!(project.wants_attention());
-        assert!(project.config().is_none() && project.start_level().is_none());
-        // Looking, and looking again, changed nothing and made no backup.
-        project.read();
-        assert_eq!(std::fs::read(&manifest).unwrap(), old);
-        assert_eq!(std::fs::read_dir(root).unwrap().count(), 1);
-        // Nor is it "set up" over: that is for a folder without a manifest.
-        assert_eq!(project.set_up("New", false), None);
-        assert_eq!(std::fs::read(&manifest).unwrap(), old);
-
-        assert!(project.convert());
-        let backup = root.join("arc-project.json.schema-1.bak");
-        assert_eq!(std::fs::read(&backup).unwrap(), old);
-        let config = project.config().unwrap();
-        assert_eq!(config.schema, project_spec::SCHEMA);
-        assert_eq!(config.project.name, "Old Project");
-        assert_eq!(config.startup.start_level, "levels/legacy.level.json");
-        // The level it names is not there: the project is read, and says so.
-        assert_eq!(
-            *project.state(),
-            ProjectState::Ready {
-                config: Box::new(config.clone()),
-                start_level_there: false
-            }
-        );
-        assert_eq!(project.start_level(), None);
-        // That is the person's to put right, so the project's panel is shown unasked. The
-        // level is not made by looking, by converting or by reading again.
-        assert!(project.wants_attention());
-        project.read();
-        assert!(!root.join("levels/legacy.level.json").exists());
-        // With the level in the folder the project needs nothing more.
-        std::fs::create_dir_all(root.join("levels")).unwrap();
-        std::fs::write(root.join("levels/legacy.level.json"), b"{}").unwrap();
-        project.read();
-        assert!(project.start_level().is_some() && !project.wants_attention());
-        assert!(!project.convert(), "there is nothing left to convert");
-    }
-
-    #[test]
-    fn a_conversion_that_cannot_keep_a_backup_changes_nothing_and_says_why() {
-        let folder = tempfile::tempdir().unwrap();
-        let root = folder.path();
-        let old = old_manifest(root, "levels/legacy.level.json");
-        // A backup of that name is there already: it is not written over.
-        std::fs::write(root.join("arc-project.json.schema-1.bak"), b"earlier").unwrap();
-        let mut project = Project::of_folder(Some(root.into()));
-        assert!(!project.convert());
-        assert_eq!(project.problem().unwrap().code, "project.conflict");
-        assert_eq!(project.state().word(), "NeedsConversion");
-        assert_eq!(std::fs::read(project::project_path(root)).unwrap(), old);
-        assert_eq!(
-            std::fs::read(root.join("arc-project.json.schema-1.bak")).unwrap(),
-            b"earlier"
-        );
-    }
-
-    #[test]
-    fn a_manifest_that_is_no_project_file_is_refused_and_not_offered_for_conversion() {
+    fn a_malformed_project_file_is_refused() {
         let folder = tempfile::tempdir().unwrap();
         std::fs::write(project::project_path(folder.path()), b"{").unwrap();
         let mut project = Project::of_folder(Some(folder.path().into()));
@@ -1093,30 +990,24 @@ mod tests {
             panic!("refused, not {:?}", project.state());
         };
         assert_eq!(refusal.code, "project.decode");
-        assert!(
-            project.wants_attention(),
-            "it is shown, and not for conversion"
-        );
-        assert!(!project.convert());
+        assert!(project.wants_attention());
         assert_eq!(project.set_up("New", false), None);
     }
 
     #[test]
-    fn a_newer_manifest_is_refused_as_that_and_no_conversion_is_offered() {
+    fn an_unsupported_schema_is_refused_without_writing() {
         let folder = tempfile::tempdir().unwrap();
         let mut newer = serde_json::to_value(ProjectConfig::new("Newer")).unwrap();
         newer["schema"] = (project_spec::SCHEMA + 1).into();
         let bytes = serde_json::to_vec_pretty(&newer).unwrap();
         std::fs::write(project::project_path(folder.path()), &bytes).unwrap();
 
-        let mut project = Project::of_folder(Some(folder.path().into()));
+        let project = Project::of_folder(Some(folder.path().into()));
         let ProjectState::Refused(refusal) = project.state().clone() else {
             panic!("refused, not {:?}", project.state());
         };
         assert_eq!(refusal.code, "project.schema_unsupported");
         assert!(project.wants_attention());
-        // It is not one to convert: asking changes nothing and makes no backup.
-        assert!(!project.convert());
         assert_eq!(
             std::fs::read(project::project_path(folder.path())).unwrap(),
             bytes
@@ -1347,7 +1238,7 @@ mod tests {
         // It is made on the person's word, from the default, where the manifest names it;
         // the manifest is not written for it.
         assert!(project.look_missing());
-        let manifest = std::fs::read(folder.path().join("arc-project.json")).unwrap();
+        let manifest = std::fs::read(folder.path().join("project.aproj")).unwrap();
         assert_eq!(project.looks_made(), 0);
         assert!(project.install_look());
         assert!(!project.look_missing() && project.problem().is_none());
@@ -1358,7 +1249,7 @@ mod tests {
         );
         assert!(project.look_profile().unwrap().1.is_ok());
         assert_eq!(
-            std::fs::read(folder.path().join("arc-project.json")).unwrap(),
+            std::fs::read(folder.path().join("project.aproj")).unwrap(),
             manifest
         );
         // Once it is there nothing is made, and a file that cannot be read is the

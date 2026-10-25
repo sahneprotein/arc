@@ -593,34 +593,28 @@ pub fn project<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
         None => words.to_owned(),
     };
     let (title, remedy): (&str, String) = match code {
-        "project.convert_required" => (
-            "The project file is of an older version",
-            "Nothing was changed. Convert it in the Project settings.".into(),
+        "project.multiple_files" => (
+            "The folder has several .aproj files",
+            "Keep exactly one .aproj file directly in the project's folder, then open it again. Nothing was changed.".into(),
+        ),
+        "project.not_a_file" => (
+            "The project file is not a regular file",
+            with_detail("Use a regular .aproj file inside the project's folder. Nothing was changed."),
         ),
         "project.schema_unsupported" => (
             "The project file is of a version this editor does not read",
             match parameter("schema") {
                 Some(schema) => format!(
-                    "It is of version {schema}, which this editor has no way to convert: it \
-                     was written by a newer editor. Nothing was changed. Open the project \
-                     with that editor."
+                    "It is of version {schema}; this editor reads version 1. Nothing was changed."
                 ),
-                None => "It was written by another editor, and this one has no way to \
-                         convert it. Nothing was changed."
-                    .into(),
+                None => "This editor reads project file version 1. Nothing was changed.".into(),
             },
         ),
         "project.locked" => (
             "Another editor is writing the project file",
             "Nothing was changed. Try again in a moment. If no other editor is open, one \
-             that stopped unexpectedly left arc-project.json.lock in the folder: remove \
+             that stopped unexpectedly left <project file>.lock in the folder: remove \
              that file."
-                .into(),
-        ),
-        "project.changed" => (
-            "The project file was changed while it was being converted",
-            "Another program wrote it. Nothing was replaced, and no backup was kept of the \
-             older content. Look at the file and convert again."
                 .into(),
         ),
         "project.outside_folder" => (
@@ -701,7 +695,7 @@ pub fn project<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
                 ),
             }
         }
-        "project.decode" | "project.schema_missing" => (
+        "project.decode" => (
             "The project file is not one this editor can read",
             with_detail("It is not changed. Put right what is wrong with it, or move it away."),
         ),
@@ -1163,7 +1157,7 @@ mod tests {
         };
         let plain = |words: &Problem, what: &str| {
             // The project file's own name is no code, though it reads like the start of one.
-            let said = format!("{} {}", words.title, words.remedy).replace("arc-project.json", "");
+            let said = format!("{} {}", words.title, words.remedy).replace("project.aproj", "");
             for code in [
                 "play.",
                 "look.",
@@ -1191,7 +1185,7 @@ mod tests {
         let no_file = of(
             "play.project_manifest_unavailable",
             None,
-            Some("/p/arc-project.json"),
+            Some("/p/project.aproj"),
         )
         .unwrap();
         plain(&no_file, "no project file");
@@ -1261,13 +1255,10 @@ mod tests {
             .remedy
             .contains("it is not a valid level"));
 
-        // The project file itself, in the words it has everywhere, and one of an older
-        // version says to convert it.
-        let unread = of("project.decode", None, Some("/p/arc-project.json")).unwrap();
+        // The project file itself, in the words it has everywhere.
+        let unread = of("project.decode", None, Some("/p/project.aproj")).unwrap();
         plain(&unread, "project file");
         assert_eq!(unread.title, project("project.decode", none).title);
-        let older = of("project.convert_required", None, None).unwrap();
-        assert!(older.remedy.contains("Convert it in the Project settings"));
         let unknown = of("project.something_new", None, None).unwrap();
         plain(&unknown, "unknown");
 
@@ -1341,10 +1332,8 @@ mod tests {
     #[test]
     fn every_refusal_about_the_project_is_a_sentence_that_says_nothing_was_lost() {
         for code in [
-            "project.convert_required",
             "project.schema_unsupported",
             "project.locked",
-            "project.changed",
             "project.changed_since_read",
             "project.profile_unusable",
             "project.outside_folder",
@@ -1352,7 +1341,6 @@ mod tests {
             "project.conflict",
             "project.value",
             "project.decode",
-            "project.schema_missing",
             "project.limit",
             "project.read",
             "project.write",
@@ -1369,16 +1357,16 @@ mod tests {
             assert!(!words.title.contains("Something went wrong"), "{code}");
             assert!(!words.remedy.is_empty(), "{code}");
         }
-        // A backup that is there already: the file is named, and it is not written over.
-        let backup = |key: &str| (key == "path").then_some("/game/arc-project.json.schema-1.bak");
+        // A destination that is there already: the file is named, and it is not written over.
+        let backup = |key: &str| (key == "path").then_some("/game/occupied.aproj");
         let words = project("project.conflict", backup);
         assert!(words
             .remedy
-            .contains("does not write over /game/arc-project.json.schema-1.bak"));
-        // A newer file says which version it is, and that it is not one to convert.
+            .contains("does not write over /game/occupied.aproj"));
+        // An unsupported file says which version it is.
         let newer = |key: &str| (key == "schema").then_some("9");
         let words = project("project.schema_unsupported", newer);
-        assert!(words.remedy.contains("version 9") && words.remedy.contains("newer editor"));
+        assert!(words.remedy.contains("version 9") && words.remedy.contains("reads version 1"));
         // A save of the settings that is refused says which setting, in the dialog's words.
         let shared = |key: &str| match key {
             "field" => Some("controls.jump"),

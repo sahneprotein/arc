@@ -36,8 +36,7 @@ pub fn check_project_play_inputs(project_root: &Path) -> Result<(), Diagnostic> 
             return Err(Diagnostic::new("play.project_start_level_missing")
                 .with("path", start_level.display()));
         }
-        crate::project::ProjectInspectionStatus::Refused { problem }
-        | crate::project::ProjectInspectionStatus::ConversionRequired { problem } => {
+        crate::project::ProjectInspectionStatus::Refused { problem } => {
             return Err(problem);
         }
         crate::project::ProjectInspectionStatus::Missing
@@ -187,6 +186,20 @@ impl Worker {
 mod tests {
     use super::*;
     use scene_data::{DerivedTerrainLayer, StableId, VisualTerrain, COOK_SCHEMA};
+
+    #[test]
+    fn project_preflight_uses_the_unique_renamed_aproj() {
+        let folder = tempfile::tempdir().unwrap();
+        let setup = crate::project::create_project(folder.path(), "Test").unwrap();
+        let renamed = folder.path().join("Test.aproj");
+        std::fs::rename(&setup.config_path, &renamed).unwrap();
+        assert!(check_project_play_inputs(folder.path()).is_ok());
+        std::fs::write(&setup.config_path, b"another project").unwrap();
+        assert_eq!(
+            check_project_play_inputs(folder.path()).unwrap_err().code,
+            "project.multiple_files"
+        );
+    }
 
     #[test]
     fn project_preflight_refuses_a_missing_configured_source_level() {

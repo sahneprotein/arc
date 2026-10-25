@@ -146,7 +146,7 @@ pub struct PlayConfig {
     pub asset_root: PathBuf,
     pub working_directory: PathBuf,
     /// The project's folder, if the game is started on a project: the folder with
-    /// `arc-project.json`. It is passed to the client as `--project-root`, and only while
+    /// a unique `.aproj`. It is passed to the client as `--project-root`, and only while
     /// that manifest is one this editor reads, which is looked at each time a client is
     /// started. Without it, or with a folder that is not a ready project, the client is
     /// started exactly as it always was.

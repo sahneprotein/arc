@@ -1,7 +1,4 @@
-//! Project manifest I/O, first-project bootstrap and explicit, backed-up conversion.
-//!
-//! Project setup is an explicit operation. Merely opening an older project never changes
-//! its files; conversion keeps the original bytes in a schema-named backup first.
+//! Project file I/O and explicit first-project setup. Inspection never writes.
 //!
 //! What is read and written stays inside the project's folder, as the file system resolves
 //! it: a manifest, a level or a levels folder that is a link to somewhere else is refused,
@@ -96,14 +93,43 @@ pub enum FreshStarter {
     Agreed,
 }
 
+/// Default destination for setup. To open an existing project,
+/// use [`resolve_project_path`], which also accepts a renamed `.aproj`.
 pub fn project_path(root: &Path) -> PathBuf {
     root.join(PROJECT_FILE)
 }
 
+/// Finds the unique `.aproj`, or the default setup destination when none exists.
+pub fn resolve_project_path(root: &Path) -> Result<PathBuf, Diagnostic> {
+    project_spec::resolve_project_path(root).map_err(discovery_problem)
+}
+
+/// Validates and decodes the selected unique `.aproj`, returning its canonical parent.
+pub fn project_root_from_file(path: &Path) -> Result<PathBuf, Diagnostic> {
+    let root = project_spec::project_root_from_file(path).map_err(discovery_problem)?;
+    load_project(&root)?;
+    Ok(root)
+}
+
+fn discovery_problem(error: project_spec::DiscoveryError) -> Diagnostic {
+    let problem = Diagnostic::new(error.code).with("path", error.path.display());
+    match error.detail {
+        Some(detail) => problem.with("detail", detail),
+        None => problem,
+    }
+}
+
+fn read_project_bytes(path: &Path) -> Result<Vec<u8>, Diagnostic> {
+    let metadata = fs::metadata(path).map_err(|error| io_problem("project.read", path, error))?;
+    if !metadata.is_file() {
+        return Err(Diagnostic::new("project.not_a_file").with("path", path.display()));
+    }
+    read_limited(path, project_spec::MAX_FILE_BYTES)
+}
+
 pub fn load_project(root: &Path) -> Result<ProjectConfig, Diagnostic> {
-    let path = project_path(root);
-    inside(root, &path)?;
-    let bytes = read_limited(&path, project_spec::MAX_FILE_BYTES)?;
+    let path = resolve_project_path(root)?;
+    let bytes = read_project_bytes(&path)?;
     project_spec::decode(&bytes).map_err(|error| project_error(&path, error))
 }
 
@@ -171,12 +197,12 @@ pub fn create_project_with(
     name: &str,
     starter: FreshStarter,
 ) -> Result<ProjectSetup, Diagnostic> {
-    let config_path = project_path(root);
+    let config_path = resolve_project_path(root)?;
     // The name first, before the folder is so much as made.
     let mut config = ProjectConfig::new(name);
     project_spec::validate(&config).map_err(|error| project_error(&config_path, error))?;
     fs::create_dir_all(root).map_err(|error| io_problem("project.create_folder", root, error))?;
-    if config_path.exists() {
+    if fs::symlink_metadata(&config_path).is_ok() {
         let config = load_project(root)?;
         let level = start_level_path(root, &config)?;
         if !level.is_file() {
@@ -231,7 +257,7 @@ pub fn create_project_with(
         take_back(created_level, false);
         return Err(refusal);
     }
-    if let Err(refusal) = create_exclusive(&config_path, &bytes) {
+    if let Err(refusal) = create_atomic(&config_path, &bytes) {
         take_back(created_level, created_profile);
         return Err(refusal);
     }
@@ -325,64 +351,7 @@ pub fn create_project_in(parent: &Path, name: &str) -> Result<ProjectSetup, Diag
     })
 }
 
-/// Converts an older project manifest only when explicitly requested. The source bytes are
-/// copied to `<manifest>.schema-<old>.bak` with create-new semantics before replacement.
-///
-/// The manifest is held for the conversion with a lock file beside it, which another editor
-/// that converts it cannot make meanwhile (`project.locked`), and it is read once more just
-/// before it is replaced: if it is no longer the bytes that were converted, nothing is
-/// replaced, the backup that was just made is taken away again, and the refusal is
-/// `project.changed`. A manifest of a schema that has no converter is refused
-/// (`project.schema_unsupported`) and nothing is written.
-pub fn convert_project(root: &Path) -> Result<ProjectConfig, Diagnostic> {
-    convert_with(root, || {})
-}
-
-/// [`convert_project`], with something done between the backup and the replacement: for a
-/// test to stand in for another program that writes the manifest just then.
-fn convert_with(root: &Path, before_replace: impl FnOnce()) -> Result<ProjectConfig, Diagnostic> {
-    let path = project_path(root);
-    inside(root, &path)?;
-    let _held = hold(&path)?;
-    let bytes = read_limited(&path, project_spec::MAX_FILE_BYTES)?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
-        Diagnostic::new("project.decode")
-            .with("path", path.display())
-            .with("detail", error)
-    })?;
-    let old_schema = value
-        .get("schema")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|schema| u32::try_from(schema).ok())
-        .ok_or_else(|| Diagnostic::new("project.schema_missing").with("path", path.display()))?;
-    let config = project_spec::convert(value).map_err(|error| project_error(&path, error))?;
-    if old_schema == config.schema {
-        return Ok(config);
-    }
-    let converted =
-        project_spec::canonical_bytes(&config).map_err(|error| project_error(&path, error))?;
-    let mut backup_name = path
-        .file_name()
-        .ok_or_else(|| Diagnostic::new("project.path_invalid"))?
-        .to_os_string();
-    backup_name.push(format!(".schema-{old_schema}.bak"));
-    let backup = path.with_file_name(backup_name);
-    inside(root, &backup)?;
-    create_exclusive(&backup, &bytes)?;
-    before_replace();
-    // Still the bytes that were converted? A program that does not make the lock file may
-    // have written the manifest since it was read.
-    let unchanged = read_limited(&path, project_spec::MAX_FILE_BYTES).is_ok_and(|now| now == bytes);
-    if !unchanged {
-        // The backup is of what was read, which is no longer the manifest.
-        let _ = fs::remove_file(&backup);
-        return Err(Diagnostic::new("project.changed").with("path", path.display()));
-    }
-    replace_atomic(&path, &converted)?;
-    Ok(config)
-}
-
-/// Holds the manifest for one conversion: a file of the same name with `.lock` after it,
+/// Holds the project file for one save: a file of the same name with `.lock` after it,
 /// which is gone again when what is returned is dropped. An editor that stops in the middle
 /// leaves it behind, and it is then removed by hand.
 fn hold(path: &Path) -> Result<PathLock, Diagnostic> {
@@ -563,6 +532,24 @@ fn create_exclusive(path: &Path, bytes: &[u8]) -> Result<(), Diagnostic> {
         .map_err(|error| io_problem("project.write", path, error))
 }
 
+/// Publishes a complete file in one step and never replaces a competing destination.
+fn create_atomic(path: &Path, bytes: &[u8]) -> Result<(), Diagnostic> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| io_problem("project.write", parent, error))?;
+    temp.write_all(bytes)
+        .and_then(|()| temp.as_file().sync_all())
+        .map_err(|error| io_problem("project.write", path, error))?;
+    temp.persist_noclobber(path).map_err(|error| {
+        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            Diagnostic::new("project.conflict").with("path", path.display())
+        } else {
+            io_problem("project.write", path, error.error)
+        }
+    })?;
+    Ok(())
+}
+
 fn replace_atomic(path: &Path, bytes: &[u8]) -> Result<(), Diagnostic> {
     let parent = path.parent().unwrap_or(Path::new("."));
     let mut temp = tempfile::NamedTempFile::new_in(parent)
@@ -581,20 +568,11 @@ fn relative_string(root: &Path, path: &Path) -> Result<String, Diagnostic> {
         .map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
-/// A refusal of the manifest's format as a diagnostic. A manifest of another schema says
-/// which (`schema`), and whether this editor can convert it: an older schema it has a
-/// converter for is `project.convert_required`; any other, a newer one above all, is
-/// `project.schema_unsupported`, for which no conversion is to be offered.
 fn project_error(path: &Path, error: ProjectError) -> Diagnostic {
     let (code, schema) = match &error {
         ProjectError::TooLarge => ("project.limit", None),
         ProjectError::Decode(_) => ("project.decode", None),
-        ProjectError::Schema { found, .. } if project_spec::can_convert(*found) => {
-            ("project.convert_required", Some(*found))
-        }
-        ProjectError::Schema { found, .. } | ProjectError::NoConverter(found) => {
-            ("project.schema_unsupported", Some(*found))
-        }
+        ProjectError::Schema { found, .. } => ("project.schema_unsupported", Some(*found)),
         ProjectError::Value(_) | ProjectError::SharedKey { .. } => ("project.value", None),
     };
     let refusal = Diagnostic::new(code)
@@ -626,6 +604,112 @@ fn io_problem(code: &str, path: &Path, error: std::io::Error) -> Diagnostic {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_renamed_aproj_is_loaded_saved_and_not_duplicated_by_setup() {
+        let folder = tempfile::tempdir().unwrap();
+        let setup = create_project(folder.path(), "Renamed").unwrap();
+        let renamed = folder.path().join("Renamed.APROJ");
+        fs::rename(&setup.config_path, &renamed).unwrap();
+        assert_eq!(load_project(folder.path()).unwrap(), setup.config);
+        assert!(matches!(
+            inspect(folder.path()).status,
+            ProjectInspectionStatus::Ready { .. }
+        ));
+        let mut edit = SettingsEdit::of(&setup.config);
+        edit.local_clients = Some(3);
+        let saved = save_settings(folder.path(), &setup.config, &edit).unwrap();
+        assert_eq!(
+            project_spec::decode(&fs::read(&renamed).unwrap()).unwrap(),
+            saved
+        );
+        assert_eq!(
+            create_project(folder.path(), "Ignored")
+                .unwrap()
+                .config_path,
+            renamed
+        );
+        assert!(!project_path(folder.path()).exists());
+    }
+
+    #[test]
+    fn multiple_aproj_entries_refuse_inspection_load_setup_and_save() {
+        let folder = tempfile::tempdir().unwrap();
+        let setup = create_project(folder.path(), "Ambiguous").unwrap();
+        fs::create_dir(folder.path().join("Other.aproj")).unwrap();
+        let before = files(folder.path());
+        assert!(matches!(inspect(folder.path()).status,
+            ProjectInspectionStatus::Refused { problem } if problem.code == "project.multiple_files"));
+        assert_eq!(
+            load_project(folder.path()).unwrap_err().code,
+            "project.multiple_files"
+        );
+        assert_eq!(
+            create_project(folder.path(), "Ignored").unwrap_err().code,
+            "project.multiple_files"
+        );
+        assert_eq!(
+            save_settings(
+                folder.path(),
+                &setup.config,
+                &SettingsEdit::of(&setup.config)
+            )
+            .unwrap_err()
+            .code,
+            "project.multiple_files"
+        );
+        assert_eq!(files(folder.path()), before);
+    }
+
+    #[test]
+    fn opening_a_project_file_derives_its_parent_and_never_writes() {
+        let folder = tempfile::tempdir().unwrap();
+        let setup = create_project(folder.path(), "Selected file").unwrap();
+        let renamed = folder.path().join("Selected.aproj");
+        fs::rename(&setup.config_path, &renamed).unwrap();
+        let before = files(folder.path());
+        assert_eq!(
+            project_root_from_file(&renamed).unwrap(),
+            fs::canonicalize(folder.path()).unwrap()
+        );
+        assert_eq!(
+            project_root_from_file(&folder.path().join("notes.json"))
+                .unwrap_err()
+                .code,
+            "project.path_invalid"
+        );
+        assert_eq!(
+            project_root_from_file(&folder.path().join("missing.aproj"))
+                .unwrap_err()
+                .code,
+            "project.path_invalid"
+        );
+        assert_eq!(files(folder.path()), before);
+        fs::write(&renamed, b"{").unwrap();
+        let before = files(folder.path());
+        assert_eq!(
+            project_root_from_file(&renamed).unwrap_err().code,
+            "project.decode"
+        );
+        assert_eq!(files(folder.path()), before);
+    }
+
+    #[test]
+    fn a_directory_at_the_project_filename_is_not_a_file_and_is_never_written() {
+        let folder = tempfile::tempdir().unwrap();
+        fs::create_dir(project_path(folder.path())).unwrap();
+        assert_eq!(
+            load_project(folder.path()).unwrap_err().code,
+            "project.not_a_file"
+        );
+        assert!(matches!(inspect(folder.path()).status,
+            ProjectInspectionStatus::Refused { problem } if problem.code == "project.not_a_file"));
+        assert_eq!(
+            create_project(folder.path(), "Ignored").unwrap_err().code,
+            "project.not_a_file"
+        );
+        assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 1);
+    }
+
     /// Everything under `root`, by path, for saying that nothing was made or changed.
     fn files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
         fn walk(folder: &Path, found: &mut Vec<(PathBuf, Vec<u8>)>) {
@@ -645,28 +729,6 @@ mod tests {
         walk(root, &mut found);
         found.sort();
         found
-    }
-
-    /// A manifest of this schema with the current fields, written as an older or newer
-    /// editor might have written it.
-    fn manifest_of_schema(root: &Path, schema: u32) -> Vec<u8> {
-        let config = ProjectConfig::new("Arc Test");
-        let bytes = if schema == 1 {
-            serde_json::to_vec_pretty(&project_spec::ProjectConfigV1 {
-                schema: 1,
-                project: config.project,
-                startup: config.startup,
-                rendering: config.rendering,
-                controls: config.controls,
-            })
-            .unwrap()
-        } else {
-            let mut value = serde_json::to_value(&config).unwrap();
-            value["schema"] = schema.into();
-            serde_json::to_vec_pretty(&value).unwrap()
-        };
-        fs::write(project_path(root), &bytes).unwrap();
-        bytes
     }
 
     #[test]
@@ -788,9 +850,9 @@ mod tests {
         assert_eq!(
             made,
             [
-                "arc-project.json",
                 "assets/render/look-v1.json",
-                "levels/first-level.level.json"
+                "levels/first-level.level.json",
+                "project.aproj"
             ]
         );
         assert_eq!(load_project(&root).unwrap(), project.config);
@@ -983,103 +1045,25 @@ mod tests {
     }
 
     #[test]
-    fn an_older_schema_is_to_be_converted_and_a_newer_one_is_not_offered_for_it() {
-        let older = tempfile::tempdir().unwrap();
-        manifest_of_schema(older.path(), 1);
-        let refused = load_project(older.path()).unwrap_err();
-        assert_eq!(refused.code, "project.convert_required");
-        assert_eq!(refused.parameters["schema"], "1");
-        assert_eq!(
-            refused.parameters["expected"],
-            project_spec::SCHEMA.to_string()
-        );
-
-        let newer = tempfile::tempdir().unwrap();
-        let bytes = manifest_of_schema(newer.path(), project_spec::SCHEMA + 1);
-        let refused = load_project(newer.path()).unwrap_err();
-        assert_eq!(refused.code, "project.schema_unsupported");
-        assert_eq!(
-            refused.parameters["schema"],
-            (project_spec::SCHEMA + 1).to_string()
-        );
-        // Asked to convert it all the same: refused as that, and nothing is written.
-        let before = files(newer.path());
-        let refused = convert_project(newer.path()).unwrap_err();
-        assert_eq!(refused.code, "project.schema_unsupported");
-        assert_eq!(files(newer.path()), before);
-        assert_eq!(fs::read(project_path(newer.path())).unwrap(), bytes);
-    }
-
-    #[test]
-    fn explicit_conversion_keeps_a_non_replacing_schema_backup() {
+    fn other_schemas_are_refused_without_writing() {
         let folder = tempfile::tempdir().unwrap();
-        let bytes = manifest_of_schema(folder.path(), 1);
-        let path = project_path(folder.path());
-        let converted = convert_project(folder.path()).unwrap();
-        assert_eq!(converted.schema, project_spec::SCHEMA);
-        assert_eq!(
-            fs::read(path.with_file_name("arc-project.json.schema-1.bak")).unwrap(),
-            bytes
-        );
-        assert_eq!(load_project(folder.path()).unwrap(), converted);
-        // The conversion let go of the manifest: no lock is left beside it.
-        assert!(!path.with_file_name("arc-project.json.lock").exists());
-        // Converted, there is nothing more to convert, and no second backup is made.
-        assert_eq!(convert_project(folder.path()).unwrap(), converted);
-    }
-
-    #[test]
-    fn conversion_does_not_replace_an_existing_backup_or_manifest() {
-        let folder = tempfile::tempdir().unwrap();
-        manifest_of_schema(folder.path(), 1);
-        let path = project_path(folder.path());
-        let backup = path.with_file_name("arc-project.json.schema-1.bak");
-        fs::write(&backup, b"do not replace").unwrap();
-        assert_eq!(
-            convert_project(folder.path()).unwrap_err().code,
-            "project.conflict"
-        );
-        assert!(
-            serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).unwrap()
-                ["schema"]
-                == 1
-        );
-        assert_eq!(fs::read(backup).unwrap(), b"do not replace");
-    }
-
-    #[test]
-    fn a_manifest_another_editor_is_converting_is_left_alone() {
-        let folder = tempfile::tempdir().unwrap();
-        manifest_of_schema(folder.path(), 1);
-        let path = project_path(folder.path());
-        let lock = path.with_file_name("arc-project.json.lock");
-        fs::write(&lock, "").unwrap();
-        let before = files(folder.path());
-        let held = convert_project(folder.path()).unwrap_err();
-        assert_eq!(held.code, "project.locked");
-        assert_eq!(held.parameters["lock"], lock.display().to_string());
-        // Nothing was written, no backup was made, and the other's lock is still there.
-        assert_eq!(files(folder.path()), before);
-        fs::remove_file(&lock).unwrap();
-        assert!(convert_project(folder.path()).is_ok());
-    }
-
-    #[test]
-    fn a_manifest_written_during_the_conversion_is_not_replaced() {
-        let folder = tempfile::tempdir().unwrap();
-        manifest_of_schema(folder.path(), 1);
-        let path = project_path(folder.path());
-        // Another program, which makes no lock file, writes the manifest after it was read.
-        let other = br#"{"schema":1,"written":"elsewhere"}"#;
-        let changed = convert_with(folder.path(), || fs::write(&path, other).unwrap()).unwrap_err();
-        assert_eq!(changed.code, "project.changed");
-        assert_eq!(fs::read(&path).unwrap(), other);
-        // The backup was of what is no longer the manifest: it is not left to be taken for
-        // one. And the manifest is let go.
-        assert!(!path
-            .with_file_name("arc-project.json.schema-1.bak")
-            .exists());
-        assert!(!path.with_file_name("arc-project.json.lock").exists());
+        for schema in [0, 2, 3, 99] {
+            let mut config = ProjectConfig::new("Arc Test");
+            config.schema = schema;
+            fs::write(
+                project_path(folder.path()),
+                serde_json::to_vec(&config).unwrap(),
+            )
+            .unwrap();
+            let before = files(folder.path());
+            assert_eq!(
+                load_project(folder.path()).unwrap_err().code,
+                "project.schema_unsupported"
+            );
+            assert!(matches!(inspect(folder.path()).status,
+                ProjectInspectionStatus::Refused { problem } if problem.code == "project.schema_unsupported"));
+            assert_eq!(files(folder.path()), before);
+        }
     }
 
     #[cfg(unix)]
@@ -1134,17 +1118,13 @@ mod tests {
         assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
         assert!(!project_path(fresh.path()).exists());
 
-        // A manifest that is itself a link out of the folder is not read or converted.
+        // A manifest that is itself a link out of the folder is not read.
         let linked_manifest = tempfile::tempdir().unwrap();
-        let real = outside.path().join("arc-project.json");
+        let real = outside.path().join("notes.json");
         fs::write(&real, project_spec::canonical_bytes(&config).unwrap()).unwrap();
         symlink(&real, project_path(linked_manifest.path())).unwrap();
         assert_eq!(
             load_project(linked_manifest.path()).unwrap_err().code,
-            "project.outside_folder"
-        );
-        assert_eq!(
-            convert_project(linked_manifest.path()).unwrap_err().code,
             "project.outside_folder"
         );
         // A link inside the folder to a file inside the folder is the folder's own.
