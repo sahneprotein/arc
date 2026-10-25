@@ -304,7 +304,5 @@ pub(crate) fn mutate(scene: &mut SceneDocument, mutations: &[Mutation]) -> Resul
             _ => unreachable!(),
         }
     }
-    // A level with its first placed emitter is of the schema that has such objects.
-    scene.upgrade_for_content();
     scene_data::validate(scene)
 }

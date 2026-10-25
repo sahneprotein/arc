@@ -43,19 +43,6 @@ pub fn problem<'a>(code: &str, parameter: impl Fn(&str) -> Option<&'a str>) -> P
             "The file is in use by another program",
             "Close the other program and save again.",
         ),
-        "save.backup_exists" => (
-            "A copy of this level as it was is in the way",
-            "The level is now of a newer format. Before it is saved in it, the file as it \
-             was is kept beside it, under its name with .schema-N.bak after it. A file of \
-             that name is there already, and it is not written over. Nothing was saved. Move \
-             that file away and save again.",
-        ),
-        "save.backup_failed" => (
-            "The level as it was could not be kept before saving",
-            "The level is now of a newer format, and it is saved in it only once the file \
-             as it was is kept beside it. That copy could not be written. Nothing was saved. \
-             Check that you may write to that folder and that the disk is not full.",
-        ),
         "save.parent_create" => (
             "The folder for the level could not be made",
             "Check that you may write there and that no file has the folder's name.",
@@ -1477,8 +1464,6 @@ mod tests {
     fn a_known_problem_is_a_sentence_and_never_shows_its_code() {
         for code in [
             "save.conflict",
-            "save.backup_exists",
-            "save.backup_failed",
             "save.parent_create",
             "io.failed",
             "name.invalid",

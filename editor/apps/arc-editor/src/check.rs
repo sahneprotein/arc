@@ -626,7 +626,7 @@ fn settings_words(project: &editor_ui::Project) -> String {
 /// preview has come to, and whether it runs; `stage` whether the 3D view shows the stage
 /// and how many particles of the reference simulation it drew in the last frame. After
 /// these come `preview_mode=Gpu gpu=Running`: which picture is asked for, and what the stage
-/// says became of the GPU preview. Last, `emitter_placed=1 level_schema=2`: how many objects
+/// says became of the GPU preview. Last, `emitter_placed=1 level_schema=1`: how many objects
 /// of the level place an emitter, and the schema the level is of.
 fn emitters_words(
     particles: &editor_ui::Particles,

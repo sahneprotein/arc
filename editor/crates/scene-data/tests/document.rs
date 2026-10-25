@@ -91,8 +91,8 @@ fn object_storage_order_is_not_semantic_but_authored_names_are() {
     assert_eq!(source_hash(&scene).unwrap(), hash);
     scene.objects[0].name.push('!');
     assert_ne!(source_hash(&scene).unwrap(), hash);
-    // A version past the newest one the format has is refused.
-    scene.schema = scene_data::SCHEMA_VERSION_EMITTERS + 1;
+    // The format has one version: any other is refused.
+    scene.schema = scene_data::SCHEMA_VERSION + 1;
     assert_eq!(validate(&scene).unwrap_err().code, "schema.unsupported");
     let invalid = serde_json::to_vec(&serde_json::json!({"schema":1,"id":"00000000000000000000000000000a7c","objects":[],"unchecked":true})).unwrap();
     assert!(serde_json::from_slice::<SceneDocument>(&invalid).is_err());

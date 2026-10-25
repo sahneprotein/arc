@@ -13,7 +13,7 @@ pub fn validate(scene: &SceneDocument) -> Result<(), Diagnostic> {
 /// diagnostic. Bounds and invalid terrain stop dependent work, not other objects.
 pub fn validation_diagnostics(scene: &SceneDocument) -> Vec<Diagnostic> {
     let mut errors = Vec::new();
-    if scene.schema != SCHEMA_VERSION && scene.schema != SCHEMA_VERSION_EMITTERS {
+    if scene.schema != SCHEMA_VERSION {
         errors.push(Diagnostic::new("schema.unsupported").with("version", scene.schema));
     }
     if !scene.id.valid() {
@@ -63,11 +63,6 @@ pub fn validation_diagnostics(scene: &SceneDocument) -> Vec<Diagnostic> {
                 // An emitter's asset ID has the shape of every stable ID.
                 if !StableId(emitter_id.clone()).valid() {
                     errors.push(Diagnostic::new("emitter.id_invalid").at(&obj.id));
-                }
-                // A level of the first schema has no such object: a reader of that
-                // schema would not know it.
-                if scene.schema == SCHEMA_VERSION {
-                    errors.push(Diagnostic::new("schema.emitter_requires_v2").at(&obj.id));
                 }
             }
             ObjectData::Terrain(t) => {

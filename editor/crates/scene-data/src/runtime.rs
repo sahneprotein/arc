@@ -77,11 +77,9 @@ fn compose_world(
     Ok(world)
 }
 
+/// The schema of a cooked package's manifest and of both its payloads: the format's one
+/// version. A package of any other is refused.
 pub const COOK_SCHEMA: u32 = 1;
-/// The schema of a visual payload that holds placed particle emitters. A level without
-/// placements is cooked to the first schema, byte for byte as before; one with placements
-/// to this one. The package's manifest and its simulation payload stay at [`COOK_SCHEMA`].
-pub const VISUAL_SCHEMA_EMITTERS: u32 = 2;
 /// The most emitters a level may place.
 pub const MAX_EMITTERS: usize = 4096;
 pub const COLLISION_PROFILE: &str = "arc-game-rigid-box-trimesh-v1";
@@ -143,11 +141,8 @@ pub struct DerivedTerrainLayer {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VisualTerrain {
-    #[serde(default)]
     pub rules: Vec<terrain::RuleDefinition>,
-    #[serde(default)]
     pub decoration: Vec<DecorationInstance>,
-    #[serde(default)]
     pub derived_layers: Vec<DerivedTerrainLayer>,
     #[serde(default)]
     pub surface_group: Option<StableId>,
@@ -171,63 +166,17 @@ pub struct CookedEmitter {
     pub transform: RigidTransform,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "VisualPayloadFields")]
+#[serde(deny_unknown_fields)]
 pub struct VisualPayload {
     pub schema: u32,
     pub terrain: Vec<VisualTerrain>,
-    /// The placed emitters, by placement ID. Written only in a payload of
-    /// [`VISUAL_SCHEMA_EMITTERS`], which always has some.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// The placed emitters, by placement ID. Always written, empty in a level that places
+    /// none.
     pub emitters: Vec<CookedEmitter>,
 }
-/// A visual payload as it is read, before its schema has said which fields it has.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct VisualPayloadFields {
-    schema: u32,
-    terrain: Vec<VisualTerrain>,
-    /// `None` only when the payload has no `emitters` key at all. A key that is there must
-    /// hold a list: `null` is not "no key", and is refused as any other wrong value is.
-    #[serde(default, deserialize_with = "emitters_that_are_there")]
-    emitters: Option<Vec<CookedEmitter>>,
-}
-/// Reads an `emitters` key that is present. An absent key never comes here: it is the
-/// field's default. So what is read is a list or nothing the payload may hold.
-fn emitters_that_are_there<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Vec<CookedEmitter>>, D::Error> {
-    Vec::<CookedEmitter>::deserialize(deserializer).map(Some)
-}
-impl TryFrom<VisualPayloadFields> for VisualPayload {
-    type Error = &'static str;
-    /// Each schema has exactly its fields: the first has no `emitters`, the second must.
-    fn try_from(fields: VisualPayloadFields) -> Result<Self, Self::Error> {
-        let emitters = match (fields.schema, fields.emitters) {
-            (VISUAL_SCHEMA_EMITTERS, Some(emitters)) => emitters,
-            (VISUAL_SCHEMA_EMITTERS, None) => return Err("missing field `emitters`"),
-            (_, Some(_)) => return Err("unknown field `emitters` for this schema"),
-            (_, None) => Vec::new(),
-        };
-        Ok(Self {
-            schema: fields.schema,
-            terrain: fields.terrain,
-            emitters,
-        })
-    }
-}
 impl VisualPayload {
-    /// The schema a payload with these emitters is written in.
-    pub fn schema_for(emitters: &[CookedEmitter]) -> u32 {
-        if emitters.is_empty() {
-            COOK_SCHEMA
-        } else {
-            VISUAL_SCHEMA_EMITTERS
-        }
-    }
     pub fn validate(&self, ground: &[CookedGround]) -> Result<(), Diagnostic> {
-        // One form for one content: placements make the second schema, and nothing else
-        // does, so that a level's cooked bytes and their hash do not depend on its past.
-        if self.schema != Self::schema_for(&self.emitters) || self.terrain.len() > 4096 {
+        if self.schema != COOK_SCHEMA || self.terrain.len() > 4096 {
             return Err(Diagnostic::new("payload.visual_invalid"));
         }
         if self.emitters.len() > MAX_EMITTERS {
