@@ -70,12 +70,17 @@ checks; the pins name commits on mainlines.
 1. `.aproj` at schema 1 in `project-spec`, with the one rule that finds a project's file in
    its folder, used by the editor and the game alike; every legacy path removed: the reading
    and conversion of `arc-project.json`, schema migrations and their backups, the browser's
-   and the settings' conversion flows and their words and cases. (In progress on
-   `codex/aproj` and `codex/aproj-game`.)
+   and the settings' conversion flows and their words and cases. (Built: the editor's side
+   on `codex/aproj`, merged into `codex/play-backend` at `eed04bbe1`; the game's side on
+   `codex/aproj-game` at `fda83a5`, whose pin of `project-spec` moves once `codex/aproj` is
+   pushed.)
 2. The editor opens a project by its file: the browser's "Open Project" takes an `.aproj`,
-   and `arc-editor <file.aproj>` starts on it.
+   and `arc-editor <file.aproj>` starts on it. (Built at `3c164b7c5`. A person can no longer
+   set up a folder that is not a project yet from the browser, since the file dialog chooses
+   files; "New Project" makes one. Whether setting up a folder is kept is the owner's.)
 3. Going from one project to another from the Level menu, with the questions closing asks.
-   (Written on `codex/play-backend`, not yet run.)
+   (Built at `56a4a6eaf`, with the fix at `05d48ca30` for a race that let closing or leaving
+   go on while a game's server was left behind.)
 4. The other legacy of the editor's start, for the owner to decide (proposed: remove both):
    - the start with `--level`, `--package` and `--game` "as the editor always started",
      without a project, which every scripted case uses today; the cases would start on a
