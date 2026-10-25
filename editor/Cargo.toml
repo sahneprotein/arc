@@ -23,6 +23,7 @@ serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 glam = "=0.32.1"
 tempfile = "=3.20.0"
+bevy_math = { version = "=0.19.1", default-features = false, features = ["std"] }
 bevy = { path = "..", version = "=0.19.1", default-features = false }
 bevy_egui = { version = "=0.40.1", default-features = false, features = ["render", "bevy_ui", "default_fonts", "picking"] }
 

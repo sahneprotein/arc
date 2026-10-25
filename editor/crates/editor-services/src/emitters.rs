@@ -29,6 +29,7 @@
 //!   with. It is not that runtime, and what it shows is not what the game draws.
 
 use crate::persistence::PathLock;
+use bevy_math::ops;
 use editor_core::{EmitterAsset, EmitterAssetState, EmitterAssets};
 use particle_runtime::AdapterError;
 use particle_spec::{self as spec, Blend, EmitterError, EmitterSpec, LoadedEmitter, Shape};
@@ -924,9 +925,9 @@ impl EmitterPreview {
                 let height = 2.0 * self.unit() - 1.0;
                 let turn = std::f32::consts::TAU * self.unit();
                 let across = (1.0 - height * height).max(0.0).sqrt();
-                let distance = radius_m * self.unit().cbrt();
-                let position =
-                    [across * turn.cos(), height, across * turn.sin()].map(|axis| axis * distance);
+                let distance = radius_m * ops::cbrt(self.unit());
+                let position = [across * ops::cos(turn), height, across * ops::sin(turn)]
+                    .map(|axis| axis * distance);
                 (position, outward(position))
             }
             Shape::Box { size_m } => {
@@ -945,14 +946,14 @@ impl EmitterPreview {
                 // half-angle about +Y.
                 let distance = radius_m * self.unit().sqrt();
                 let turn = std::f32::consts::TAU * self.unit();
-                let position = [distance * turn.cos(), 0.0, distance * turn.sin()];
-                let least = angle_degrees.to_radians().cos();
+                let position = [distance * ops::cos(turn), 0.0, distance * ops::sin(turn)];
+                let least = ops::cos(angle_degrees.to_radians());
                 let height = 1.0 - self.unit() * (1.0 - least);
                 let around = std::f32::consts::TAU * self.unit();
                 let across = (1.0 - height * height).max(0.0).sqrt();
                 (
                     position,
-                    [across * around.cos(), height, across * around.sin()],
+                    [across * ops::cos(around), height, across * ops::sin(around)],
                 )
             }
         }
@@ -993,7 +994,7 @@ impl EmitterPreview {
 /// Moves a particle through `dt` seconds: gravity pulls it, drag slows it, and it is older.
 fn moved(particle: &mut Live, motion: &spec::Motion, dt: f32) {
     // Drag takes the same share of the speed in every equal time, whatever the step.
-    let kept = (-motion.drag_per_s * dt).exp();
+    let kept = ops::exp(-motion.drag_per_s * dt);
     for axis in 0..3 {
         particle.velocity[axis] =
             (particle.velocity[axis] + motion.gravity_m_per_s2[axis] * dt) * kept;
@@ -1654,7 +1655,7 @@ mod tests {
         .fold(emitter(1, "Sparks"), |emitter, change| {
             changed(&emitter, change).unwrap()
         });
-        let widest = 20.0_f32.to_radians().tan() + 0.01;
+        let widest = ops::tan(20.0_f32.to_radians()) + 0.01;
         for particle in drawn(&after(&cone, 2, 0.8)) {
             let [x, y, z] = particle.position_m;
             assert!(

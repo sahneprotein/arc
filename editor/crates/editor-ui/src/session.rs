@@ -1792,6 +1792,7 @@ impl Editor {
                     }
                 }
                 ServiceEvent::JobFinished { fact, result } => {
+                    let result = *result;
                     self.running_jobs = self.running_jobs.saturating_sub(1);
                     if fact.kind == JobKind::VerifyPackage {
                         // Not a file job: the pending path is left to the job it belongs to.

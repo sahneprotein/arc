@@ -50,7 +50,7 @@ pub enum ServiceEvent {
     JobStarted(JobFact),
     JobFinished {
         fact: JobFact,
-        result: Result<JobOutput, Diagnostic>,
+        result: Box<Result<JobOutput, Diagnostic>>,
     },
     Snapshot(Arc<ViewSnapshot>),
 }
@@ -274,7 +274,10 @@ fn worker(
                 };
                 session.set_job(fact.clone());
                 if events
-                    .send(ServiceEvent::JobFinished { fact, result })
+                    .send(ServiceEvent::JobFinished {
+                        fact,
+                        result: Box::new(result),
+                    })
                     .is_err()
                 {
                     return;

@@ -15,6 +15,7 @@
 //! max_bytes}`, `look.decode {path, error}`, `look.schema {path, expected, found}`,
 //! `look.value {path, field}`.
 
+use bevy_math::ops;
 use scene_data::Diagnostic;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -349,7 +350,7 @@ fn srgb_to_linear(channel: u8) -> f32 {
     if channel <= 0.04045 {
         channel / 12.92
     } else {
-        ((channel + 0.055) / 1.055).powf(2.4)
+        ops::powf((channel + 0.055) / 1.055, 2.4)
     }
 }
 
@@ -358,7 +359,7 @@ fn linear_to_srgb(channel: f32) -> u8 {
     let srgb = if channel <= 0.003_130_8 {
         channel * 12.92
     } else {
-        1.055 * channel.powf(1.0 / 2.4) - 0.055
+        1.055 * ops::powf(channel, 1.0 / 2.4) - 0.055
     };
     (srgb * 255.0).round() as u8
 }

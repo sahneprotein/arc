@@ -30,7 +30,7 @@ fn queue_full_does_not_supersede_last_accepted_and_every_ticket_finishes_once() 
         for event in handle.poll(128) {
             if let ServiceEvent::JobFinished { fact, result } = event {
                 assert!(finished.insert(fact.id), "duplicate terminal event");
-                match result {
+                match *result {
                     Ok(JobOutput::Geometry { binding, .. }) => {
                         if fact.id == latest.id {
                             assert!(binding.matches(&handle.snapshot()));

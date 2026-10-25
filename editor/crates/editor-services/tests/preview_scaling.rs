@@ -175,7 +175,7 @@ fn latest_preview_terminal_events_binding_cancel_and_one_undo_remain_exact() {
                         finished.insert(fact.id, ()).is_none(),
                         "duplicate terminal event"
                     );
-                    match result {
+                    match *result {
                         Ok(JobOutput::Geometry { binding, .. }) => {
                             last = Some(binding);
                         }

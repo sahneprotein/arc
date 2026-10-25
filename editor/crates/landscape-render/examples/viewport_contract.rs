@@ -23,10 +23,8 @@ fn apply_geometry(
     // Bounded drain first, then take the latest cached snapshot. A later Snapshot
     // in the same batch may invalidate an earlier JobFinished geometry result.
     for event in editor.poll(64) {
-        if let ServiceEvent::JobFinished {
-            result: Ok(output @ JobOutput::Geometry { .. }),
-            ..
-        } = event
+        if let ServiceEvent::JobFinished { result, .. } = event
+            && let Ok(output @ JobOutput::Geometry { .. }) = *result
         {
             pending.0 = Some(output);
         }
