@@ -13,8 +13,7 @@
 //!
 //! The editor is entered only on a project whose file is read: a folder that was opened and
 //! is no project yet is set up here first, on the person's word and under a name, and a
-//! project file of an older version is converted here first, with the file as it was kept
-//! beside it. A folder that is not there, or whose project file is refused, stays in the
+//! folder that is not there, or whose project file is refused, stays in the
 //! browser and says why. Nothing is written by looking at a folder.
 //!
 //! A project is content: its file, its levels, its look profile. The game that plays it is
@@ -68,8 +67,8 @@ pub struct Row {
 }
 
 impl Row {
-    /// Whether choosing the row leads anywhere: to the editor, or to the setup or the
-    /// conversion that comes before it. A folder that is gone and a project file that is
+    /// Whether choosing the row leads anywhere: to the editor, or to the
+    /// setup that comes before it. A folder that is gone and a project file that is
     /// refused lead nowhere, and say so.
     pub fn can_open(&self) -> bool {
         !matches!(
@@ -97,21 +96,13 @@ pub enum Pending {
         /// What a setup would do in the folder.
         plan: SetupPlan,
     },
-    /// The folder's project file is of an older version: it is converted.
-    Convert {
-        folder: PathBuf,
-        /// What the reader said of the file.
-        detail: String,
-    },
 }
 
 impl Pending {
     /// The folder it is about: the one that was chosen.
     pub fn folder(&self) -> &Path {
         match self {
-            Self::New { parent: folder, .. }
-            | Self::SetUp { folder, .. }
-            | Self::Convert { folder, .. } => folder,
+            Self::New { parent: folder, .. } | Self::SetUp { folder, .. } => folder,
         }
     }
 }
@@ -123,7 +114,7 @@ pub enum Refusal {
     Missing(PathBuf),
     /// A new project was asked for inside a folder that is a project already.
     AlreadyProject(PathBuf),
-    /// The services refused the folder, its project file, a setup or a conversion.
+    /// The services refused the folder, its project file, or a setup.
     Refused(PathBuf, Diagnostic),
 }
 
@@ -468,20 +459,9 @@ impl Launcher {
             // not opened in its place unasked.
             ProjectInspectionStatus::Ready { .. }
             | ProjectInspectionStatus::MissingStartLevel { .. }
-            | ProjectInspectionStatus::ConversionRequired { .. }
                 if why == FolderFor::New =>
             {
                 self.refusal = Some(Refusal::AlreadyProject(root));
-            }
-            ProjectInspectionStatus::ConversionRequired { problem } => {
-                self.pending = Some(Pending::Convert {
-                    folder: root,
-                    detail: problem
-                        .parameters
-                        .get("detail")
-                        .cloned()
-                        .unwrap_or_default(),
-                });
             }
             // A project whose start level is not in the folder is entered too: on an
             // unsaved map, with the Project settings saying what is missing.
@@ -558,20 +538,7 @@ impl Launcher {
         }
     }
 
-    /// Converts the pending folder's project file, on the person's word, and opens it.
-    /// Whether it was converted.
-    pub fn convert(&mut self) -> bool {
-        let Some(Pending::Convert { folder, .. }) = &self.pending else {
-            return false;
-        };
-        let folder = folder.clone();
-        let mut converted = Project::of_folder(Some(folder.clone()));
-        converted.convert();
-        self.after_the_persons_word(&folder, &converted)
-    }
-
-    /// A project that is ready after a setup or a conversion is opened; one that is not
-    /// says why, and the folder stays pending.
+    /// Enters a project after setup, or reports why the folder stays pending.
     fn after_the_persons_word(&mut self, folder: &Path, project: &Project) -> bool {
         self.refusal = None;
         if matches!(project.state(), ProjectState::Ready { .. }) {
@@ -768,7 +735,7 @@ mod tests {
         // The chosen folder was given the project's folder and nothing else, and the
         // project has its file, its level and its look profile.
         assert_eq!(inside(&chosen), ["Harbour Town", "letter.txt"]);
-        assert_eq!(inside(&root), ["arc-project.json", "assets", "levels"]);
+        assert_eq!(inside(&root), ["assets", "levels", "project.aproj"]);
         assert!(root.join("assets/render/look-v1.json").is_file());
         assert_eq!(
             std::fs::read(chosen.join("letter.txt")).unwrap(),
@@ -823,7 +790,7 @@ mod tests {
             Some(&Refusal::AlreadyProject(root.clone()))
         );
         assert!(again.opening().is_none() && again.pending().is_none());
-        assert_eq!(inside(&root), ["arc-project.json", "assets", "levels"]);
+        assert_eq!(inside(&root), ["assets", "levels", "project.aproj"]);
     }
 
     /// A folder that has what the services take a game's folder to have.
@@ -961,7 +928,7 @@ mod tests {
         assert!(matches!(launcher.refusal(), Some(Refusal::Missing(_))));
         let broken = home.path().join("Broken");
         std::fs::create_dir_all(&broken).unwrap();
-        std::fs::write(broken.join("arc-project.json"), b"{").unwrap();
+        std::fs::write(broken.join("project.aproj"), b"{").unwrap();
         launcher.ask_folder(FolderFor::Open);
         launcher.folder_chosen(Some(broken));
         let Some(Refusal::Refused(_, refusal)) = launcher.refusal() else {
@@ -1019,39 +986,6 @@ mod tests {
     }
 
     #[test]
-    fn an_older_project_file_is_converted_on_the_persons_word_before_it_is_entered() {
-        let home = tempfile::tempdir().unwrap();
-        let folder = home.path().join("Old");
-        std::fs::create_dir_all(folder.join("levels")).unwrap();
-        let old = br#"{"schema":1,"project":{"name":"Old"},"startup":{"start_level":"levels/old.level.json"},"rendering":{"profile":"assets/render/look-v1.json"},"controls":{"move_forward":"W","move_backward":"S","move_left":"A","move_right":"D","jump":"Space","toggle_view":"V","release_cursor":"Escape","look":{"mouse":true,"gamepad_right_stick":true}}}"#;
-        let manifest = folder.join("arc-project.json");
-        std::fs::write(&manifest, old).unwrap();
-        // The level the old file starts with is in the folder, and is a level.
-        let level = serde_json::to_vec_pretty(&scene_data::current_map()).unwrap();
-        std::fs::write(folder.join("levels/old.level.json"), level).unwrap();
-        let mut launcher = launcher_in(home.path());
-
-        launcher.ask_folder(FolderFor::Open);
-        launcher.folder_chosen(Some(folder.clone()));
-        assert!(matches!(launcher.pending(), Some(Pending::Convert { .. })));
-        // Looking converted nothing.
-        assert_eq!(std::fs::read(&manifest).unwrap(), old);
-        assert!(launcher.opening().is_none());
-
-        assert!(launcher.convert());
-        assert!(launcher.pending().is_none());
-        assert_eq!(
-            launcher.opening().unwrap().project_root,
-            folder.canonicalize().unwrap()
-        );
-        // The file as it was is kept beside the new one.
-        assert_eq!(
-            std::fs::read(folder.join("arc-project.json.schema-1.bak")).unwrap(),
-            old
-        );
-    }
-
-    #[test]
     fn the_list_is_most_recent_first_says_what_each_folder_is_now_and_forgets_on_request() {
         let home = tempfile::tempdir().unwrap();
         let first = project_in(home.path(), "First");
@@ -1093,7 +1027,7 @@ mod tests {
         launcher.forget_row(0);
         assert_eq!(names(&launcher), ["First"]);
         assert_eq!(names(&launcher_in(home.path())), ["First"]);
-        assert!(first.join("arc-project.json").is_file());
+        assert!(first.join("project.aproj").is_file());
         assert!(!launcher.open_row(5));
     }
 

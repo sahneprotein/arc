@@ -8,10 +8,7 @@
 //!   setup writes the project file and takes the first level of the folder that can be
 //!   read, or makes a starter level; no file that is there is changed. The level the
 //!   project starts with is opened afterwards.
-//! - A project file of an older version: what converting does, and one button. The editor
-//!   never converts by itself; the file as it was is kept beside the new one.
-//! - A project file that cannot be used: why, and where it is. One of a newer version is
-//!   such a file: there is nothing to convert it with, and no button is offered.
+//! - A project file that cannot be used: why, and where it is.
 //!
 //! The first-run setup says what it would do before it does it: the level the project would
 //! start with, and each level file of the folder that cannot be read, with its reason. If
@@ -116,7 +113,7 @@ pub fn start_level_words(
 }
 
 /// What the first-run setup says it will do, before the person agrees.
-pub const SETUP_HINT: &str = "Setting up writes arc-project.json into this folder. The \
+pub const SETUP_HINT: &str = "Setting up writes project.aproj into this folder. The \
     project starts with the first level in the folder's levels that can be read; if there is \
     none, a starter level is made there. The look profile the game is drawn with is made \
     too if the folder has none. No file that is there is changed.";
@@ -147,12 +144,6 @@ pub fn rejected_words(another_level: bool, count: usize) -> (&'static str, &'sta
         ),
     }
 }
-
-/// What the dialog says of a project file of another version, before the person agrees.
-pub const CONVERT_HINT: &str = "It is of an older version, which this editor can convert. \
-    The editor does not change the file by itself. Converting first keeps the file as it is \
-    beside it, under its name with .schema-N.bak after it, and then writes the version this \
-    editor reads. Its settings are kept.";
 
 /// What the group of the keys says.
 pub const KEYS_HINT: &str = "The keys the game uses. To change one, press its button and then \
@@ -702,10 +693,6 @@ fn set_up(
     }
 }
 
-fn convert(_: On<Activate>, mut project: ResMut<Project>) {
-    project.convert();
-}
-
 fn open_start_level(
     _: On<Activate>,
     mut commands: Commands,
@@ -815,27 +802,6 @@ fn content(project: &Project, look: &LookStatus) -> Vec<Box<dyn SceneList>> {
                     on(set_up)
                 ),
             ]));
-        }
-        ProjectState::NeedsConversion { detail } => {
-            let detail = if detail.is_empty() {
-                String::new()
-            } else {
-                format!("What the reader said: {detail}.")
-            };
-            rows.push(Box::new(bsn_list![
-                label("This project file is of an older version"),
-                label_dim(CONVERT_HINT),
-                label_dim(detail),
-            ]));
-            rows.push(shown("Folder", folder));
-            rows.push(Box::new(bsn_list![(
-                @FeathersButton {
-                    @caption: bsn! { Text("Convert project file") ThemedText },
-                    @variant: ButtonVariant::Primary,
-                }
-                Node { align_self: AlignSelf::FlexStart, flex_shrink: 0.0 }
-                on(convert)
-            )]));
         }
         ProjectState::Refused(refusal) => {
             let words = wording::project(&refusal.code, |key| {
@@ -998,7 +964,7 @@ type Built = (
 /// Shows the dialog while it is open, and rebuilds its content when what was found of the
 /// project, or what the editor knows of the look profile, changed. Opens the dialog once by
 /// itself when the folder needs the person's word: it has no project file yet, or one that
-/// waits to be converted.
+/// is refused.
 pub(crate) fn show_project(
     mut commands: Commands,
     (project, look): (Res<Project>, Res<LookStatus>),
@@ -1181,13 +1147,13 @@ mod tests {
             .with("profile", "assets/render/look-v1.json")
             .with("cause", "look.decode");
         assert_eq!(start_level_words(true, Some(&profile)), None);
-        let manifest = Diagnostic::new("project.read").with("path", "/p/arc-project.json");
+        let manifest = Diagnostic::new("project.read").with("path", "/p/project.aproj");
         assert_eq!(start_level_words(true, Some(&manifest)), None);
     }
 
     #[test]
-    fn what_setting_up_and_converting_do_is_said_before_the_person_agrees() {
-        assert!(SETUP_HINT.contains("arc-project.json"));
+    fn what_setting_up_does_is_said_before_the_person_agrees() {
+        assert!(SETUP_HINT.contains("project.aproj"));
         assert!(SETUP_HINT.contains("No file that is there is changed"));
         assert!(SETUP_HINT.contains("look profile") && SETUP_HINT.contains("has none"));
         let (title, remedy) = look_missing_words("assets/render/look-v1.json");
@@ -1195,8 +1161,6 @@ mod tests {
         assert!(remedy.contains(MAKE_LOOK) && remedy.contains("assets/render/look-v1.json"));
         assert!(remedy.contains("Nothing that is there is written over"));
         assert!(remedy.contains("project file is not changed"));
-        assert!(CONVERT_HINT.contains("does not change the file by itself"));
-        assert!(CONVERT_HINT.contains("older version"));
         // The button of a folder whose levels cannot be read says what pressing it makes.
         assert_eq!(set_up_caption(false), "Set up project");
         assert_eq!(set_up_caption(true), "Set up with a new starter level");
@@ -1207,7 +1171,6 @@ mod tests {
         let (title, follows) = rejected_words(true, 2);
         assert_eq!(title, "Level files in this folder cannot be read");
         assert!(follows.contains("starts with the level that can be read"));
-        assert!(CONVERT_HINT.contains(".schema-N.bak"));
         assert!(PLANNED_HINT.contains("does not read these yet"));
         // The local test clients are named as that, and said to be windows on this machine
         // and the saved number.

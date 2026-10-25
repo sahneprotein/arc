@@ -20,7 +20,7 @@
 //! `arc-editor [--level <file>] [--package <directory>] [--game <folder>]`: the level file is
 //! opened if it exists. Otherwise the editor starts with the game's current map, converted, and
 //! saves it there. Without `--level` the file is the level the game's project starts with
-//! (`arc-project.json` in the game's folder), and without a project
+//! (`project.aproj` in the game's folder), and without a project
 //! `levels/current-map.level.json`.
 //!
 //! `--game` names the game's folder, the one its server and client are built in. With it the
@@ -160,9 +160,8 @@ fn main() -> AppExit {
         Launcher::off()
     };
     // The project of the game's folder, as it is on disk: nothing is written by looking. A
-    // folder without a project file, or with one of an older version, is the person's to
-    // set up or to convert, in the Project settings. A scripted check may name another
-    // folder.
+    // folder without a project file is the person's to set up in the Project settings.
+    // A scripted check may name another folder.
     let project = Project::of_folder(check::scripted_project().or_else(|| game.clone()));
     // The level: the one that was named; without a name, the one the project starts with;
     // without a project, the file an editor without a project always used. Behind the

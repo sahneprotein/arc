@@ -26,7 +26,8 @@
 //! only where nothing has that name. The manifest is not written for it.
 
 use super::{
-    create_exclusive, hold, inside, project_error, project_path, read_limited, replace_atomic,
+    create_exclusive, hold, inside, project_error, read_limited, replace_atomic,
+    resolve_project_path,
 };
 use crate::look::{load_look_profile, parse_look_profile, LoadedLook};
 use project_spec::{ControlSettings, ProjectConfig};
@@ -191,8 +192,9 @@ fn save_with(
     edit: &SettingsEdit,
     before_replace: impl FnOnce(),
 ) -> Result<ProjectConfig, Diagnostic> {
-    let path = project_path(root);
+    let path = resolve_project_path(root)?;
     inside(root, &path)?;
+    super::load_project(root)?;
     let _held = hold(&path)?;
     let changed = || Diagnostic::new("project.changed_since_read").with("path", path.display());
     let bytes = read_limited(&path, project_spec::MAX_FILE_BYTES)?;
@@ -223,7 +225,7 @@ fn save_with(
     }
     before_replace();
     let unchanged = read_limited(&path, project_spec::MAX_FILE_BYTES).is_ok_and(|now| now == bytes);
-    if !unchanged {
+    if !unchanged || resolve_project_path(root)? != path {
         return Err(changed());
     }
     replace_atomic(&path, &written)?;
@@ -232,6 +234,7 @@ fn save_with(
 
 #[cfg(test)]
 mod tests {
+    use super::super::project_path;
     use super::*;
     use crate::look::tests::V1;
 
@@ -397,7 +400,7 @@ mod tests {
             }
         }
         assert_eq!(manifest(root), before);
-        assert!(!root.join("arc-project.json.lock").exists());
+        assert!(!root.join("project.aproj.lock").exists());
     }
 
     #[test]
@@ -555,7 +558,7 @@ mod tests {
         assert_eq!(fs::read(root.join(named)).unwrap(), DEFAULT_LOOK_PROFILE);
         assert_eq!(look_profile(root, named).unwrap(), made);
         assert_eq!(manifest(root), before);
-        assert_eq!(names(root), ["arc-project.json", "assets"]);
+        assert_eq!(names(root), ["assets", "project.aproj"]);
         assert_eq!(names(&root.join(LOOK_FOLDER)), ["look-v1.json"]);
 
         // Another name the manifest could have for it, in a folder of its own.

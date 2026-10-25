@@ -5,8 +5,8 @@
 //! path is not UTF-8 is still allowed by the editor.
 
 use super::{
-    inside, io_problem, level_problem, load_project, plan_setup, project_path, read_limited,
-    start_level_path, SetupPlan,
+    inside, io_problem, level_problem, load_project, plan_setup, read_limited,
+    resolve_project_path, start_level_path, SetupPlan,
 };
 use crate::persistence::PathLock;
 use directories::ProjectDirs;
@@ -46,8 +46,6 @@ pub enum ProjectInspectionStatus {
     MissingStartLevel { name: String, start_level: PathBuf },
     /// No manifest exists; the normal setup flow can inspect/create one.
     SetupRequired { plan: SetupPlan },
-    /// The manifest has a schema this editor can explicitly convert.
-    ConversionRequired { problem: Diagnostic },
     /// The folder or manifest cannot be used, with the same diagnostic as project services.
     Refused { problem: Diagnostic },
 }
@@ -82,7 +80,10 @@ fn inspect_existing_folder(root: &Path) -> ProjectInspectionStatus {
             };
         }
     };
-    let manifest = project_path(&canonical);
+    let manifest = match resolve_project_path(&canonical) {
+        Ok(path) => path,
+        Err(problem) => return ProjectInspectionStatus::Refused { problem },
+    };
     if let Err(problem) = inside(&canonical, &manifest) {
         return ProjectInspectionStatus::Refused { problem };
     }
@@ -130,9 +131,6 @@ fn inspect_existing_folder(root: &Path) -> ProjectInspectionStatus {
             },
             Err(problem) => ProjectInspectionStatus::Refused { problem },
         },
-        Err(problem) if problem.code == "project.convert_required" => {
-            ProjectInspectionStatus::ConversionRequired { problem }
-        }
         Err(problem) => ProjectInspectionStatus::Refused { problem },
     }
 }
@@ -249,8 +247,7 @@ pub fn startup_context_using(
         ProjectInspectionStatus::SetupRequired { .. } => {
             return Err(Diagnostic::new("project.setup_required").with("path", root.display()));
         }
-        ProjectInspectionStatus::ConversionRequired { problem }
-        | ProjectInspectionStatus::Refused { problem } => return Err(problem),
+        ProjectInspectionStatus::Refused { problem } => return Err(problem),
     };
     let project_root =
         fs::canonicalize(root).map_err(|error| io_problem("project.read", root, error))?;
@@ -682,8 +679,8 @@ fn write_recents(path: &Path, entries: Vec<RecentEntry>) -> Result<(), Diagnosti
 
 #[cfg(test)]
 mod tests {
+    use super::super::project_path;
     use super::*;
-    use project_spec::ProjectConfig;
     use std::{fs, path::PathBuf};
 
     fn setup_project(root: &Path, name: &str) {
@@ -713,24 +710,6 @@ mod tests {
         };
         assert_eq!(name, "Ready");
         assert!(start_level.is_file());
-
-        let conversion = folder.path().join("old");
-        fs::create_dir_all(&conversion).unwrap();
-        let config = ProjectConfig::new("Old");
-        let old = project_spec::ProjectConfigV1 {
-            schema: 1,
-            project: config.project,
-            startup: config.startup,
-            rendering: config.rendering,
-            controls: config.controls,
-        };
-        fs::write(project_path(&conversion), serde_json::to_vec(&old).unwrap()).unwrap();
-        let prior = fs::read(project_path(&conversion)).unwrap();
-        assert!(matches!(
-            inspect(&conversion).status,
-            ProjectInspectionStatus::ConversionRequired { .. }
-        ));
-        assert_eq!(fs::read(project_path(&conversion)).unwrap(), prior);
 
         let refused = folder.path().join("refused");
         fs::create_dir_all(&refused).unwrap();

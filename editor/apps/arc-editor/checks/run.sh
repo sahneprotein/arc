@@ -956,17 +956,16 @@ unset ARC_EDITOR_CHECK_PARTICLES
 
 # The project's settings. Without a project folder they are to be had from the Level menu and
 # say that there is none. With a folder that has no project file they open by themselves:
-# setting up writes arc-project.json, a starter level (the arena of 32 objects, not the
+# setting up writes project.aproj, a starter level (the arena of 32 objects, not the
 # game's map of 22 the editor has without a level) and the look profile, and the editor
 # opens that level;
 # started again on the same folder the editor finds the project, opens its start level by
-# itself and shows nothing unasked. A project file of an older version is never changed by
-# looking: converting is the person's to ask for, and keeps the old file beside the new one.
+# itself and shows nothing unasked. Looking at the project never changes its files.
 check project-none 'choose=Level>Project settings' 'project=NoFolder' 'project_dialog=true' 'objects=22' 'problem=none'
 ARC_EDITOR_CHECK_PROJECT=project; export ARC_EDITOR_CHECK_PROJECT
 check project-setup 'click-button=Set up project,click-button=Close settings' \
     'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'objects=32' 'question=No' 'problem=none'
-[ -s "$work/project-setup/project/arc-project.json" ] && [ -s "$work/project-setup/project/levels/first-level.level.json" ] \
+[ -s "$work/project-setup/project/project.aproj" ] && [ -s "$work/project-setup/project/levels/first-level.level.json" ] \
     && [ -s "$work/project-setup/project/assets/render/look-v1.json" ] \
     || { wanted project-setup && { echo "project-setup: FAILED, the project file, the starter level or the look profile was not written"; failed=1; }; }
 # First-run setup must make more than a readable level: the starter has to cook into a
@@ -974,25 +973,9 @@ check project-setup 'click-button=Set up project,click-button=Close settings' \
 check project-starter-cooks 'click-button=Set up project,click-button=Close settings,choose=Level>Cook,click-button=Play,click-item=Check cooked level' \
     'project=Ready' 'has_file=true' 'cook_needed=false' 'play_check=passed' 'problem=none'
 check project-setup-again 'click-row=7' 'project=Ready' 'project_dialog=false' 'has_file=true' 'dirty=false' 'selected=Some\("Platform"\)'
-if wanted project-convert; then
-    mkdir -p "$work/project-convert/project"
-    printf '%s' '{"schema":1,"project":{"name":"Old"},"startup":{"start_level":"levels/old.level.json"},"rendering":{"profile":"assets/render/look-v1.json"},"controls":{"move_forward":"W","move_backward":"S","move_left":"A","move_right":"D","jump":"Space","toggle_view":"V","release_cursor":"Escape","look":{"mouse":true,"gamepad_right_stick":true}}}' \
-        > "$work/project-convert/project/arc-project.json"
-    cp "$work/project-convert/project/arc-project.json" "$work/project-convert.before"
-fi
-check project-convert 'click-row=11' 'project=NeedsConversion' 'project_dialog=true' 'has_file=false'
-if wanted project-convert; then
-    cmp -s "$work/project-convert/project/arc-project.json" "$work/project-convert.before" \
-        || { echo "project-convert: FAILED, the old project file was changed without being asked"; failed=1; }
-fi
-check project-convert-again 'click-button=Convert project file' 'project=Ready' 'project_dialog=true' 'problem=none'
-if wanted project-convert-again; then
-    cmp -s "$work/project-convert/project/arc-project.json.schema-1.bak" "$work/project-convert.before" \
-        || { echo "project-convert-again: FAILED, the old project file was not kept as a backup"; failed=1; }
-fi
 # A folder whose only level file cannot be read is not set up over it: the button says that
 # it makes a new starter level, and the old file is as it was afterwards. A project file of
-# a newer version is refused, shown, and neither converted nor changed.
+# an unsupported version is refused, shown, and unchanged.
 if wanted project-legacy; then
     mkdir -p "$work/project-legacy/project/levels"
     printf 'not a level' > "$work/project-legacy/project/levels/current-map.level.json"
@@ -1006,12 +989,12 @@ fi
 if wanted project-newer; then
     mkdir -p "$work/project-newer/project"
     printf '%s' '{"schema":3,"project":{"name":"Newer"},"startup":{"start_level":"levels/a.level.json"},"rendering":{"profile":"assets/render/look-v1.json"},"controls":{"move_forward":"W","move_backward":"S","move_left":"A","move_right":"D","jump":"Space","toggle_view":"V","release_cursor":"Escape","look":{"mouse":true,"gamepad_right_stick":true}},"planned":{"multiplayer":{"clients":null,"bots":null,"network_conditions":null,"start_at":null,"zone":null},"gameplay":{"mode":null,"team_count":null,"respawn_seconds":null,"weapon_set":null}}}' \
-        > "$work/project-newer/project/arc-project.json"
-    cp "$work/project-newer/project/arc-project.json" "$work/project-newer.before"
+        > "$work/project-newer/project/project.aproj"
+    cp "$work/project-newer/project/project.aproj" "$work/project-newer.before"
 fi
 check project-newer 'click-row=11' 'project=Refused:project\.schema_unsupported' 'project_dialog=true' 'has_file=false'
 if wanted project-newer; then
-    cmp -s "$work/project-newer/project/arc-project.json" "$work/project-newer.before" \
+    cmp -s "$work/project-newer/project/project.aproj" "$work/project-newer.before" \
         && [ "$(ls "$work/project-newer/project" | wc -l | tr -d ' ')" = 1 ] \
         || { echo "project-newer: FAILED, the newer project file was changed or something was written beside it"; failed=1; }
 fi
@@ -1030,7 +1013,7 @@ SAVED_SETTINGS='project_keys=T,S,A,D,Space,V,Escape project_look=mouse project_p
 check project-settings 'click-button=Set up project,click-button=Use,scroll-project=300,click-button=W,key=t,click-checkbox=Gamepad right stick,click-button=Save project settings' \
     'project=Ready' 'project_dialog=true' 'project_draft=Unchanged project_saved=true' "$SAVED_SETTINGS" 'problem=none'
 if wanted project-settings; then
-    manifest="$work/project-settings/project/arc-project.json"
+    manifest="$work/project-settings/project/project.aproj"
     grep -q '"move_forward": "T"' "$manifest" && grep -q '"jump": "Space"' "$manifest" \
         && grep -q '"mouse": true' "$manifest" && grep -q '"gamepad_right_stick": false' "$manifest" \
         && grep -q '"profile": "assets/render/dusk.json"' "$manifest" && grep -q '"clients": null' "$manifest" \
@@ -1040,7 +1023,7 @@ fi
 check project-settings-again 'choose=Level>Project settings' \
     'project=Ready' 'project_dialog=true' 'project_draft=Unchanged project_saved=false' "$SAVED_SETTINGS" 'problem=none'
 if wanted project-settings-again; then
-    cmp -s "$work/project-settings/project/arc-project.json" "$work/project-settings.saved" \
+    cmp -s "$work/project-settings/project/project.aproj" "$work/project-settings.saved" \
         || { echo "project-settings-again: FAILED, looking at the settings changed the project file"; failed=1; }
 fi
 # Game look is drawn from the look profile the project names, and a profile that is saved in
@@ -1146,8 +1129,8 @@ with_game runs check project-clients "click-button=Set up project,scroll-project
     'project=Ready' 'project_draft=Unchanged project_saved=true' 'project_clients=3' \
     'play_end=play\.stopped' 'play_server_exit=0' "$THREE_CLIENTS" 'play_cleanup=\[\]' 'problem=none'
 if wanted project-clients; then
-    grep -q '"clients": 3' "$work/project-clients/project/arc-project.json" \
-        && grep -q '"bots": null' "$work/project-clients/project/arc-project.json" \
+    grep -q '"clients": 3' "$work/project-clients/project/project.aproj" \
+        && grep -q '"bots": null' "$work/project-clients/project/project.aproj" \
         || { echo "project-clients: FAILED, the project file does not hold three clients and the planned settings as they were"; failed=1; }
 fi
 with_game runs check project-clients-again "$CLIENTS_RUN" \
@@ -1157,7 +1140,7 @@ with_game runs check project-clients-unnamed "click-button=Set up project,scroll
     'project=Ready' 'project_draft=Unchanged project_saved=false' 'project_clients=unnamed' \
     'play_end=play\.stopped' 'play_clients=1 play_client_ids=\[1\] play_client_pids=1 play_client_exits=\[1:0\]' 'problem=none'
 if wanted project-clients-unnamed; then
-    grep -q '"clients": null' "$work/project-clients-unnamed/project/arc-project.json" \
+    grep -q '"clients": null' "$work/project-clients-unnamed/project/project.aproj" \
         || { echo "project-clients-unnamed: FAILED, the project file names a number nobody set"; failed=1; }
 fi
 # Closing the editor with project settings that were changed and not saved asks first, as
@@ -1170,9 +1153,9 @@ check project-close "click-button=Set up project,$CHANGE_KEY,click-button=Keep e
     'project=Ready' 'project_dialog=false' 'question=No' 'shutdown=No' 'project_draft=Changed' \
     'project_keys=T,S,A,D,Space,V,Escape'
 if wanted project-close; then
-    grep -q '"move_forward": "W"' "$work/project-close/project/arc-project.json" \
+    grep -q '"move_forward": "W"' "$work/project-close/project/project.aproj" \
         || { echo "project-close: FAILED, the project file was written though nothing was saved"; failed=1; }
-    cp "$work/project-close/project/arc-project.json" "$work/project-close.before"
+    cp "$work/project-close/project/project.aproj" "$work/project-close.before"
 fi
 # project_exits <name> <steps> <written: yes|no>: the editor, started on the folder of
 # project-close, must end by itself with status 0 before the check's own end, and the
@@ -1181,7 +1164,7 @@ project_exits() {
     name="$1"; steps="$2"; written="$3"
     wanted "$name" || return 0
     folder="$work/${name%%-again*}"
-    manifest="$folder/project/arc-project.json"
+    manifest="$folder/project/project.aproj"
     output="$(cd "$folder" && ARC_EDITOR_CHECK="$folder/$name.png" ARC_EDITOR_CHECK_STEPS="$steps" \
         limit 120 "$editor" 2>&1)"
     status=$?
@@ -1216,8 +1199,8 @@ check project-draft-shared "$SET_UP,click-button=Space,key=w,click-button=Save p
     'project=Ready' 'project_draft=SharedKey project_saved=false' 'project_keys=W,S,A,D,W,V,Escape'
 for name in project-draft-discard project-draft-shared; do
     if wanted "$name"; then
-        grep -q '"move_forward": "W"' "$work/$name/project/arc-project.json" \
-            && grep -q '"jump": "Space"' "$work/$name/project/arc-project.json" \
+        grep -q '"move_forward": "W"' "$work/$name/project/project.aproj" \
+            && grep -q '"jump": "Space"' "$work/$name/project/project.aproj" \
             || { echo "$name: FAILED, the project file was written though nothing was saved"; failed=1; }
     fi
 done
@@ -1228,7 +1211,7 @@ done
 # content where it is thirty times, so that the file is written first.
 renamed_meanwhile() {
     wanted "$1" || return 0
-    manifest="$work/$1/project/arc-project.json"
+    manifest="$work/$1/project/project.aproj"
     (
         tries=0
         while [ ! -s "$manifest" ] && [ "$tries" -lt 600 ]; do sleep 0.05; tries=$((tries + 1)); done
@@ -1239,8 +1222,8 @@ renamed_meanwhile() {
 # renamed_and <name> <key>: whether the project file of the case holds the other program's
 # name and this key for moving forward.
 renamed_and() {
-    grep -q '"name": "Renamed"' "$work/$1/project/arc-project.json" \
-        && grep -q "\"move_forward\": \"$2\"" "$work/$1/project/arc-project.json"
+    grep -q '"name": "Renamed"' "$work/$1/project/project.aproj" \
+        && grep -q "\"move_forward\": \"$2\"" "$work/$1/project/project.aproj"
 }
 MEANWHILE=''
 count=0
@@ -1270,7 +1253,7 @@ fi
 check project-draft-close-shared "$SET_UP,click-button=Space,key=w,click-button=Close settings,close,click-button=Save and close" \
     'project=Ready' 'project_dialog=true' 'question=No' 'shutdown=No' 'project_draft=SharedKey project_saved=false'
 if wanted project-draft-close-shared; then
-    grep -q '"jump": "Space"' "$work/project-draft-close-shared/project/arc-project.json" \
+    grep -q '"jump": "Space"' "$work/project-draft-close-shared/project/project.aproj" \
         || { echo "project-draft-close-shared: FAILED, the project file was written though nothing was saved"; failed=1; }
 fi
 renamed_meanwhile project-draft-close-conflict
@@ -1447,7 +1430,7 @@ with_browser check browser-new-again-made "pick-folder=$DOCS,click-button=New Pr
     'look=loaded:3abf9a2f' 'view=Editor' 'problem=none'
 if wanted browser-new-again-made; then
     [ "$(ls -A "$DOCS" | tr '\n' ' ')" = "Harbour letter.txt " ] && [ ! -s "$DOCS/letter.txt" ] \
-        && [ -f "$HARBOUR/arc-project.json" ] && [ -f "$HARBOUR/assets/render/look-v1.json" ] \
+        && [ -f "$HARBOUR/project.aproj" ] && [ -f "$HARBOUR/assets/render/look-v1.json" ] \
         && [ -d "$HARBOUR/cooked" ] && [ ! -e "$work/browser-new/cooked" ] && [ ! -e "$DOCS/cooked" ] \
         && grep -q 'Harbour' "$work/browser-new/projects.json" \
         || { echo "browser-new-again-made: FAILED, the project, its look profile, its cooked level or the list is not where it belongs, or the chosen folder was given more than the project's folder"; failed=1; }
@@ -1471,7 +1454,7 @@ with_browser check browser-new-again-inside "pick-folder=$HARBOUR,click-button=N
     'launcher=shown' 'launcher_pending=none launcher_refusal=already' 'launcher_entered=0' 'project=NoFolder'
 if wanted browser-new-again-over || wanted browser-new-again-inside; then
     [ "$(ls -A "$DOCS" | tr '\n' ' ')" = "Harbour letter.txt " ] \
-        && [ "$(ls -A "$HARBOUR" | tr '\n' ' ')" = "arc-project.json assets cooked levels " ] \
+        && [ "$(ls -A "$HARBOUR" | tr '\n' ' ')" = "assets cooked levels project.aproj " ] \
         || { echo "browser-new-again-over: FAILED, a new project that was refused wrote something"; failed=1; }
 fi
 # A project whose look profile is not in its folder: it is entered with the Project settings
@@ -1480,7 +1463,7 @@ fi
 # file is not written, and Game look is read from the project at once.
 if wanted browser-new-again-nolook; then
     rm -f "$HARBOUR/assets/render/look-v1.json"
-    cp "$HARBOUR/arc-project.json" "$work/browser-new/project-before.json"
+    cp "$HARBOUR/project.aproj" "$work/browser-new/project-before.json"
 fi
 with_browser check browser-new-again-nolook 'key=enter' \
     "$ENTERED" 'launcher_entered=1' 'project=Ready' 'project_dialog=true' 'look=refused:look\.missing' 'problem=none'
@@ -1492,7 +1475,7 @@ with_browser check browser-new-again-nolook-made 'key=enter,click-button=Make th
     "$ENTERED" 'project=Ready' 'look=loaded:3abf9a2f' 'problem=none'
 if wanted browser-new-again-nolook-made; then
     cmp -s "$HARBOUR/assets/render/look-v1.json" "$look" \
-        && cmp -s "$HARBOUR/arc-project.json" "$work/browser-new/project-before.json" \
+        && cmp -s "$HARBOUR/project.aproj" "$work/browser-new/project-before.json" \
         || { echo "browser-new-again-nolook-made: FAILED, the default look profile was not made, or the project file was written"; failed=1; }
 fi
 # The game's folder is the editor's one setting for every project, kept beside the list. A

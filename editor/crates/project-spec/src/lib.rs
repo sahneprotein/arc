@@ -1,20 +1,29 @@
 //! The versioned, renderer-independent project manifest shared by the editor and game.
 //!
-//! `arc-project.json` lives at the game/project root. It selects the starter level,
+//! The unique `.aproj` lives at the game/project root. It selects the starter level,
 //! renderer profile and current keyboard controls. The Play and gameplay groups are
 //! present as typed, reserved settings so the UI can show the planned shape while keeping
 //! those controls disabled until the game implements them.
 //!
-//! Conversion is explicit: callers parse the stored schema, run every numbered migration
-//! in order, then write the current schema to a new file or preserve a backup before
-//! replacing the old one. Parsing never silently upgrades or writes.
-
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-pub const FILE_NAME: &str = "arc-project.json";
-pub const SCHEMA: u32 = 2;
+mod discovery;
+pub use discovery::{project_root_from_file, resolve_project_path, DiscoveryError};
+
+/// Default name used by setup. Existing files may be renamed.
+pub const FILE_NAME: &str = "project.aproj";
+pub const EXTENSION: &str = "aproj";
+pub const SCHEMA: u32 = 1;
 pub const MAX_FILE_BYTES: usize = 32 * 1024;
+
+/// Whether a path names a project file. Case insensitive on every platform so discovery
+/// never silently selects a different project after a folder is moved between systems.
+pub fn is_project_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(EXTENSION))
+}
 
 /// Every name a key binding may have, as the game reads it: case matters, and nothing else
 /// is a key. The game's client turns exactly these into keys and refuses to start on any
@@ -84,19 +93,6 @@ pub struct ProjectConfig {
     /// These fields are deliberately persisted as a forward-looking contract, but have
     /// no effect on a run until the coordinator and game implement them.
     pub planned: PlannedSettings,
-}
-
-/// The project manifest written before the planned settings were formally reserved.
-/// The converter to schema 2 supplies empty planned sections and preserves every live
-/// field verbatim.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProjectConfigV1 {
-    pub schema: u32,
-    pub project: ProjectIdentity,
-    pub startup: StartupSettings,
-    pub rendering: RenderingSettings,
-    pub controls: ControlSettings,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -251,7 +247,6 @@ pub enum ProjectError {
         first: &'static str,
         second: &'static str,
     },
-    NoConverter(u32),
 }
 
 impl std::fmt::Display for ProjectError {
@@ -260,28 +255,19 @@ impl std::fmt::Display for ProjectError {
             Self::TooLarge => write!(f, "project file exceeds {MAX_FILE_BYTES} bytes"),
             Self::Decode(error) => write!(f, "project file is not valid JSON: {error}"),
             Self::Schema { expected, found } => {
-                write!(f, "project schema {found} needs conversion to {expected}")
+                write!(f, "unsupported project schema {found}; expected {expected}")
             }
             Self::Value(field) => write!(f, "invalid project field {field}"),
             Self::SharedKey { first, second } => {
                 write!(f, "project fields {first} and {second} name the same key")
             }
-            Self::NoConverter(schema) => write!(f, "no converter from project schema {schema}"),
         }
     }
 }
 
 impl std::error::Error for ProjectError {}
 
-/// Whether [`convert`] has a converter from this schema to the current one: it is an older
-/// schema this crate knows. The current schema needs none, and a newer or unknown one has
-/// none. A caller that offers conversion asks this first, so that it never offers one that
-/// cannot be done.
-pub fn can_convert(schema: u32) -> bool {
-    (1..SCHEMA).contains(&schema)
-}
-
-/// Reads a bounded current-schema project manifest. It never performs conversion or I/O.
+/// Reads a bounded current-schema project manifest. It performs no I/O and refuses every other schema.
 pub fn decode(bytes: &[u8]) -> Result<ProjectConfig, ProjectError> {
     if bytes.len() > MAX_FILE_BYTES {
         return Err(ProjectError::TooLarge);
@@ -373,46 +359,39 @@ pub fn canonical_bytes(config: &ProjectConfig) -> Result<Vec<u8>, ProjectError> 
     Ok(bytes)
 }
 
-/// Converts one version at a time. Schema 1 to 2 adds reserved, inactive Play and gameplay
-/// groups; the project's live settings and level selection are preserved.
-pub fn convert(value: serde_json::Value) -> Result<ProjectConfig, ProjectError> {
-    let schema = value
-        .get("schema")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|n| u32::try_from(n).ok())
-        .ok_or(ProjectError::Value("schema"))?;
-    match schema {
-        1 => {
-            let old: ProjectConfigV1 = serde_json::from_value(value)
-                .map_err(|error| ProjectError::Decode(error.to_string()))?;
-            if old.schema != 1 {
-                return Err(ProjectError::Schema {
-                    expected: 1,
-                    found: old.schema,
-                });
-            }
-            let mut converted = ProjectConfig::new(old.project.name.clone());
-            converted.schema = 2;
-            converted.project = old.project;
-            converted.startup = old.startup;
-            converted.rendering = old.rendering;
-            converted.controls = old.controls;
-            validate(&converted)?;
-            Ok(converted)
-        }
-        SCHEMA => {
-            let config: ProjectConfig = serde_json::from_value(value)
-                .map_err(|error| ProjectError::Decode(error.to_string()))?;
-            validate(&config)?;
-            Ok(config)
-        }
-        other => Err(ProjectError::NoConverter(other)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_extension_is_case_insensitive_and_does_not_match_backups() {
+        assert_eq!(EXTENSION, "aproj");
+        for name in [
+            FILE_NAME,
+            "Harbour.aproj",
+            "Harbour.APROJ",
+            "folder with spaces/A.aproj",
+        ] {
+            assert!(is_project_file(Path::new(name)), "{name}");
+        }
+        for name in ["notes.json", "project.aproj.bak", "project.aproj.lock"] {
+            assert!(!is_project_file(Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn only_schema_one_is_accepted() {
+        assert_eq!(SCHEMA, 1);
+        assert_eq!(FILE_NAME, "project.aproj");
+        let mut value = serde_json::to_value(ProjectConfig::new("Arc Game")).unwrap();
+        for found in [0, 2, 3, u32::MAX] {
+            value["schema"] = found.into();
+            assert_eq!(
+                decode(&serde_json::to_vec(&value).unwrap()),
+                Err(ProjectError::Schema { expected: 1, found })
+            );
+        }
+    }
 
     #[test]
     fn defaults_describe_the_live_controls_and_keep_future_settings_empty() {
@@ -431,58 +410,6 @@ mod tests {
         assert!(first.ends_with(b"}\n"));
         assert_eq!(decode(&first).unwrap(), config);
         assert_eq!(canonical_bytes(&decode(&first).unwrap()).unwrap(), first);
-    }
-
-    #[test]
-    fn conversion_dispatches_by_schema_and_migrates_v1_without_losing_live_settings() {
-        let value = serde_json::to_value(ProjectConfig::new("Arc Game")).unwrap();
-        assert_eq!(
-            convert(value.clone()).unwrap(),
-            ProjectConfig::new("Arc Game")
-        );
-        let mut old = ProjectConfig::new("Arc Game");
-        old.schema = 1;
-        let old = ProjectConfigV1 {
-            schema: 1,
-            project: old.project,
-            startup: StartupSettings {
-                start_level: "levels/legacy.level.json".into(),
-            },
-            rendering: old.rendering,
-            controls: old.controls,
-        };
-        let converted = convert(serde_json::to_value(old).unwrap()).unwrap();
-        assert_eq!(converted.schema, 2);
-        assert_eq!(converted.startup.start_level, "levels/legacy.level.json");
-        assert_eq!(converted.controls.jump, "Space");
-        assert!(converted.planned.multiplayer.clients.is_none());
-
-        let mut unknown = value;
-        unknown["schema"] = 0.into();
-        assert_eq!(convert(unknown), Err(ProjectError::NoConverter(0)));
-    }
-
-    #[test]
-    fn only_an_older_known_schema_is_one_that_can_be_converted() {
-        assert!(can_convert(1));
-        // The current schema needs no conversion, and no other has a converter.
-        assert!(!can_convert(SCHEMA));
-        assert!(!can_convert(0));
-        assert!(!can_convert(SCHEMA + 1));
-        // What is said to be convertible is converted, and what is not is refused.
-        let mut newer = serde_json::to_value(ProjectConfig::new("Arc Game")).unwrap();
-        newer["schema"] = (SCHEMA + 1).into();
-        assert_eq!(
-            convert(newer.clone()),
-            Err(ProjectError::NoConverter(SCHEMA + 1))
-        );
-        assert_eq!(
-            decode(&serde_json::to_vec(&newer).unwrap()),
-            Err(ProjectError::Schema {
-                expected: SCHEMA,
-                found: SCHEMA + 1
-            })
-        );
     }
 
     #[test]
