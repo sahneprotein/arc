@@ -12,3 +12,9 @@ The neutral palette, accent, axis colours, control sizes and text sizes are the 
 engine's Feathers toolkit at this branch's base (`crates/bevy_feathers/src/palette.rs`,
 `dark_theme.rs`, `constants.rs`). Tokens whose usage note says "Arc addition" are the editor's
 own.
+
+## Plans
+
+`roadmap.md` is the order of the work on the editor and the game from 2026-10-25 on, with
+what each milestone must show before it counts as done. `history/` keeps earlier plans as the
+record of their time.

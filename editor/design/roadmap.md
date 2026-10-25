@@ -1,0 +1,179 @@
+# Roadmap: the Arc editor and the game, to production
+
+Written on 2026-10-25. It replaces `history/2026-10-09-play-and-production-roadmap.md`,
+which stays as the record of what was built and checked up to 2026-10-13, with its evidence.
+This document holds the order of the work from now on and what each step must show before
+it counts as done. What is decided says so and names who decided it and when; everything
+else is proposed.
+
+The product is two things that ship together: the game, a server-authoritative zoned online
+game with real-time combat (repository `arc-game`, design in its
+`docs/superpowers/specs/2026-10-03-foundation-design.md`), and the editor its levels are
+made in (the cargo workspace `editor/` of the engine fork `arc`).
+
+## Decided
+
+- **One project file, `.aproj`, and no legacy.** A project is the folder of its `.aproj`
+  file; the file holds everything the project is, and the editor starts from it. No project
+  exists yet, so nothing older is read, converted or kept compatible: the editor and the
+  game know `.aproj` at schema version 1 and refuse anything else. Owner, 2026-10-25.
+- **Server authority.** The server accepts inputs, never positions; every new message,
+  replicated component and handshake field is reviewed against that (the game's `CLAUDE.md`,
+  "Server authority").
+- **What the game loads is a cooked package**, identified by the hash of its manifest,
+  verified before use, and compared by client and server in the handshake. The editor's
+  source files are never read by the game.
+- **Evidence.** A step is done when what it claims was run and the run is recorded: the
+  command, the build it ran on, the counts, and what was not run. Something that is reasoned
+  but not run is said to be reasoned.
+
+## Where things are on 2026-10-25
+
+| Repository | Branch | Holds | State |
+|---|---|---|---|
+| arc | `arc/0.19` at `bd0883094` | The engine, Bevy 0.19.1 and the carried patch; the game's pin | Mainline |
+| arc | `codex/play-backend` at `af2234196`, 80 commits over `arc/0.19` | The editor: levels, landscape sculpt/paint/rules, objects with multi-selection and snapping, review, particles tool with GPU preview, Game look, project browser and settings, Play in the game's window with local test clients | Pushed, not merged. The local worktree adds switching projects from the Level menu (not yet committed) |
+| arc | `codex/aproj` | `.aproj` in `project-spec` and the editor's services | Local, in progress |
+| arc-game | `main` at `3657f21` | Foundation (workspace, arc pin, xtask gates, CI, netcode skeleton, bots and load test), Pip character presentation, aim pitch | Mainline |
+| arc-game | `codex/cooked-level-play`, then `codex/play-readiness` at `7dd510d` | Cooked packages with terrain, paint and collision; the look profile; particle placements; project settings; readiness reported to the editor | Pushed, not merged |
+| arc-game | `codex/aproj-game` | The client reading `.aproj` | Local, in progress |
+| arc-game | `feat/foundation-hardening` at `ec8c595` | One commit of 2026-10-08: further xtask gates (`check-assets`, `check-docs`, `doctor`), the art pipeline's regression checks, a rewrite of the client's presentation (`crates/client/src/pip/`) | Pushed, merged nowhere, and not in `main`, which took aim pitch on the earlier presentation. About 17,500 lines added; an owner decision (M0) |
+| lightyear (upstream) | PR #1808 | A bound on fragmented message size, for our issue #1776 | Open upstream; the game pins lightyear `=0.30.1` |
+
+## Milestones
+
+Each milestone ends with its work merged into the mainlines, the checks of both
+repositories green on the merged commits, and its exit criteria recorded as evidence. A
+later milestone may start in parallel only where it touches nothing the earlier one changes.
+
+### M0: one line of history (the gate for everything after it)
+
+1. Decide `feat/foundation-hardening`: what of it is taken onto `main` (proposed: the xtask
+   gates and the art pipeline checks, each as its own commit on today's `main`; the
+   presentation rewrite only if it survives a review against aim pitch, otherwise dropped
+   and the branch deleted).
+2. Name the editor's mainline in arc (proposed: `editor/0.19`, which the editor's README
+   already calls its development branch) and merge `codex/play-backend` into it.
+3. Merge `codex/cooked-level-play` and `codex/play-readiness` into the game's `main`.
+4. Run the full checks on the merged commits: in the editor its CI (format with the explicit
+   package list, `check`, `test`, `clippy -D warnings`, on Linux, macOS and Windows) and the
+   whole scripted suite (`apps/arc-editor/checks/run.sh`); in the game `cargo xtask ci`.
+   Mend what fails, including the Play test that fails on macOS
+   (`play::tests::a_failed_local_client_stops_and_reports_the_server_and_every_client`).
+5. Move the game's pin of `project-spec` to the editor's merged commit.
+
+Exit: no `codex/*` branch holds work that is on no mainline; both mainlines pass their full
+checks; the pins name commits on mainlines.
+
+### M1: the project model
+
+1. `.aproj` at schema 1 in `project-spec`, with the one rule that finds a project's file in
+   its folder, used by the editor and the game alike; every legacy path removed: the reading
+   and conversion of `arc-project.json`, schema migrations and their backups, the browser's
+   and the settings' conversion flows and their words and cases. (In progress on
+   `codex/aproj` and `codex/aproj-game`.)
+2. The editor opens a project by its file: the browser's "Open Project" takes an `.aproj`,
+   and `arc-editor <file.aproj>` starts on it.
+3. Going from one project to another from the Level menu, with the questions closing asks.
+   (Written on `codex/play-backend`, not yet run.)
+4. The other legacy of the editor's start, for the owner to decide (proposed: remove both):
+   - the start with `--level`, `--package` and `--game` "as the editor always started",
+     without a project, which every scripted case uses today; the cases would start on a
+     project made for them instead;
+   - the game's old built-in map as the editor's level without a project, and
+     `arc-scene convert-current-map`.
+5. Opening an `.aproj` from the desktop (file association), once the editor is a packaged
+   application (M5).
+
+Exit: a new project is made, played, left for another and opened again, all through its
+`.aproj`, by a scripted run and once by a person; no code or text names `arc-project.json`.
+
+### M2: the Play loop, complete
+
+1. A real run from the editor with two local test clients, both windows shown, Stop ending
+   the server and both clients with status 0.
+2. A person uses the editor from the desktop, with nothing named: the browser, the folder
+   and file dialogs, a new project, Play, Stop, closing. What they find is mended.
+3. A person compares the editor's states (Play control, notices, dialogs, Project
+   settings) with the Claude Design system "Arc Editor"; what differs is mended or recorded
+   as a design change.
+4. Preview in the editor's own 3D view (P2 of the history document): built or deferred, by
+   the owner's decision; the game's window stays the way to play with several clients.
+
+Exit: the evidence of 1 to 3, with pictures that a person looked at.
+
+### M3: content
+
+1. Asset references in the scene and cooked formats; published GLB models placed in levels;
+   an asset browser with load and validation problems, import and reimport. Authored sources
+   stay out of what the game loads.
+2. A level looks the same in the editor's Game view and in the client: the same meshes,
+   materials, lighting, sky, shadows, exposure and tone mapping, shown by captures compared
+   side by side with the display awake.
+3. Particles: an emitter placed in a level and played in the client; the editor's and the
+   client's captures compared; the adapter's refused fields (sphere, cone and box shapes,
+   drag) drawn exactly or kept refused.
+4. Material and lighting previews, then scene lights and environment once the scene and
+   cooked formats carry them and the client reads them.
+5. How a cooked level ships with the emitters and assets it uses.
+
+Exit: one level with models, emitters and lighting, authored in the editor, played in the
+client, and compared by picture.
+
+### M4: the game's systems, and authoring for them
+
+The order of the foundation design's sub-projects 2, 3 and 5, with what the editor adds to
+each.
+
+1. Gateway, accounts, server-issued connect tokens, character persistence in Postgres. The
+   development key stops being accepted outside development.
+2. Several zones: a zone directory, handoff between zone servers, interest management
+   (today every client receives every entity of its zone), orchestration. In the editor:
+   zone exits, safe areas and triggers as cooked volumes.
+3. Combat with lag compensation (the 20-tick rollback limit of lightyear is the known
+   constraint), first-person weapon use, and combat overlays in the editor.
+4. Landscape at the size of a zone, once the owner has said how large a zone is and how fine
+   its ground.
+5. Prefabs with overrides, once the core has a reference and override model.
+
+Exit per item: its load test or integration test run against the budget it states.
+
+### M5: production
+
+1. **Distribution.** The editor and the client as signed, installable applications for the
+   platforms the owner chooses (macOS signing and notarization, Windows signing); the server
+   image the `server-image` workflow builds; reproducible release builds from tags.
+2. **Versions and compatibility.** The protocol fingerprint as now; a written rule for
+   changes to `.aproj`, the scene format and cooked packages, now that projects will exist:
+   every change after schema 1 comes with an explicit, tested migration.
+3. **Security.** Connect tokens (M4), the authority review of every boundary change,
+   `cargo-deny` as now, and lightyear updated to a release with the bound of PR #1808, with
+   our server's own limit set.
+4. **Observability.** Metrics and dashboards for the servers (Prometheus and Grafana, as
+   planned), crash reports from the client and the editor, logs that can be collected.
+5. **Budgets.** Players per zone against the tick budget (measured today: 100 bots within
+   it, 200 not, on the development machine), the client's frame time with many characters
+   in a window, the editor's frame, cook and Play-start times, each on a named reference
+   machine.
+6. **Deployment.** Docker Compose for the first servers, then Agones on k3s when one machine
+   is not enough.
+7. **Checks that are missing today.** The editor's scripted suite in CI under a virtual
+   display; a Linux aarch64 runner (deferred by the owner); the game's client checked in a
+   window by CI.
+
+Exit: a tagged release installed from its artifacts on a clean machine connects to a
+deployed server and plays a level made in the editor.
+
+## Open for the owner
+
+1. `feat/foundation-hardening`: take which parts onto `main` (M0.1).
+2. The editor's mainline branch in arc (M0.2).
+3. The editor's start without a project, and the game's old map in the editor (M1.4).
+4. Of the `.aproj` contract: a new file always named `project.aproj` and renamable
+   (proposed), one file per folder with several refused (proposed), the number of local test
+   clients kept in the file (proposed), the game given the folder as now (proposed).
+5. Preview in the editor before several clients, or after (M2.4).
+6. The platforms the editor and the client are released for (M5.1).
+7. Carried over from the history document: whether Gameplay markers are designed before the
+   game's multi-zone work, whether the toolbar's tools become workspaces, whether combat
+   overlays come before combat, and how large a zone is.
