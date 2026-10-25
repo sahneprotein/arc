@@ -14,7 +14,7 @@ fn finish_job(handle: &mut EditorHandle, ticket: &JobTicket) -> Result<JobOutput
         for event in handle.poll(32) {
             if let ServiceEvent::JobFinished { fact, result } = event {
                 assert_eq!(fact.id, ticket.id);
-                output = Some(result);
+                output = Some(*result);
             }
         }
         if handle

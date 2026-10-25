@@ -470,7 +470,7 @@ pub fn remember_recent(
         name: name.to_owned(),
         last_opened_unix_ms,
     });
-    entries.sort_by(|left, right| right.last_opened_unix_ms.cmp(&left.last_opened_unix_ms));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_opened_unix_ms));
     entries.truncate(MAX_RECENT_PROJECTS);
     write_recents(path, entries.clone())?;
     Ok(normalize_recents(entries))

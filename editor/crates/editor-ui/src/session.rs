@@ -37,6 +37,9 @@ use crate::{rules, tool::PlaceAt};
 /// Events of the core handled per frame at most. More wait for the next frame.
 const EVENTS_PER_FRAME: usize = 64;
 
+/// The number of local clients and each client's slot and process ID.
+pub type RunClients = (u8, Vec<(Option<u8>, Option<u32>)>);
+
 /// The open level and the way to change it. Lives on the main thread.
 pub struct Editor {
     handle: EditorHandle,
@@ -1169,11 +1172,11 @@ impl Editor {
             | GameRuntimeAvailability::FolderRefused { .. } => None,
         };
         self.runtime = Some(runtime);
-        if let Some(runtime_root) = runtime_root {
-            if let Err(problem) = self.connect_game(runtime_root, project_root.to_path_buf()) {
-                self.problem = Some(problem);
-                self.problem_from = Some(Source::Command);
-            }
+        if let Some(runtime_root) = runtime_root
+            && let Err(problem) = self.connect_game(runtime_root, project_root.to_path_buf())
+        {
+            self.problem = Some(problem);
+            self.problem_from = Some(Source::Command);
         }
         true
     }
@@ -1472,7 +1475,7 @@ impl Editor {
     /// The local clients of the coordinator's run, the one under way or the last: how many
     /// it was started with, and each client process as its number among them and its
     /// process number. `None` without a run.
-    pub fn run_clients(&self) -> Option<(u8, Vec<(Option<u8>, Option<u32>)>)> {
+    pub fn run_clients(&self) -> Option<RunClients> {
         let status = self.play_status()?;
         let run = status.run.as_ref()?;
         let clients = run
@@ -1792,6 +1795,7 @@ impl Editor {
                     }
                 }
                 ServiceEvent::JobFinished { fact, result } => {
+                    let result = *result;
                     self.running_jobs = self.running_jobs.saturating_sub(1);
                     if fact.kind == JobKind::VerifyPackage {
                         // Not a file job: the pending path is left to the job it belongs to.
@@ -3002,7 +3006,7 @@ mod tests {
     }
 
     /// The clients of the coordinator's run, each as its number among them and its process.
-    fn clients_of(editor: &Editor) -> (u8, Vec<(Option<u8>, Option<u32>)>) {
+    fn clients_of(editor: &Editor) -> RunClients {
         editor.run_clients().expect("a run")
     }
 
@@ -4553,7 +4557,10 @@ mod tests {
                 emitter_id: emitter.clone()
             }
         );
-        assert_eq!(snapshot.selection.as_ref(), [placed.id.clone()]);
+        assert_eq!(
+            snapshot.selection.as_ref(),
+            std::slice::from_ref(&placed.id)
+        );
         assert_eq!(snapshot.undo_label.as_deref(), Some("create"));
         assert_eq!(
             snapshot.document.schema,

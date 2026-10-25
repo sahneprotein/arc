@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+bevy_math.workspace = true
 project-spec.workspace = true
 scene-data.workspace = true
 editor-core.workspace = true

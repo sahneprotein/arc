@@ -326,7 +326,7 @@ fn finish(handle: &mut EditorHandle, id: u64) -> Result<JobOutput, Diagnostic> {
             if let ServiceEvent::JobFinished { fact, result } = event {
                 *counts.entry(fact.id).or_insert(0) += 1;
                 if fact.id == id {
-                    output = Some(result);
+                    output = Some(*result);
                 }
             }
         }

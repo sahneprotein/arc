@@ -320,7 +320,7 @@ fn burst(output: &str, label: &str) {
                     ServiceEvent::JobFinished { fact, result } => {
                         assert!(tickets.remove(&fact.id));
                         worker_us += fact.elapsed_us.unwrap();
-                        match result {
+                        match *result {
                             Ok(output) => {
                                 completed += 1;
                                 latest = Some(output);

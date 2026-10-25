@@ -2425,6 +2425,7 @@ dependencies = [
 name = "editor-services"
 version = "0.1.0"
 dependencies = [
+ "bevy_math",
  "directories",
  "editor-cook",
  "editor-core",
