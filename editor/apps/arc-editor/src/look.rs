@@ -252,6 +252,11 @@ fn camera_anew(
     again.id()
 }
 
+type LookEntitiesAndOtherCameras<'w, 's> = (
+    Query<'w, 's, Entity, Or<(With<LookSun>, With<LookSky>)>>,
+    Query<'w, 's, Entity, (With<Camera>, Without<ViewCamera>)>,
+);
+
 /// Puts the game's sun, sky and camera settings on when Game look is chosen, and takes them
 /// off when the editor's own picture is. The view that was never in Game look is not touched.
 /// A profile that takes the place of another while Game look is drawn is put on in the same
@@ -261,10 +266,7 @@ pub(crate) fn apply_look(
     (view, look): (Res<ViewMode>, Res<GameLook>),
     camera: Single<(Entity, &mut Camera, &Transform, Option<&RenderLayers>), With<ViewCamera>>,
     mut editor_sun: Query<&mut DirectionalLight, With<EditorSun>>,
-    (made, other_cameras): (
-        Query<Entity, Or<(With<LookSun>, With<LookSky>)>>,
-        Query<Entity, (With<Camera>, Without<ViewCamera>)>,
-    ),
+    (made, other_cameras): LookEntitiesAndOtherCameras,
     (mut ground, mut materials, mut media): (
         ResMut<GroundRenderer>,
         ResMut<Assets<StandardMaterial>>,

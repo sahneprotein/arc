@@ -183,7 +183,12 @@ pub fn picture_of(width: u32, height: u32, data: Option<&[u8]>) -> Picture {
         return Picture::Unknown;
     };
     let first = &data[..3];
-    if data.chunks_exact(4).all(|pixel| &pixel[..3] == first) {
+    if data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| &pixel[..3] == first)
+    {
         Picture::Blank
     } else {
         Picture::Nonblank
@@ -818,6 +823,8 @@ fn cleanup_word(code: &str, reason: Option<&str>) -> String {
     }
 }
 
+type RunClientProcesses<'a> = (u8, &'a [(Option<u8>, Option<u32>)]);
+
 /// What the result line says of the local test clients of the coordinator's run, the one
 /// under way or the last:
 ///
@@ -829,7 +836,7 @@ fn cleanup_word(code: &str, reason: Option<&str>) -> String {
 /// [`exit_word`] says it, once the run has ended. Without a run, and the exits without an
 /// end, they say `none`.
 fn play_clients_words(
-    run: Option<(u8, &[(Option<u8>, Option<u32>)])>,
+    run: Option<RunClientProcesses<'_>>,
     exits: Option<&[(u8, String)]>,
 ) -> String {
     let exits = exits.map_or_else(
@@ -1454,7 +1461,7 @@ fn scripted(
             // Whether the window was on the desktop while the check ran.
             window_shown(),
             // The project's settings as the dialog shows them.
-            format!(
+            format_args!(
                 "{} play_blocked={} project_level={:?}",
                 settings_words(&project),
                 // What of the project's own files stops the game from being started, as

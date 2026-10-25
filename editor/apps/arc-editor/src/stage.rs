@@ -438,7 +438,7 @@ fn outline(shape: &Shape, lines: &mut Gizmos<StageLines>, color: Color) {
         } => {
             lines.circle(flat, *radius_m, color);
             // From the disk's edge, as far from straight up as the cone opens.
-            let (sin, cos) = angle_degrees.to_radians().sin_cos();
+            let (sin, cos) = bevy::math::ops::sin_cos(angle_degrees.to_radians());
             for outward in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
                 let from = EMITTER_AT + outward * *radius_m;
                 lines.line(
