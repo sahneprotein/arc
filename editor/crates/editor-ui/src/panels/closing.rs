@@ -29,6 +29,8 @@ use bevy::{
     ui_widgets::Activate,
 };
 
+use editor_services::{PlayEnd, PlayState, PlayStatus};
+
 use crate::{
     panels::{launcher::ToBrowser, notice::left_behind_words, play::PlayView},
     session::Editor,
@@ -327,6 +329,14 @@ pub fn shutdown_dialog() -> impl Scene {
     }
 }
 
+/// The end of the run the status has, once it has ended.
+fn ended(status: Option<&PlayStatus>) -> Option<&PlayEnd> {
+    match &status?.run.as_ref()?.state {
+        PlayState::Ended(end) => Some(end),
+        _ => None,
+    }
+}
+
 /// Moves closing on when the game has stopped, and shows the dialog of the step.
 pub(crate) fn drive_shutdown(
     (mut shutdown, goal): (ResMut<Shutdown>, Res<Goal>),
@@ -339,8 +349,12 @@ pub(crate) fn drive_shutdown(
     let goal = *goal;
     let game_runs = editor.active_run().is_some() || editor.play_requested();
     let status = editor.play_status();
-    let left = editor
-        .last_end()
+    // What the run left behind is judged from its end as the status has it: the status can
+    // say that the run ended a frame before the event of that end is taken, and in that
+    // frame the last end taken is an older run's, or none, which would let the editor go
+    // as if nothing were left.
+    let left = ended(status.as_deref())
+        .or_else(|| editor.last_end())
         .and_then(|end| left_behind_words(end, status.as_deref()));
     match *shutdown {
         // The game ended by itself while the question stood: nothing is in the way now.
