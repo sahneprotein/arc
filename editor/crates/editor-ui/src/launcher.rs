@@ -831,7 +831,15 @@ mod tests {
         let folder = parent.join(name);
         let programs = folder.join("target/debug");
         std::fs::create_dir_all(&programs).unwrap();
-        std::fs::create_dir_all(folder.join("assets")).unwrap();
+        // The player model a game's folder must hold: the twelve bytes of a GLB header that
+        // says it is twelve bytes long, whole as far as the editor looks.
+        let model = folder.join("assets/characters/pip");
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(
+            model.join("pip_robe_lod0.glb"),
+            b"glTF\x02\x00\x00\x00\x0c\x00\x00\x00",
+        )
+        .unwrap();
         for program in ["server", "client"] {
             let path = programs.join(format!("{program}{}", std::env::consts::EXE_SUFFIX));
             std::fs::write(&path, b"").unwrap();
