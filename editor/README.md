@@ -78,9 +78,11 @@ the game's fourteen boxes and eight spawn slots; tests compare float bits agains
 an independently frozen extract of `arc-game/crates/shared/src/level.rs`.
 
 Scene schema 1 validates IDs, references, hierarchy, rigid transforms, terrain and
-bounded payloads. Unknown fields/versions fail closed. There is no earlier editor
-schema to migrate; future migrations must be explicit pure conversions and never
-modify the original on failure. Explicit Save creates missing parent directories;
+bounded payloads. Unknown fields fail closed. Every file format of the editor (the
+`.aproj` project, the level, the cooked manifest and both payloads, the emitter, the
+look profile, the editor's own settings) has exactly one version, 1, and refuses every
+other: nothing older is read, converted or upgraded, and no version is chosen by content
+(owner, 2026-10-25). Explicit Save creates missing parent directories;
 Open and path viewing do not. Parent creation failures carry save.parent_create
 with path/detail and leave unsaved state intact. Saves write and sync a sibling temporary file,
 check the expected disk hash under a cooperating-writer lock and atomically replace
