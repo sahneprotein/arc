@@ -58,8 +58,13 @@ later milestone may start in parallel only where it touches nothing the earlier 
 4. Run the full checks on the merged commits: in the editor its CI (format with the explicit
    package list, `check`, `test`, `clippy -D warnings`, on Linux, macOS and Windows) and the
    whole scripted suite (`apps/arc-editor/checks/run.sh`); in the game `cargo xtask ci`.
-   Mend what fails, including the Play test that fails on macOS
-   (`play::tests::a_failed_local_client_stops_and_reports_the_server_and_every_client`).
+   Mend what fails. On 2026-10-25, on `codex/play-backend` at `243ffb3ae` and on macOS
+   only: Clippy passes; the workspace tests, run once whole, passed 571 and failed 1, a
+   level schema test that was stale and is mended since, its package then 21 of 21 (the
+   Play test whose stand-in client ended before it was ready was mended before that run);
+   the whole scripted suite passes 457 of 458. The one failure, `fold-not`, also fails
+   on the tip from before that day: at 1100 logical pixels the toolbar folds, where the case
+   expects one row. Linux and Windows were not run.
 5. Move the game's pin of `project-spec` to the editor's merged commit.
 
 Exit: no `codex/*` branch holds work that is on no mainline; both mainlines pass their full
