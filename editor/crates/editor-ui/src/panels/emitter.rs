@@ -471,6 +471,11 @@ fn panel_shape(particles: &Particles) -> PanelShape {
     }
 }
 
+type EmitterChoicesAndEstimates<'w, 's> = (
+    Query<'w, 's, (&'static ChoiceButton, &'static mut ButtonVariant)>,
+    Query<'w, 's, &'static mut Text, With<EmitterEstimate>>,
+);
+
 /// Shows the chosen emitter's settings. Rebuilds when another emitter is chosen, when its
 /// kind of shape changed, and when what was refused did; otherwise only sends new values to
 /// the inputs, so that an input being used is not replaced.
@@ -480,10 +485,7 @@ pub(crate) fn show_emitter(
     body: Query<Entity, With<EmitterBody>>,
     mut inputs: Query<(Entity, &mut EmitterField)>,
     mut names: Query<&mut EmitterNameInput>,
-    (mut choices, mut estimates): (
-        Query<(&ChoiceButton, &mut ButtonVariant)>,
-        Query<&mut Text, With<EmitterEstimate>>,
-    ),
+    (mut choices, mut estimates): EmitterChoicesAndEstimates,
     mut shown: Local<Option<PanelShape>>,
 ) {
     let Ok(body) = body.single() else {
@@ -920,20 +922,24 @@ pub(crate) fn run_preview(
     }
 }
 
+type PreviewButtons<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Option<&'static PreviewSpeedButton>,
+        Option<&'static PreviewModeButton>,
+        &'static mut ButtonVariant,
+    ),
+    Or<(With<PreviewSpeedButton>, With<PreviewModeButton>)>,
+>;
+
 /// Shows the overlay while the Particles tool is chosen, and what its controls say.
 pub(crate) fn show_preview(
     tool: Res<Tool>,
     (particles, preview, gpu): (Res<Particles>, Res<Preview>, Res<GpuPreview>),
     mut overlays: Query<&mut Node, (With<PreviewOverlay>, Without<PreviewLine>)>,
     mut captions: Query<&mut Text, PreviewText<PreviewRunCaption, PreviewWords>>,
-    mut buttons: Query<
-        (
-            Option<&PreviewSpeedButton>,
-            Option<&PreviewModeButton>,
-            &mut ButtonVariant,
-        ),
-        Or<(With<PreviewSpeedButton>, With<PreviewModeButton>)>,
-    >,
+    mut buttons: PreviewButtons,
     mut words: Query<&mut Text, PreviewText<PreviewWords, PreviewRunCaption>>,
     mut lines: Query<(&PreviewLine, &mut Text, &mut Node), Without<PreviewOverlay>>,
 ) {
