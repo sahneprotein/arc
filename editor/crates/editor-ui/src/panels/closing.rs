@@ -11,8 +11,12 @@
 //! 3. Only if a server, or the game, will not go: one more question, because closing now
 //!    would leave it behind.
 //!
-//! This is for closing only. Opening or beginning another level leaves a game running: it
-//! plays its own cooked level, whatever is open in the editor.
+//! Leaving the open project for the project browser goes the same way, with its own words:
+//! the game is the project's, so it is stopped before the project is left, and where closing
+//! would end the editor the browser is shown instead ([`Goal`]).
+//!
+//! Opening or beginning another level leaves a game running: it plays its own cooked level,
+//! whatever is open in the editor.
 
 use bevy::{
     feathers::{
@@ -26,7 +30,7 @@ use bevy::{
 };
 
 use crate::{
-    panels::{notice::left_behind_words, play::PlayView},
+    panels::{launcher::ToBrowser, notice::left_behind_words, play::PlayView},
     session::Editor,
     theme::{
         feathers::{BORDER, SCRIM},
@@ -46,6 +50,25 @@ pub enum Shutdown {
     Stopping,
     /// The run ended and left a process behind; the question is whether to close anyway.
     LeftBehind,
+}
+
+/// Where the editor goes once nothing stands in the way: it closes, or it leaves the open
+/// project for the project browser.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Goal {
+    #[default]
+    Exit,
+    Browser,
+}
+
+/// Goes where the request was to: the editor closes, or the project browser is shown.
+pub(crate) fn finish(goal: Goal, exit: &mut MessageWriter<AppExit>, commands: &mut Commands) {
+    match goal {
+        Goal::Exit => {
+            exit.write(AppExit::Success);
+        }
+        Goal::Browser => commands.trigger(ToBrowser),
+    }
 }
 
 /// What a request to close does when the level's own question is out of the way.
@@ -78,19 +101,33 @@ pub fn after_stopping(game_runs: bool, left_behind: bool) -> Option<Shutdown> {
     }
 }
 
-/// Carries a request to close as far as it can go now. `already_asked` says that the person
-/// has answered the question about unsaved changes.
+/// What [`close`] works with: where closing stands, where it goes, and the two ways of
+/// getting there.
+pub(crate) struct Closing<'a, 'e, 'w, 's> {
+    pub shutdown: &'a mut Shutdown,
+    pub goal: &'a mut Goal,
+    pub exit: &'a mut MessageWriter<'e, AppExit>,
+    pub commands: &'a mut Commands<'w, 's>,
+}
+
+/// Carries a request to close, or to leave the project, as far as it can go now.
+/// `already_asked` says that the person has answered the question about unsaved changes.
 pub(crate) fn close(
     editor: &mut Editor,
-    shutdown: &mut Shutdown,
-    exit: &mut MessageWriter<AppExit>,
+    closing: Closing<'_, '_, '_, '_>,
+    goal: Goal,
     already_asked: bool,
 ) {
+    let Closing {
+        shutdown,
+        goal: kept,
+        exit,
+        commands,
+    } = closing;
+    *kept = goal;
     let game_runs = editor.active_run().is_some() || editor.play_requested();
     match close_step(game_runs, already_asked) {
-        CloseStep::Exit => {
-            exit.write(AppExit::Success);
-        }
+        CloseStep::Exit => finish(goal, exit, commands),
         CloseStep::Ask => *shutdown = Shutdown::AskRun,
         CloseStep::Stop => {
             editor.stop_play();
@@ -112,24 +149,43 @@ pub enum ShutdownPiece {
     DoNotClose,
     CloseAnyway,
     KeepOpen,
+    StopAndLeave,
+    StayInProject,
+    LeaveAnyway,
+    KeepProject,
 }
 
-/// What the dialog says at a step. `facts` names the cooked level that plays, or what was
-/// left behind.
-pub fn words(step: Shutdown, facts: &str) -> (&'static str, &'static str, String) {
-    match step {
-        Shutdown::No => ("", "", String::new()),
-        Shutdown::AskRun => (
+/// What the dialog says at a step, on the way to `goal`. `facts` names the cooked level that
+/// plays, or what was left behind.
+pub fn words(step: Shutdown, goal: Goal, facts: &str) -> (&'static str, &'static str, String) {
+    match (step, goal) {
+        (Shutdown::No, _) => ("", "", String::new()),
+        (Shutdown::AskRun, Goal::Browser) => (
+            "A game is still running",
+            "Leaving the project stops the game and shuts down its server.",
+            facts.to_owned(),
+        ),
+        (Shutdown::Stopping, Goal::Browser) => (
+            "Stopping the game",
+            "The project browser opens when the game and its server have shut down.",
+            String::new(),
+        ),
+        (Shutdown::LeftBehind, Goal::Browser) => (
+            "The game's server did not shut down",
+            "It may still be running. Leaving the project now leaves it behind.",
+            facts.to_owned(),
+        ),
+        (Shutdown::AskRun, Goal::Exit) => (
             "A game is still running",
             "Closing the editor stops the game and shuts down its server.",
             facts.to_owned(),
         ),
-        Shutdown::Stopping => (
+        (Shutdown::Stopping, Goal::Exit) => (
             "Stopping the game",
             "The editor closes when the game and its server have shut down.",
             String::new(),
         ),
-        Shutdown::LeftBehind => (
+        (Shutdown::LeftBehind, Goal::Exit) => (
             "The game's server did not shut down",
             "It may still be running. Closing the editor now leaves it behind.",
             facts.to_owned(),
@@ -137,14 +193,20 @@ pub fn words(step: Shutdown, facts: &str) -> (&'static str, &'static str, String
     }
 }
 
-/// Which buttons the dialog has at a step.
-pub fn offers(step: Shutdown, piece: ShutdownPiece) -> bool {
-    use ShutdownPiece::{CloseAnyway, DoNotClose, KeepOpen, KeepPlaying, StopAndClose};
-    match step {
-        Shutdown::No => false,
-        Shutdown::AskRun => matches!(piece, KeepPlaying | StopAndClose),
-        Shutdown::Stopping => piece == DoNotClose,
-        Shutdown::LeftBehind => matches!(piece, CloseAnyway | KeepOpen),
+/// Which buttons the dialog has at a step, on the way to `goal`.
+pub fn offers(step: Shutdown, goal: Goal, piece: ShutdownPiece) -> bool {
+    use ShutdownPiece::{
+        CloseAnyway, DoNotClose, KeepOpen, KeepPlaying, KeepProject, LeaveAnyway, StayInProject,
+        StopAndClose, StopAndLeave,
+    };
+    match (step, goal) {
+        (Shutdown::No, _) => false,
+        (Shutdown::AskRun, Goal::Exit) => matches!(piece, KeepPlaying | StopAndClose),
+        (Shutdown::Stopping, Goal::Exit) => piece == DoNotClose,
+        (Shutdown::LeftBehind, Goal::Exit) => matches!(piece, CloseAnyway | KeepOpen),
+        (Shutdown::AskRun, Goal::Browser) => matches!(piece, KeepPlaying | StopAndLeave),
+        (Shutdown::Stopping, Goal::Browser) => piece == StayInProject,
+        (Shutdown::LeftBehind, Goal::Browser) => matches!(piece, LeaveAnyway | KeepProject),
     }
 }
 
@@ -221,6 +283,19 @@ pub fn shutdown_dialog() -> impl Scene {
                             on(|_: On<Activate>, mut shutdown: ResMut<Shutdown>| *shutdown = Shutdown::No)
                         ),
                         (
+                            button("Stop and leave", true)
+                            ShutdownPiece::StopAndLeave
+                            on(|_: On<Activate>, mut shutdown: ResMut<Shutdown>, mut editor: NonSendMut<Editor>| {
+                                editor.stop_play();
+                                *shutdown = Shutdown::Stopping;
+                            })
+                        ),
+                        (
+                            button("Stay in the project", false)
+                            ShutdownPiece::StayInProject
+                            on(|_: On<Activate>, mut shutdown: ResMut<Shutdown>| *shutdown = Shutdown::No)
+                        ),
+                        (
                             button("Close anyway", false)
                             ShutdownPiece::CloseAnyway
                             on(|_: On<Activate>, mut exit: MessageWriter<AppExit>| {
@@ -228,8 +303,21 @@ pub fn shutdown_dialog() -> impl Scene {
                             })
                         ),
                         (
+                            button("Leave anyway", false)
+                            ShutdownPiece::LeaveAnyway
+                            on(|_: On<Activate>, mut shutdown: ResMut<Shutdown>, mut commands: Commands| {
+                                *shutdown = Shutdown::No;
+                                commands.trigger(ToBrowser);
+                            })
+                        ),
+                        (
                             button("Keep the editor open", true)
                             ShutdownPiece::KeepOpen
+                            on(|_: On<Activate>, mut shutdown: ResMut<Shutdown>| *shutdown = Shutdown::No)
+                        ),
+                        (
+                            button("Stay in the project", true)
+                            ShutdownPiece::KeepProject
                             on(|_: On<Activate>, mut shutdown: ResMut<Shutdown>| *shutdown = Shutdown::No)
                         ),
                     ]
@@ -241,12 +329,14 @@ pub fn shutdown_dialog() -> impl Scene {
 
 /// Moves closing on when the game has stopped, and shows the dialog of the step.
 pub(crate) fn drive_shutdown(
-    mut shutdown: ResMut<Shutdown>,
+    (mut shutdown, goal): (ResMut<Shutdown>, Res<Goal>),
     editor: NonSend<Editor>,
     mut pieces: Query<(&ShutdownPiece, &mut Node, Option<&mut Text>)>,
-    mut shown: Local<Option<(Shutdown, String)>>,
+    mut shown: Local<Option<(Shutdown, Goal, String)>>,
     mut exit: MessageWriter<AppExit>,
+    mut commands: Commands,
 ) {
+    let goal = *goal;
     let game_runs = editor.active_run().is_some() || editor.play_requested();
     let status = editor.play_status();
     let left = editor
@@ -256,12 +346,12 @@ pub(crate) fn drive_shutdown(
         // The game ended by itself while the question stood: nothing is in the way now.
         Shutdown::AskRun if !game_runs => {
             *shutdown = Shutdown::No;
-            exit.write(AppExit::Success);
+            finish(goal, &mut exit, &mut commands);
         }
         Shutdown::Stopping => match after_stopping(game_runs, left.is_some()) {
             Some(Shutdown::No) => {
                 *shutdown = Shutdown::No;
-                exit.write(AppExit::Success);
+                finish(goal, &mut exit, &mut commands);
             }
             Some(next) => *shutdown = next,
             None => {}
@@ -273,11 +363,11 @@ pub(crate) fn drive_shutdown(
         Shutdown::LeftBehind => left.map(|words| words.facts).unwrap_or_default(),
         _ => String::new(),
     };
-    let now = (*shutdown, facts);
+    let now = (*shutdown, goal, facts);
     if shown.as_ref() == Some(&now) || pieces.is_empty() {
         return;
     }
-    let (title, body, facts) = words(now.0, &now.1);
+    let (title, body, facts) = words(now.0, goal, &now.2);
     let display = |shown: bool| if shown { Display::Flex } else { Display::None };
     for (piece, mut node, text) in &mut pieces {
         let (line, laid_out) = match piece {
@@ -285,7 +375,7 @@ pub(crate) fn drive_shutdown(
             ShutdownPiece::Title => (Some(title.to_owned()), true),
             ShutdownPiece::Body => (Some(body.to_owned()), true),
             ShutdownPiece::Facts => (Some(facts.clone()), !facts.is_empty()),
-            button => (None, offers(now.0, *button)),
+            button => (None, offers(now.0, goal, *button)),
         };
         if let (Some(line), Some(mut text)) = (line, text)
             && text.0 != line
@@ -333,7 +423,7 @@ mod tests {
             buttons
                 .iter()
                 .copied()
-                .filter(|button| offers(step, *button))
+                .filter(|button| offers(step, Goal::Exit, *button))
                 .collect::<Vec<_>>()
         };
         assert_eq!(offered(Shutdown::No), vec![]);
@@ -344,13 +434,81 @@ mod tests {
 
     #[test]
     fn the_dialog_names_what_plays_and_what_was_left() {
-        let (title, body, facts) = words(Shutdown::AskRun, "playing cooked 6105ad50");
+        let (title, body, facts) = words(Shutdown::AskRun, Goal::Exit, "playing cooked 6105ad50");
         assert_eq!(title, "A game is still running");
         assert!(body.contains("stops the game"));
         assert_eq!(facts, "playing cooked 6105ad50");
-        let (title, _, facts) = words(Shutdown::LeftBehind, "process 4312");
+        let (title, _, facts) = words(Shutdown::LeftBehind, Goal::Exit, "process 4312");
         assert!(title.contains("did not shut down"));
         assert_eq!(facts, "process 4312");
-        assert_eq!(words(Shutdown::Stopping, "ignored").2, "");
+        assert_eq!(words(Shutdown::Stopping, Goal::Exit, "ignored").2, "");
+    }
+
+    #[test]
+    fn leaving_the_project_has_its_own_buttons_and_never_offers_to_close() {
+        use ShutdownPiece::{
+            CloseAnyway, DoNotClose, KeepOpen, KeepPlaying, KeepProject, LeaveAnyway,
+            StayInProject, StopAndClose, StopAndLeave,
+        };
+        let buttons = [
+            KeepPlaying,
+            StopAndClose,
+            DoNotClose,
+            CloseAnyway,
+            KeepOpen,
+            StopAndLeave,
+            StayInProject,
+            LeaveAnyway,
+            KeepProject,
+        ];
+        let offered = |step, goal| {
+            buttons
+                .iter()
+                .copied()
+                .filter(|button| offers(step, goal, *button))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            offered(Shutdown::AskRun, Goal::Browser),
+            vec![KeepPlaying, StopAndLeave]
+        );
+        assert_eq!(
+            offered(Shutdown::Stopping, Goal::Browser),
+            vec![StayInProject]
+        );
+        assert_eq!(
+            offered(Shutdown::LeftBehind, Goal::Browser),
+            vec![LeaveAnyway, KeepProject]
+        );
+        // And closing offers none of leaving's.
+        for step in [Shutdown::AskRun, Shutdown::Stopping, Shutdown::LeftBehind] {
+            for button in [StopAndLeave, StayInProject, LeaveAnyway, KeepProject] {
+                assert!(!offers(step, Goal::Exit, button), "{step:?} {button:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn leaving_the_project_says_the_project_and_the_browser_not_the_editor() {
+        let (title, body, facts) =
+            words(Shutdown::AskRun, Goal::Browser, "playing cooked 6105ad50");
+        assert_eq!(title, "A game is still running");
+        assert_eq!(
+            body,
+            "Leaving the project stops the game and shuts down its server."
+        );
+        assert_eq!(facts, "playing cooked 6105ad50");
+        let (_, body, _) = words(Shutdown::Stopping, Goal::Browser, "");
+        assert!(body.contains("project browser opens"));
+        let (_, body, facts) = words(Shutdown::LeftBehind, Goal::Browser, "process 4312");
+        assert!(body.contains("Leaving the project now leaves it behind"));
+        assert_eq!(facts, "process 4312");
+        for step in [Shutdown::AskRun, Shutdown::Stopping, Shutdown::LeftBehind] {
+            let (_, body, _) = words(step, Goal::Browser, "");
+            assert!(
+                !body.contains("editor closes") && !body.contains("Closing"),
+                "{body}"
+            );
+        }
     }
 }

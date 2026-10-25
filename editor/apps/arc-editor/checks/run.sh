@@ -649,6 +649,49 @@ with_game runs check close-unsaved-first "$PLAY,wait-run=running,close" 'questio
 with_game server-stays check close-left-behind "$CLOSING,click-button=Stop and close,wait-run=none" 'shutdown=LeftBehind' 'left_notice=true'
 with_game server-stays check close-kept-open "$CLOSING,click-button=Stop and close,wait-run=none,click-button=Keep the editor open" 'shutdown=No' 'left_notice=true'
 
+# Leaving the project for the project browser, from the Level menu. It asks what closing
+# asks, in its own words, and where closing ends the editor it shows the browser, in front of
+# an editor that holds no project. A scripted editor that started without the browser shows
+# it without a list, so that no case reads or writes the list of whoever is at the machine.
+SWITCH='choose=Level>Switch project'
+LEFT='launcher=shown launcher_rows=\[\]'
+check project-switch "key=ctrl+s,$SWITCH" \
+    "$LEFT" 'launcher_list=none' 'launcher_entered=0' 'launcher_left=1' 'question=No' 'shutdown=No' \
+    'project=NoFolder' 'has_file=false' 'game=false' 'runtime=none' 'problem=none'
+# A level nobody saved counts as unsaved: the question, with the button that saves first
+# saying what follows. Kept editing, nothing is left; discarded, nothing is written; saved
+# first, the level is written and the project is left.
+check project-switch-asks "$SWITCH" 'question=Asking' 'launcher=off' 'launcher_left=0'
+check project-switch-kept "$SWITCH,click-button=Keep editing" 'question=No' 'launcher=off' 'launcher_left=0' 'dirty=true'
+check project-switch-discards "$SWITCH,click-button=Discard changes" "$LEFT" 'launcher_left=1' 'question=No' 'has_file=false'
+check project-switch-saves "$SWITCH,click-button=Save and leave" "$LEFT" 'launcher_left=1' 'question=No' 'problem=none'
+if wanted project-switch-discards; then
+    [ ! -e "$work/project-switch-discards/levels/current-map.level.json" ] \
+        || { echo "project-switch-discards: FAILED, the level was saved though its changes were discarded"; failed=1; }
+fi
+if wanted project-switch-saves; then
+    [ -s "$work/project-switch-saves/levels/current-map.level.json" ] \
+        || { echo "project-switch-saves: FAILED, the level was not saved before the project was left"; failed=1; }
+fi
+# With a game running: the question is about the game, in the words of leaving, and the
+# browser is shown only when the game and its server have shut down. Kept playing, the game
+# goes on. With unsaved changes the usual question comes first and says the game is stopped.
+# A server that will not go is asked about once more, and the person can stay in the project.
+SWITCHING="key=ctrl+s,$PLAY,wait-run=running,$SWITCH"
+with_game runs check project-switch-asks-game "$SWITCHING" 'shutdown=AskRun' 'question=No' 'play_run=Running' 'launcher=off'
+with_game runs check project-switch-keeps-playing "$SWITCHING,click-button=Keep playing" 'shutdown=No' 'play_run=Running' 'launcher=off' 'launcher_left=0'
+with_game runs check project-switch-stops-game "$SWITCHING,click-button=Stop and leave,wait-run=none" \
+    "$LEFT" 'launcher_left=1' 'shutdown=No' 'play_run=None' 'game=false' 'left_notice=false'
+with_game runs check project-switch-unsaved-game "$PLAY,wait-run=running,$SWITCH" 'question=Asking' 'shutdown=No' 'play_run=Running' 'launcher=off'
+with_game runs check project-switch-discards-game "$PLAY,wait-run=running,$SWITCH,click-button=Discard changes,wait-run=none" \
+    "$LEFT" 'launcher_left=1' 'question=No' 'shutdown=No' 'play_run=None'
+with_game server-stays check project-switch-left-behind "$SWITCHING,click-button=Stop and leave,wait-run=none" \
+    'shutdown=LeftBehind' 'launcher=off' 'launcher_left=0' 'left_notice=true'
+with_game server-stays check project-switch-stays "$SWITCHING,click-button=Stop and leave,wait-run=none,click-button=Stay in the project" \
+    'shutdown=No' 'launcher=off' 'launcher_left=0' 'left_notice=true' 'has_file=true'
+with_game server-stays check project-switch-anyway "$SWITCHING,click-button=Stop and leave,wait-run=none,click-button=Leave anyway" \
+    "$LEFT" 'launcher_left=1' 'shutdown=No'
+
 # The landscape tool: T chooses it, its panel takes the inspector's place, a mode button
 # chooses the brush, and the brush points at the ground under the cursor.
 check sculpt-key      'key=t'                             'sculpt=true'
@@ -1174,6 +1217,28 @@ if wanted project-close; then
         || { echo "project-close: FAILED, the project file was written though nothing was saved"; failed=1; }
     cp "$work/project-close/project/arc-project.json" "$work/project-close.before"
 fi
+# Leaving the project with settings that were changed and not saved asks as closing does:
+# kept editing, the change is held and the file is as it was; discarded, the project is left
+# and the file is not written; saved first, the file holds the change.
+SWITCH_KEY='scroll-project=300,click-button=W,key=t,click-button=Close settings,choose=Level>Switch project'
+check project-switch-settings "click-button=Set up project,key=ctrl+s,$SWITCH_KEY" \
+    'question=Asking' 'launcher=off' 'project_draft=Changed'
+check project-switch-settings-kept "click-button=Set up project,key=ctrl+s,$SWITCH_KEY,click-button=Keep editing" \
+    'question=No' 'launcher=off' 'project=Ready' 'project_draft=Changed' 'project_keys=T,S,A,D,Space,V,Escape'
+check project-switch-settings-discards "click-button=Set up project,key=ctrl+s,$SWITCH_KEY,click-button=Discard changes" \
+    'question=No' 'launcher=shown' 'launcher_left=1' 'project=NoFolder'
+check project-switch-settings-saves "click-button=Set up project,key=ctrl+s,$SWITCH_KEY,click-button=Save and leave" \
+    'question=No' 'launcher=shown' 'launcher_left=1' 'project=NoFolder'
+for name in project-switch-settings-kept project-switch-settings-discards; do
+    if wanted "$name"; then
+        grep -q '"move_forward": "W"' "$work/$name/project/arc-project.json" \
+            || { echo "$name: FAILED, the project file was written though nothing was saved"; failed=1; }
+    fi
+done
+if wanted project-switch-settings-saves; then
+    grep -q '"move_forward": "T"' "$work/project-switch-settings-saves/project/arc-project.json" \
+        || { echo "project-switch-settings-saves: FAILED, the project file does not hold the key that was saved"; failed=1; }
+fi
 # project_exits <name> <steps> <written: yes|no>: the editor, started on the folder of
 # project-close, must end by itself with status 0 before the check's own end, and the
 # project file must be as it was, or hold the key that was changed.
@@ -1465,6 +1530,13 @@ with_browser check browser-new-again-listed 'key=t' \
     'launcher=shown launcher_rows=\[Harbour:ready\] launcher_selected=0' "$NO_BROWSER_STATE" 'launcher_entered=0' 'project=NoFolder'
 with_browser check browser-new-again-opened 'key=enter' \
     "$ENTERED" 'launcher_entered=1' 'project=Ready' 'has_file=true' "$NO_RUNTIME" 'look=loaded:3abf9a2f' 'problem=none'
+# From the open project the browser is shown again: the project that was left is listed and
+# chosen, the editor holds no project behind it, and Enter goes back to the project.
+with_browser check browser-new-again-left 'key=enter,choose=Level>Switch project' \
+    'launcher=shown launcher_rows=\[Harbour:ready\] launcher_selected=0' "$NO_BROWSER_STATE" \
+    'launcher_entered=1' 'launcher_left=1' 'question=No' 'project=NoFolder' 'has_file=false' 'runtime=none' 'problem=none'
+with_browser check browser-new-again-back 'key=enter,choose=Level>Switch project,key=enter' \
+    "$ENTERED" 'launcher_entered=2' 'launcher_left=1' 'project=Ready' 'has_file=true' 'look=loaded:3abf9a2f' 'problem=none'
 with_browser check browser-new-again-over "pick-folder=$DOCS,click-button=New Project,project-name=Harbour,click-button=Create project" \
     'launcher=shown' 'launcher_pending=new launcher_refusal=project\.folder_taken' 'launcher_entered=0' 'project=NoFolder'
 with_browser check browser-new-again-inside "pick-folder=$HARBOUR,click-button=New Project" \
@@ -1595,6 +1667,11 @@ check_exit close-saves   'close,click-button=Save and close' yes
 with_game runs check_exit close-stops-game "key=ctrl+s,$PLAY,wait-run=running,close,click-button=Stop and close" yes
 with_game runs check_exit close-discard-stops-game "$PLAY,wait-run=running,close,click-button=Discard changes" no
 with_game server-stays check_exit close-anyway "key=ctrl+s,$PLAY,wait-run=running,close,click-button=Stop and close,wait-run=none,click-button=Close anyway" yes
+
+# The browser holds no level of anyone's: closing the window there asks nothing, also after
+# a project was left for it, and writes no level.
+with_browser check_exit browser-closes 'close' no
+check_exit project-switch-closes "key=ctrl+s,choose=Level>Switch project,close" yes
 
 [ "$overridden" -eq 0 ] || echo "The desktop gave another window size than a case asked for: see NOT CHECKED AT above."
 exit "$failed"

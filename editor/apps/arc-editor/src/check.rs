@@ -464,7 +464,7 @@ type Emitters<'w> = (
 
 /// What the result line says of the project browser:
 ///
-/// `launcher=shown launcher_rows=[Harbour:ready] launcher_selected=0 launcher_pending=none launcher_refusal=none launcher_list=ok launcher_entered=0 game_missing=[]`
+/// `launcher=shown launcher_rows=[Harbour:ready] launcher_selected=0 launcher_pending=none launcher_refusal=none launcher_list=ok launcher_entered=0 game_missing=[] launcher_left=0`
 ///
 /// `launcher` is whether the browser is the window's screen (`shown`) or not (`off`). Each
 /// row of the list is the project's name and what its folder is now: `ready`, `nolevel`
@@ -474,6 +474,7 @@ type Emitters<'w> = (
 /// `launcher_list` is `ok`, `none` where there is no place for a list, or the code of why
 /// it cannot be used. `launcher_entered` counts the projects entered from the browser.
 /// `launcher_pending` is `new` for a new project that waits for its name.
+/// `launcher_left` counts the times the open project was left for the browser.
 ///
 /// After those come the game: `game_folder` is what the editor's setting says of the game's
 /// folder (`Launcher::game_word`), `game_refusal` the code of why the folder last chosen for
@@ -554,7 +555,7 @@ fn launcher_words(launcher: &editor_ui::Launcher, editor: &Editor) -> String {
         "launcher={} launcher_rows=[{}] launcher_selected={} launcher_pending={pending} \
          launcher_refusal={refusal} launcher_list={list} launcher_entered={} game_folder={} \
          game_refusal={game_refusal} runtime={played_with} runtime_source={source} \
-         runtime_folder={folder} game_missing=[{}]",
+         runtime_folder={folder} game_missing=[{}] launcher_left={}",
         if launcher.shown() { "shown" } else { "off" },
         rows.join(","),
         launcher
@@ -562,7 +563,8 @@ fn launcher_words(launcher: &editor_ui::Launcher, editor: &Editor) -> String {
             .map_or_else(|| "none".to_owned(), |index| index.to_string()),
         launcher.times_entered(),
         launcher.game_word(),
-        missing.join(",")
+        missing.join(","),
+        launcher.times_left()
     )
 }
 

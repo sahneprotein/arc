@@ -34,6 +34,12 @@
 //!
 //! With a folder, a level or a package named on the command line, or in a scripted check, the
 //! browser is off ([`Launcher::off`]) and the editor starts as it always did.
+//!
+//! From an open project the browser is shown again when the person leaves the project for
+//! another ([`Launcher::back_to_browser`]), the questions about what is unsaved and about a
+//! game that runs being answered first. An editor that started without the browser shows it
+//! then with the list and the game's setting it was given for that ([`Launcher::returning_to`]),
+//! which for a scripted check are its own or none.
 
 use std::path::{Path, PathBuf};
 
@@ -170,6 +176,23 @@ pub struct Launcher {
     game_refusal: Option<(PathBuf, Diagnostic)>,
     /// How many times a folder was taken as the game's since the editor started.
     game_changes: u64,
+    /// The list's file and the game's setting's file an editor without the browser shows the
+    /// browser with, once the person leaves the open project.
+    returning_to: Option<(Option<PathBuf>, Option<PathBuf>)>,
+    /// How many times the browser was shown again since the editor started.
+    left: u64,
+}
+
+/// Where the level and the cooked levels of the editor behind the project browser go: into a
+/// folder of this run's own name under the system's temporary folder, which is not made.
+/// Nothing is saved or cooked behind the browser; these are places that are not the working
+/// directory and not a project's, should anything ever be.
+pub fn no_project_paths(temporary: &Path, process: u32) -> (PathBuf, PathBuf) {
+    let nowhere = temporary.join(format!("arc-editor-no-project-{process}"));
+    (
+        nowhere.join("levels/unsaved.level.json"),
+        nowhere.join("cooked"),
+    )
 }
 
 impl Launcher {
@@ -177,6 +200,42 @@ impl Launcher {
     /// script, and starts as it always did.
     pub fn off() -> Self {
         Self::default()
+    }
+
+    /// The files an editor without the browser shows it with once the person leaves the open
+    /// project: the list's and the game's setting's. `None` for either is no list, or no
+    /// setting, as at the start of a browser without a place for them. Nothing is read now.
+    pub fn returning_to(mut self, recents: Option<PathBuf>, game_file: Option<PathBuf>) -> Self {
+        self.returning_to = Some((recents, game_file));
+        self
+    }
+
+    /// The browser is shown again, in front of the editor whose project was left: the list
+    /// and the game's folder are read anew, and nothing that was chosen or pending in it
+    /// before is. An editor that started without it takes the files it was given for this
+    /// ([`Launcher::returning_to`]) the first time. Nothing is written.
+    pub fn back_to_browser(&mut self) {
+        if let Some((recents, game_file)) = self.returning_to.take() {
+            self.recents = recents;
+            self.game_file = game_file;
+        }
+        self.shown = true;
+        self.asking = None;
+        self.pending = None;
+        self.refusal = None;
+        self.opening = None;
+        self.left += 1;
+        self.read();
+        self.read_game();
+        self.selected = None;
+        self.settle_selection();
+    }
+
+    /// How many times the browser was shown again since the editor started. What names the
+    /// open project, as the window's title, follows this as it follows
+    /// [`Launcher::times_entered`].
+    pub fn times_left(&self) -> u64 {
+        self.left
     }
 
     /// The browser as the editor's first screen, with the list that is kept in this file.
@@ -1057,6 +1116,55 @@ mod tests {
             std::fs::read(folder.join("arc-project.json.schema-1.bak")).unwrap(),
             old
         );
+    }
+
+    #[test]
+    fn the_browser_is_shown_again_with_its_list_and_nothing_left_of_before() {
+        let home = tempfile::tempdir().unwrap();
+        let project = project_in(home.path(), "Harbour");
+        let mut launcher = launcher_in(home.path());
+        launcher.entered(&project, "Harbour", NOW);
+        assert!(!launcher.shown());
+        launcher.back_to_browser();
+        assert!(launcher.shown());
+        assert_eq!(launcher.times_left(), 1);
+        assert_eq!(launcher.times_entered(), 1);
+        assert!(launcher.opening().is_none() && launcher.pending().is_none());
+        assert!(launcher.refusal().is_none());
+        // The project that was left is in the list, and chosen, so Enter goes back to it.
+        assert_eq!(launcher.rows()[0].recent.name, "Harbour");
+        assert_eq!(launcher.selected(), Some(0));
+    }
+
+    #[test]
+    fn an_editor_without_the_browser_shows_it_with_the_files_it_was_given_and_reads_nothing_before()
+    {
+        let home = tempfile::tempdir().unwrap();
+        let list = home.path().join("recent-projects.json");
+        let mut launcher = Launcher::off().returning_to(Some(list.clone()), None);
+        // Until the project is left the browser is as it was: off, without a list.
+        assert!(!launcher.shown() && !launcher.has_list());
+        assert!(launcher.game().is_none());
+        launcher.back_to_browser();
+        assert!(launcher.shown() && launcher.has_list());
+        assert!(launcher.rows().is_empty() && launcher.list_problem().is_none());
+        assert_eq!(launcher.game_word(), "nowhere");
+        assert!(!list.exists(), "showing the browser wrote its list");
+        // Without files it is a browser without a list, which remembers nothing.
+        let mut bare = Launcher::off();
+        bare.back_to_browser();
+        assert!(bare.shown() && !bare.has_list());
+    }
+
+    #[test]
+    fn behind_the_browser_the_level_and_the_cooked_folder_are_in_no_project_and_not_made() {
+        let temporary = Path::new("/no/such/temporary/folder");
+        let (level, package) = no_project_paths(temporary, 4242);
+        let nowhere = temporary.join("arc-editor-no-project-4242");
+        assert!(level.starts_with(&nowhere) && package.starts_with(&nowhere));
+        assert!(level.is_absolute() && package.is_absolute());
+        assert!(!nowhere.exists() && !level.exists());
+        assert_ne!(no_project_paths(temporary, 4243).0, level);
     }
 
     #[test]

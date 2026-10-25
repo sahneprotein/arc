@@ -77,18 +77,6 @@ fn starts_in_browser(any_argument: bool, scripted: bool, scripted_browser: bool)
     }
 }
 
-/// Where the level and the cooked levels of the editor behind the project browser would
-/// go: into a folder of this run's own name under the system's temporary folder, which is
-/// not made. Nothing is saved or cooked behind the browser; these are places that are not
-/// the working directory and not a project's, should anything ever be.
-fn no_project_paths(temporary: &std::path::Path, process: u32) -> (PathBuf, PathBuf) {
-    let nowhere = temporary.join(format!("arc-editor-no-project-{process}"));
-    (
-        nowhere.join("levels/unsaved.level.json"),
-        nowhere.join("cooked"),
-    )
-}
-
 /// The window's title with this project's name in it.
 fn window_title(project: Option<&str>) -> String {
     match project {
@@ -157,7 +145,17 @@ fn main() -> AppExit {
         Launcher::at_start(check::scripted_browser().or_else(editor_ui::launcher::default_list))
             .with_game_file(game_file)
     } else {
-        Launcher::off()
+        // Without the browser at the start it is shown when the person leaves the open project
+        // for another: with the person's own list and game setting, and for a scripted check
+        // with none, so that no check reads or writes those of whoever is at the machine.
+        if check::is_scripted() {
+            Launcher::off().returning_to(None, None)
+        } else {
+            Launcher::off().returning_to(
+                editor_ui::launcher::default_list(),
+                editor_ui::launcher::default_game_file(),
+            )
+        }
     };
     // The project of the game's folder, as it is on disk: nothing is written by looking. A
     // folder without a project file, or with one of an older version, is the person's to
@@ -171,7 +169,8 @@ fn main() -> AppExit {
     // (`no_project_paths`), until the project that is chosen takes its place. The working
     // directory is whatever the desktop made it, and nothing in it is opened or written.
     let (level, saved_level, package) = if launcher.shown() {
-        let (level, package) = no_project_paths(&std::env::temp_dir(), std::process::id());
+        let (level, package) =
+            editor_ui::launcher::no_project_paths(&std::env::temp_dir(), std::process::id());
         (level, None, package)
     } else {
         let level = arguments
@@ -314,7 +313,8 @@ fn main() -> AppExit {
 
 /// What is set up once for the editor's project is set up again for a project that is
 /// entered from the browser: the Play coordinator of that project's game wakes the editor,
-/// and the window is called by the project's name.
+/// and the window is called by the project's name. A project that was left for the browser
+/// takes its name from the window.
 fn follow_entered_project(
     launcher: Res<Launcher>,
     project: Res<Project>,
@@ -322,10 +322,14 @@ fn follow_entered_project(
     proxy: Res<EventLoopProxyWrapper>,
     wakes: Res<check::GameWakes>,
     mut window: Single<&mut Window, With<PrimaryWindow>>,
-    mut entered: Local<u64>,
+    mut entered: Local<(u64, u64)>,
 ) {
-    let now = launcher.times_entered();
+    let now = (launcher.times_entered(), launcher.times_left());
     if std::mem::replace(&mut *entered, now) == now {
+        return;
+    }
+    if launcher.shown() {
+        window.title = window_title(None);
         return;
     }
     wake_for_the_game(editor, proxy, wakes);
@@ -365,19 +369,6 @@ mod tests {
         assert!(!starts_in_browser(false, true, false));
         assert!(!starts_in_browser(true, true, false));
         assert!(starts_in_browser(false, true, true));
-    }
-
-    #[test]
-    fn behind_the_browser_the_level_and_the_cooked_folder_are_in_no_project_and_not_made() {
-        let temporary = std::path::Path::new("/no/such/temporary/folder");
-        let (level, package) = no_project_paths(temporary, 4242);
-        let nowhere = temporary.join("arc-editor-no-project-4242");
-        assert!(level.starts_with(&nowhere) && package.starts_with(&nowhere));
-        assert!(level.is_absolute() && package.is_absolute());
-        // Naming them makes nothing: there is no level to open and none is opened.
-        assert!(!nowhere.exists() && !level.exists());
-        // Another run has other places.
-        assert_ne!(no_project_paths(temporary, 4243).0, level);
     }
 
     #[test]

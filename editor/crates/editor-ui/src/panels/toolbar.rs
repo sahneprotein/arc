@@ -38,6 +38,7 @@ use crate::{
         play::play_control,
         project::ProjectDialog,
         snap::{snap_button, snap_item},
+        unsaved::Leave,
     },
     particles::Particles,
     session::{duplicate_offer, emitter_placements, DuplicateOffer, Editor},
@@ -50,6 +51,10 @@ use crate::{
 /// a side in all. A starting size, not a limit: the level's size is not decided yet.
 pub(crate) const LANDSCAPE_CELLS: u32 = 16;
 pub(crate) const LANDSCAPE_SPACING: f32 = 1.0;
+
+/// The Level menu's row that leaves the open project for the project browser, where another
+/// is chosen.
+pub const SWITCH_PROJECT: &str = "Switch project";
 
 /// The toolbar's row.
 #[derive(Component, Default, Clone)]
@@ -327,6 +332,12 @@ fn level_menu() -> impl Scene {
                         // The project's settings are to be had whatever is open.
                         menu_item("Project settings", "")
                         on(|_: On<Activate>, mut dialog: ResMut<ProjectDialog>| dialog.open = true)
+                    ),
+                    (
+                        // Another project is chosen in the project browser. What leaving
+                        // would lose is asked about first, and a game that runs is stopped.
+                        menu_item(SWITCH_PROJECT, "")
+                        on(|_: On<Activate>, mut commands: Commands| commands.trigger(Leave::Project))
                     ),
                 ]
             ),

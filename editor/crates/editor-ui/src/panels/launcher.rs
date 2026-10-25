@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     launcher::{opened_words, FolderFor, Launcher, Pending, Refusal, Row},
+    panels::levels::LevelDialog,
     panels::{
         inspector::group_title,
         play::{requirement_words, CHANGE_GAME, CHOOSE_GAME},
@@ -52,6 +53,7 @@ use crate::{
         feathers::{BORDER, SELECTION, SIGNAL_WARN},
         radius, spacing, text,
     },
+    tool::Tool,
     wording, ProjectDialog,
 };
 
@@ -982,6 +984,42 @@ pub(crate) fn launcher_keys(
             _ => {}
         }
     }
+}
+
+/// The open project is left for the project browser: what was unsaved has been asked about,
+/// and a game the project played has stopped (`unsaved.rs`, `closing.rs`).
+#[derive(Event, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ToBrowser;
+
+/// Shows the project browser in front of an editor that holds no project: the project, its
+/// emitters and its level are let go, as they are behind the browser at the start, and the
+/// dialogs of the project are closed. The browser reads its list and the game's folder anew;
+/// the project that was left is the first row and is chosen, so Enter goes back to it. A
+/// game that runs keeps the editor where it is, which only a race can bring about: the
+/// game was stopped first.
+pub(crate) fn return_to_browser(
+    _: On<ToBrowser>,
+    mut launcher: ResMut<Launcher>,
+    (mut project, mut particles, mut dialog): (
+        ResMut<Project>,
+        ResMut<Particles>,
+        ResMut<ProjectDialog>,
+    ),
+    (mut levels, mut tool): (ResMut<LevelDialog>, ResMut<Tool>),
+    mut editor: NonSendMut<Editor>,
+) {
+    if !editor.leave_project() {
+        return;
+    }
+    *project = Project::of_folder(None);
+    *particles = Particles::default();
+    dialog.open = false;
+    *levels = LevelDialog::Closed;
+    // The Particles tool shows a project's emitters; the next project starts on objects.
+    if *tool == Tool::Particles {
+        *tool = Tool::default();
+    }
+    launcher.back_to_browser();
 }
 
 /// Enters the editor on the project that was chosen in the browser: the project of that

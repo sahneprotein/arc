@@ -1114,6 +1114,34 @@ impl Editor {
         }
     }
 
+    /// Leaves the open project for the project browser: the editor is again as it is behind
+    /// the browser at the start, on the game's current map, unsaved, with a level file and a
+    /// cooked folder in no project (`launcher::no_project_paths`), without a game and
+    /// without the project's emitters. What was unsaved is given up; the caller asked about
+    /// it first. A game that runs keeps the editor where it is: the caller stops it first.
+    /// Whether the project was left.
+    pub fn leave_project(&mut self) -> bool {
+        if self.active_run().is_some() || self.play_requested() {
+            return false;
+        }
+        let (level, package) =
+            crate::launcher::no_project_paths(&std::env::temp_dir(), std::process::id());
+        match Self::new(scene_data::current_map(), level, package) {
+            Ok(mut fresh) => {
+                fresh.next_id = self.next_id;
+                fresh.local_clients = self.local_clients;
+                fresh.opener = std::mem::replace(&mut self.opener, Box::new(|_| Ok(())));
+                *self = fresh;
+                true
+            }
+            Err(problem) => {
+                self.problem = Some(problem);
+                self.problem_from = Some(Source::Command);
+                false
+            }
+        }
+    }
+
     /// Applies a refreshed runtime selection to the open project. A live or pending Play
     /// run keeps its runtime; the caller can retry once the run has ended.
     pub fn use_runtime(&mut self, project_root: &Path, runtime: ProjectRuntimeContext) -> bool {

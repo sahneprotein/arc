@@ -17,7 +17,7 @@ use crate::{
     launcher::Launcher,
     panels::{
         brush::{brush_panel, show_brush_mode, show_landscape_parts, BrushPanel},
-        closing::{drive_shutdown, shutdown_dialog, Shutdown},
+        closing::{drive_shutdown, shutdown_dialog, Goal, Shutdown},
         emitter::{
             commit_emitter_name, emitter_panel, fill_emitter_fields, fill_emitter_names,
             fit_emitter, preview_overlay, run_preview, show_emitter, show_preview,
@@ -37,7 +37,7 @@ use crate::{
         },
         launcher::{
             enter_project, fill_launcher_name, follow_game_folder, launcher, launcher_keys,
-            show_launcher, show_new_folder,
+            return_to_browser, show_launcher, show_new_folder,
         },
         levels::{
             confirm_level_name, forget_name_problem, level_dialog, level_dialog_keys,
@@ -392,7 +392,9 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<RowDrag>()
             .init_resource::<Unsaved>()
             .init_resource::<Shutdown>()
+            .init_resource::<Goal>()
             .add_observer(leave_or_ask)
+            .add_observer(return_to_browser)
             .init_resource::<LevelDialog>()
             .init_resource::<LevelNameProblem>()
             .init_resource::<Modal>()

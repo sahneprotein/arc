@@ -1,14 +1,15 @@
 //! Leaving a level with unsaved changes: the one question the editor asks.
 //!
-//! Three things leave the open level: closing the window, opening another level, and
-//! beginning a new one. Each asks to [`Leave`]. If the level is saved it happens at once. If
+//! Four things leave the open level: closing the window, leaving the project for the project
+//! browser, opening another level, and beginning a new one. Each asks to [`Leave`]. If the level is saved it happens at once. If
 //! not, a dialog offers to save first, to discard the changes, or to keep editing. Saving
 //! goes through the core like any save; if it fails the editor stays where it is and the
 //! notice says why.
 //!
-//! Closing the editor also leaves the game's particle emitters that have changes: they are
-//! asked about in the same dialog, and saving first saves them too. Opening another level or
-//! beginning a new one does not leave them; they are the game's, not the level's.
+//! Closing the editor, or leaving the project, also leaves the project's particle emitters
+//! that have changes: they are asked about in the same dialog, and saving first saves them
+//! too. Opening another level or beginning a new one does not leave them; they are the
+//! project's, not the level's.
 //!
 //! The same holds for the project's settings that were changed in the Project settings and
 //! not saved. Saving first saves them as the dialog's own button does, with what protects
@@ -17,8 +18,8 @@
 //! why.
 //!
 //! The window does not close by itself: the application turns that off, and a request to
-//! close arrives here. Closing while a game the editor started runs goes on in
-//! `closing.rs`: the game is stopped first.
+//! close arrives here. Closing, or leaving the project, while a game the editor started runs
+//! goes on in `closing.rs`: the game is stopped first.
 
 use std::path::PathBuf;
 
@@ -35,8 +36,9 @@ use bevy::{
 };
 
 use crate::{
+    launcher::Launcher,
     panels::{
-        closing::{self, Shutdown},
+        closing::{self, Closing, Goal, Shutdown},
         project::ProjectDialog,
     },
     particles::Particles,
@@ -55,6 +57,8 @@ pub enum Leave {
     /// The editor closes.
     #[default]
     Close,
+    /// The open project is left for the project browser, where another is chosen.
+    Project,
     /// The level in this file is opened.
     Open(PathBuf),
     /// A new, empty level is begun, to be saved to this file.
@@ -66,8 +70,23 @@ impl Leave {
     fn save_caption(&self) -> &'static str {
         match self {
             Self::Close => "Save and close",
+            Self::Project => "Save and leave",
             Self::Open(_) => "Save and open",
             Self::New(_) => "Save and begin",
+        }
+    }
+
+    /// Whether the project is left with the level: the editor closes, or another project is
+    /// chosen. Its emitters, its settings and a game it plays go with it.
+    fn leaves_project(&self) -> bool {
+        matches!(self, Self::Close | Self::Project)
+    }
+
+    /// The line of the dialog that says a game runs and is stopped first.
+    fn game_runs_line(&self) -> &'static str {
+        match self {
+            Self::Project => "A game is running. It is stopped before the project is left.",
+            _ => "A game is running. It is stopped before the editor closes.",
         }
     }
 }
@@ -147,22 +166,23 @@ pub fn unsaved_words(level: bool, emitters: usize, project: bool) -> (String, St
     )
 }
 
-/// How many emitters leaving would lose the changes of: those of the game when the editor
-/// closes, none when only the level is left.
+/// How many emitters leaving would lose the changes of: the project's when the editor closes
+/// or the project is left, none when only the level is left.
 fn emitters_left(then: &Leave, particles: &Particles) -> usize {
     match then {
-        Leave::Close => particles.unsaved_count(),
+        Leave::Close | Leave::Project => particles.unsaved_count(),
         Leave::Open(_) | Leave::New(_) => 0,
     }
 }
 
-/// Whether leaving would lose changes to the project's settings: when the editor closes and
-/// they were changed and not saved. Opening another level or beginning one leaves them.
+/// Whether leaving would lose changes to the project's settings: when the editor closes or
+/// the project is left, and they were changed and not saved. Opening another level or
+/// beginning one leaves them.
 fn project_left(then: &Leave, project: &Project) -> bool {
-    *then == Leave::Close && project.settings_unsaved()
+    then.leaves_project() && project.settings_unsaved()
 }
 
-/// Saves the project's settings before the editor closes, if leaving would lose them.
+/// Saves the project's settings before the project is left, if leaving would lose them.
 /// Whether closing can go on. If they are not saved, because another program changed the
 /// project file or because they are settings that cannot be saved, nothing is written and
 /// the Project settings are opened, which say why.
@@ -233,17 +253,24 @@ pub fn unsaved_dialog() -> impl Scene {
                             @FeathersButton { @caption: bsn! { Text("Discard changes") ThemedText } }
                             on(|_: On<Activate>,
                                 mut unsaved: ResMut<Unsaved>,
-                                mut shutdown: ResMut<Shutdown>,
+                                (mut shutdown, mut goal): (ResMut<Shutdown>, ResMut<Goal>),
                                 mut project: ResMut<Project>,
                                 mut editor: NonSendMut<Editor>,
-                                mut exit: MessageWriter<AppExit>| {
+                                mut exit: MessageWriter<AppExit>,
+                                mut commands: Commands| {
                                 unsaved.question = Question::No;
                                 // The project's settings are given up with the rest, also
                                 // if a game that will not stop keeps the editor open.
                                 if project_left(&unsaved.then, &project) {
                                     project.discard_settings();
                                 }
-                                leave(&unsaved.then, &mut editor, &mut shutdown, &mut exit, true);
+                                let closing = Closing {
+                                    shutdown: &mut shutdown,
+                                    goal: &mut goal,
+                                    exit: &mut exit,
+                                    commands: &mut commands,
+                                };
+                                leave(&unsaved.then, &mut editor, closing, true);
                             })
                         ),
                         (
@@ -299,17 +326,12 @@ pub fn unsaved_dialog() -> impl Scene {
 }
 
 /// Does what was asked for, the unsaved changes being saved or given up. `asked` says that
-/// the person answered the question about them. Closing goes on in `closing.rs`: with a game
-/// running the editor does not close yet.
-fn leave(
-    then: &Leave,
-    editor: &mut Editor,
-    shutdown: &mut Shutdown,
-    exit: &mut MessageWriter<AppExit>,
-    asked: bool,
-) {
+/// the person answered the question about them. Closing and leaving the project go on in
+/// `closing.rs`: with a game running the editor does not close or leave yet.
+fn leave(then: &Leave, editor: &mut Editor, closing: Closing<'_, '_, '_, '_>, asked: bool) {
     match then {
-        Leave::Close => closing::close(editor, shutdown, exit, asked),
+        Leave::Close => closing::close(editor, closing, Goal::Exit, asked),
+        Leave::Project => closing::close(editor, closing, Goal::Browser, asked),
         Leave::Open(file) => editor.open(file.clone()),
         Leave::New(file) => editor.new_level(file.clone()),
     }
@@ -317,16 +339,25 @@ fn leave(
 
 /// Something wants to leave the level: at once if it is saved, after the question if not.
 /// While the question is open or a save is under way, a second request changes nothing.
+/// While the project browser is shown there is nothing to ask about: the level behind it is
+/// in no project and was never anyone's to save, so the window closes at once.
 pub(crate) fn leave_or_ask(
     request: On<Leave>,
     mut unsaved: ResMut<Unsaved>,
-    mut shutdown: ResMut<Shutdown>,
-    (particles, project): (Res<Particles>, Res<Project>),
+    (mut shutdown, mut goal): (ResMut<Shutdown>, ResMut<Goal>),
+    (particles, project, launcher): (Res<Particles>, Res<Project>, Res<Launcher>),
     mut editor: NonSendMut<Editor>,
     mut exit: MessageWriter<AppExit>,
+    mut commands: Commands,
 ) {
     // A second request changes nothing either while the editor is closing around a game.
     if unsaved.question != Question::No || *shutdown != Shutdown::No {
+        return;
+    }
+    if launcher.shown() {
+        if *request.event() == Leave::Close {
+            exit.write(AppExit::Success);
+        }
         return;
     }
     if editor.snapshot().status.dirty
@@ -336,13 +367,13 @@ pub(crate) fn leave_or_ask(
         unsaved.then = request.event().clone();
         unsaved.question = Question::Asking;
     } else {
-        leave(
-            request.event(),
-            &mut editor,
-            &mut shutdown,
-            &mut exit,
-            false,
-        );
+        let closing = Closing {
+            shutdown: &mut shutdown,
+            goal: &mut goal,
+            exit: &mut exit,
+            commands: &mut commands,
+        };
+        leave(request.event(), &mut editor, closing, false);
     }
 }
 
@@ -359,41 +390,77 @@ pub(crate) fn close_requested(
 /// The dialog's texts that change with what is left and what has changes, and the emitters
 /// that say whether they have any.
 type DialogWords<'w, 's> = (
-    Query<'w, 's, &'static mut Text, (With<SaveFirstCaption>, Without<UnsavedLine>)>,
-    Query<'w, 's, (&'static UnsavedLine, &'static mut Text), Without<SaveFirstCaption>>,
+    Query<
+        'w,
+        's,
+        &'static mut Text,
+        (
+            With<SaveFirstCaption>,
+            Without<UnsavedLine>,
+            Without<GameRunsLine>,
+        ),
+    >,
+    Query<
+        'w,
+        's,
+        (&'static UnsavedLine, &'static mut Text),
+        (Without<SaveFirstCaption>, Without<GameRunsLine>),
+    >,
     Res<'w, Particles>,
     Res<'w, Project>,
 );
+
+/// The line that says a game runs, with the words of what is left.
+type GameRunsLines<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Node, &'static mut Text),
+    (
+        With<GameRunsLine>,
+        Without<UnsavedLine>,
+        Without<SaveFirstCaption>,
+    ),
+>;
 
 /// Finishes a save that was chosen in the dialog, shows or hides the dialog, and has it say
 /// what has changes.
 pub(crate) fn answer_unsaved(
     mut unsaved: ResMut<Unsaved>,
-    mut shutdown: ResMut<Shutdown>,
+    (mut shutdown, mut goal): (ResMut<Shutdown>, ResMut<Goal>),
     mut editor: NonSendMut<Editor>,
     mut dialog: Query<&mut Node, (With<UnsavedDialog>, Without<GameRunsLine>)>,
-    mut game_runs: Query<&mut Node, With<GameRunsLine>>,
+    mut game_runs: GameRunsLines,
     (mut caption, mut lines, particles, project): DialogWords,
-    mut exit: MessageWriter<AppExit>,
+    (mut exit, mut commands): (MessageWriter<AppExit>, Commands),
 ) {
     if unsaved.question == Question::Saving && !editor.busy() {
         unsaved.question = Question::No;
         // A save that failed leaves everything as it is; the notice says why.
         if !editor.snapshot().status.dirty && editor.problem.is_none() {
             let then = unsaved.then.clone();
-            leave(&then, &mut editor, &mut shutdown, &mut exit, true);
+            let closing = Closing {
+                shutdown: &mut shutdown,
+                goal: &mut goal,
+                exit: &mut exit,
+                commands: &mut commands,
+            };
+            leave(&then, &mut editor, closing, true);
         }
     }
-    let line = if unsaved.then == Leave::Close
+    let line = if unsaved.then.leaves_project()
         && (editor.active_run().is_some() || editor.play_requested())
     {
         Display::Flex
     } else {
         Display::None
     };
-    for mut node in &mut game_runs {
+    let line_words = unsaved.then.game_runs_line();
+    for (mut node, mut text) in &mut game_runs {
         if node.display != line {
             node.display = line;
+        }
+        if text.0 != line_words {
+            line_words.clone_into(&mut text.0);
         }
     }
     let wanted = if unsaved.question == Question::Asking {
@@ -503,9 +570,10 @@ mod tests {
     }
 
     #[test]
-    fn only_closing_the_editor_leaves_the_project_settings_and_only_changed_ones() {
+    fn only_closing_the_editor_or_leaving_the_project_leaves_its_settings_and_only_changed_ones() {
         let (folder, mut project) = project_with_a_change();
         assert!(project_left(&Leave::Close, &project));
+        assert!(project_left(&Leave::Project, &project));
         assert!(!project_left(&Leave::Open("a".into()), &project));
         assert!(!project_left(&Leave::New("a".into()), &project));
         // Given up, or saved, there is nothing of them to ask about.
@@ -590,18 +658,32 @@ mod tests {
     }
 
     #[test]
-    fn only_closing_the_editor_leaves_the_emitters() {
+    fn only_closing_the_editor_or_leaving_the_project_leaves_the_emitters() {
         let game = tempfile::tempdir().unwrap();
         let mut particles = Particles::of_game(game.path().into());
         particles.new_emitter().unwrap();
         assert_eq!(emitters_left(&Leave::Close, &particles), 1);
+        assert_eq!(emitters_left(&Leave::Project, &particles), 1);
         assert_eq!(emitters_left(&Leave::Open("a".into()), &particles), 0);
         assert_eq!(emitters_left(&Leave::New("a".into()), &particles), 0);
     }
 
     #[test]
+    fn the_line_about_a_running_game_says_what_is_left() {
+        assert!(Leave::Close
+            .game_runs_line()
+            .ends_with("before the editor closes."));
+        assert!(Leave::Project
+            .game_runs_line()
+            .ends_with("before the project is left."));
+        assert!(!Leave::Open("a".into()).leaves_project());
+        assert!(!Leave::New("a".into()).leaves_project());
+    }
+
+    #[test]
     fn the_button_that_saves_first_says_what_follows() {
         assert_eq!(Leave::Close.save_caption(), "Save and close");
+        assert_eq!(Leave::Project.save_caption(), "Save and leave");
         assert_eq!(Leave::Open("a".into()).save_caption(), "Save and open");
         assert_eq!(Leave::New("a".into()).save_caption(), "Save and begin");
     }
