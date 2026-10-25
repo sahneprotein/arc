@@ -14,8 +14,11 @@
 //! folder chooser (`editor_ui::chooser`). The editor is entered on the project that is
 //! chosen, in the same window.
 //!
-//! The arguments are for development and for scripts, and each of them starts the editor
-//! without the browser, as it always started:
+//! `arc-editor <project.aproj>` starts on that project: the browser is entered on it at
+//! once, as if it had been chosen there, and says why if it is refused.
+//!
+//! The other arguments are for development and for scripts, and each of them starts the
+//! editor without the browser, as it always started:
 //!
 //! `arc-editor [--level <file>] [--package <directory>] [--game <folder>]`: the level file is
 //! opened if it exists. Otherwise the editor starts with the game's current map, converted, and
@@ -64,13 +67,27 @@ struct Arguments {
     game: Option<PathBuf>,
     /// Whether anything was named at all: a level, a package or a game.
     any: bool,
+    /// The project file to start on, if one was named.
+    project: Option<PathBuf>,
 }
 
-/// Whether the editor starts in the project browser: when nothing was named on the command
-/// line and no script checks it. A scripted check that is about the browser asks for it by
-/// naming the file its list is kept in.
-fn starts_in_browser(any_argument: bool, scripted: bool, scripted_browser: bool) -> bool {
-    if scripted {
+/// How the editor is started, as the error for wrong arguments says it.
+const USAGE: &str =
+    "usage: arc-editor [<project.aproj>] | [--level <file>] [--package <directory>] [--game <folder>]";
+
+/// Whether the editor starts in the project browser: when a project file was named, which
+/// the browser enters at once, or when nothing was named and no script checks it. A
+/// scripted check that is about the browser asks for it by naming the file its list is kept
+/// in.
+fn starts_in_browser(
+    any_argument: bool,
+    project_file: bool,
+    scripted: bool,
+    scripted_browser: bool,
+) -> bool {
+    if project_file {
+        true
+    } else if scripted {
         scripted_browser
     } else {
         !any_argument
@@ -91,6 +108,7 @@ fn arguments() -> Result<Arguments, String> {
         package: DEFAULT_PACKAGE.into(),
         game: None,
         any: false,
+        project: None,
     };
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
@@ -106,8 +124,24 @@ fn arguments() -> Result<Arguments, String> {
             "--level" => parsed.level = Some(path()?),
             "--package" => parsed.package = path()?,
             "--game" => parsed.game = Some(path()?),
-            other => return Err(format!("unknown argument {other:?}")),
+            other if other.starts_with('-') => return Err(format!("unknown argument {other:?}")),
+            // A path that is not an option is the project file to start on.
+            _ if parsed.project.is_none() => parsed.project = Some(PathBuf::from(arg)),
+            _ => return Err("only one project file can be opened".to_owned()),
         }
+    }
+    if parsed.project.is_some() {
+        // The project file says what is opened; nothing else may say otherwise.
+        if parsed.level.is_some()
+            || parsed.game.is_some()
+            || parsed.package != PathBuf::from(DEFAULT_PACKAGE)
+        {
+            return Err(
+                "a project file is opened on its own, without --level, --package or --game"
+                    .to_owned(),
+            );
+        }
+        parsed.any = false;
     }
     Ok(parsed)
 }
@@ -117,9 +151,7 @@ fn main() -> AppExit {
     let arguments = match arguments() {
         Ok(arguments) => arguments,
         Err(problem) => {
-            eprintln!(
-                "error: {problem}\nusage: arc-editor [--level <file>] [--package <directory>] [--game <folder>]"
-            );
+            eprintln!("error: {problem}\n{USAGE}");
             return AppExit::from_code(2);
         }
     };
@@ -133,17 +165,31 @@ fn main() -> AppExit {
     // read from where the editor happens to be started.
     let launcher = if starts_in_browser(
         arguments.any,
+        arguments.project.is_some(),
         check::is_scripted(),
         check::scripted_browser().is_some(),
     ) {
         // Where the game is that plays every project is the editor's one setting for this
-        // person, kept beside the list; a check keeps its own beside its own list.
-        let game_file = match check::scripted_browser() {
-            Some(list) => Some(list.with_file_name("game-folder.json")),
-            None => editor_ui::launcher::default_game_file(),
+        // person, kept beside the list; a check keeps its own beside its own list, or has
+        // none, and never reads or writes the person's.
+        let (list, game_file) = match (check::scripted_browser(), check::is_scripted()) {
+            (Some(list), _) => {
+                let game_file = list.with_file_name("game-folder.json");
+                (Some(list), Some(game_file))
+            }
+            (None, true) => (None, None),
+            (None, false) => (
+                editor_ui::launcher::default_list(),
+                editor_ui::launcher::default_game_file(),
+            ),
         };
-        Launcher::at_start(check::scripted_browser().or_else(editor_ui::launcher::default_list))
-            .with_game_file(game_file)
+        let mut launcher = Launcher::at_start(list).with_game_file(game_file);
+        // A project file named on the command line is opened as if it were chosen in the
+        // browser: entered in the first frame, or refused there, in words.
+        if let Some(file) = &arguments.project {
+            launcher.open_file(file);
+        }
+        launcher
     } else {
         // Without the browser at the start it is shown when the person leaves the open project
         // for another: with the person's own list and game setting, and for a scripted check
@@ -360,14 +406,17 @@ mod tests {
     #[test]
     fn the_browser_is_the_first_screen_unless_something_was_named_or_a_script_checks() {
         // A person starts the editor: nothing named, no script.
-        assert!(starts_in_browser(false, false, false));
+        assert!(starts_in_browser(false, false, false, false));
         // A level, a package or a game named on the command line goes straight in.
-        assert!(!starts_in_browser(true, false, false));
+        assert!(!starts_in_browser(true, false, false, false));
         // A scripted check goes straight in, with or without arguments, unless it is about
         // the browser and says so.
-        assert!(!starts_in_browser(false, true, false));
-        assert!(!starts_in_browser(true, true, false));
-        assert!(starts_in_browser(false, true, true));
+        assert!(!starts_in_browser(false, false, true, false));
+        assert!(!starts_in_browser(true, false, true, false));
+        assert!(starts_in_browser(false, false, true, true));
+        // A project file is entered through the browser, for a person and a script alike.
+        assert!(starts_in_browser(false, true, false, false));
+        assert!(starts_in_browser(false, true, true, false));
     }
 
     #[test]

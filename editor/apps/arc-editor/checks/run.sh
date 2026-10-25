@@ -36,6 +36,9 @@ else
 fi
 failed=0
 only="${1:-}"
+# The one argument the editor is started with, as a person starts it on a project file;
+# none unless a case names one (with_arg).
+editor_arg=""
 
 # wanted <name>: whether the case is to be run.
 wanted() {
@@ -44,6 +47,13 @@ wanted() {
 
 # What every case expects besides what it names: that each of its steps could be played.
 no_failed_steps='failed_steps=\[\]'
+# with_arg <path> <check function> <name> <steps> <expected>...: the case's editor is started
+# with this one argument.
+with_arg() {
+    editor_arg="$1"; shift
+    "$@"
+    editor_arg=""
+}
 # check_failing <name> <steps> <expected>...: the same for a case one of whose steps is meant
 # to fail. It says itself which failure it expects.
 check_failing() {
@@ -67,7 +77,7 @@ check() {
         *) mkdir -p "$folder/levels" ;;
     esac
     result="$(cd "$folder" && ARC_EDITOR_CHECK="$folder/$name.png" ARC_EDITOR_CHECK_STEPS="$steps" \
-        limit 180 "$editor" 2>&1 | grep '^ARC_EDITOR_CHECK_RESULT')"
+        limit 180 "$editor" ${editor_arg:+"$editor_arg"} 2>&1 | grep '^ARC_EDITOR_CHECK_RESULT')"
     # Kept for the comparisons between cases further down, and in ARC_EDITOR_RESULTS if set.
     printf '%s\n' "$result" > "$work/$name.result"
     [ -z "${ARC_EDITOR_RESULTS:-}" ] || printf '%s\n' "$result" > "$ARC_EDITOR_RESULTS/$name.result"
@@ -1520,6 +1530,24 @@ with_browser check browser-new-again-left 'key=enter,choose=Level>Switch project
     'launcher_entered=1' 'launcher_left=1' 'question=No' 'project=NoFolder' 'has_file=false' 'runtime=none' 'problem=none'
 with_browser check browser-new-again-back 'key=enter,choose=Level>Switch project,key=enter' \
     "$ENTERED" 'launcher_entered=2' 'launcher_left=1' 'project=Ready' 'has_file=true' 'look=loaded:3abf9a2f' 'problem=none'
+# A project is opened by its file, in the browser and on the command line. A file that is no
+# project file is refused in the browser, which names it; nothing is written either way.
+with_browser check browser-new-again-file "pick-folder=$HARBOUR/project.aproj,click-button=Open Project" \
+    "$ENTERED" 'launcher_entered=1' 'project=Ready' 'has_file=true' 'problem=none'
+with_browser check browser-new-again-letter "pick-folder=$DOCS/letter.txt,click-button=Open Project" \
+    'launcher=shown' 'launcher_refusal=project\.path_invalid' 'launcher_entered=0' 'project=NoFolder'
+with_arg "$HARBOUR/project.aproj" with_browser check browser-new-again-cli 'key=t' \
+    "$ENTERED" 'launcher_entered=1' 'project=Ready' 'has_file=true' 'problem=none'
+# Without a list of its own a scripted editor enters the project all the same, and keeps no
+# list: it never reads or writes the person's.
+with_arg "$HARBOUR/project.aproj" check browser-new-again-cli-nolist 'key=t' \
+    'launcher=off launcher_rows=\[\]' 'launcher_list=none' 'launcher_entered=1' 'project=Ready' 'has_file=true' 'problem=none'
+with_arg "$DOCS/letter.txt" with_browser check browser-new-again-cli-refused 'key=t' \
+    'launcher=shown' 'launcher_refusal=project\.path_invalid' 'launcher_entered=0' 'project=NoFolder'
+if wanted browser-new-again-file || wanted browser-new-again-cli; then
+    [ ! -s "$DOCS/letter.txt" ] && [ "$(ls -A "$DOCS" | tr '\n' ' ')" = "Harbour letter.txt " ] \
+        || { echo "browser-new-again-file: FAILED, opening by file wrote into the chosen folder"; failed=1; }
+fi
 with_browser check browser-new-again-over "pick-folder=$DOCS,click-button=New Project,project-name=Harbour,click-button=Create project" \
     'launcher=shown' 'launcher_pending=new launcher_refusal=project\.folder_taken' 'launcher_entered=0' 'project=NoFolder'
 with_browser check browser-new-again-inside "pick-folder=$HARBOUR,click-button=New Project" \

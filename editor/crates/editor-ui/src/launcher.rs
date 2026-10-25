@@ -481,8 +481,29 @@ impl Launcher {
             (Some(folder), FolderFor::Game) => {
                 self.choose_game(&folder);
             }
+            // A project is opened by its file. A folder is looked at as before: one that
+            // is no project yet is offered to be set up.
+            (Some(file), FolderFor::Open) if file.is_file() => {
+                self.open_file(&file);
+            }
             (Some(folder), FolderFor::Open | FolderFor::New) => {
                 self.open(&folder, why);
+            }
+        }
+    }
+
+    /// Opens the project of this `.aproj` file: its folder is the project, entered as one
+    /// chosen in the browser is. A file that is no project file, or a project whose file is
+    /// refused, is not entered, and the refusal names the file. Whether it led anywhere.
+    /// Nothing is written.
+    pub fn open_file(&mut self, file: &Path) -> bool {
+        self.refusal = None;
+        self.pending = None;
+        match project::project_root_from_file(file) {
+            Ok(root) => self.open(&root, FolderFor::Open),
+            Err(problem) => {
+                self.refusal = Some(Refusal::Refused(file.to_path_buf(), problem));
+                false
             }
         }
     }
@@ -1050,6 +1071,41 @@ mod tests {
         launcher.folder_chosen(Some(root.clone()));
         assert_eq!(launcher.refusal(), Some(&Refusal::AlreadyProject(root)));
         assert!(launcher.opening().is_none() && !level.exists());
+    }
+
+    #[test]
+    fn a_project_is_opened_by_its_file_and_a_file_that_is_none_is_refused_by_name() {
+        let home = tempfile::tempdir().unwrap();
+        let project = project_in(home.path(), "Harbour");
+        let file = project.join(editor_services::project_spec::FILE_NAME);
+        let mut launcher = launcher_in(home.path());
+        launcher.ask_folder(FolderFor::Open);
+        launcher.folder_chosen(Some(file.clone()));
+        assert_eq!(launcher.refusal(), None);
+        assert_eq!(launcher.opening().unwrap().project_root, project);
+
+        // A file that is no project file: refused, with the file named, and nothing opened.
+        let letter = home.path().join("letter.txt");
+        std::fs::write(&letter, b"").unwrap();
+        let mut launcher = launcher_in(home.path());
+        assert!(!launcher.open_file(&letter));
+        let Some(Refusal::Refused(named, problem)) = launcher.refusal() else {
+            panic!("the letter was not refused");
+        };
+        assert_eq!(
+            (named, problem.code.as_str()),
+            (&letter, "project.path_invalid")
+        );
+        assert!(launcher.opening().is_none());
+
+        // A second project file beside the first: the folder is no longer one project.
+        std::fs::copy(&file, project.join("copy.aproj")).unwrap();
+        let mut launcher = launcher_in(home.path());
+        assert!(!launcher.open_file(&file));
+        let Some(Refusal::Refused(_, problem)) = launcher.refusal() else {
+            panic!("two project files were taken for one");
+        };
+        assert_eq!(problem.code, "project.multiple_files");
     }
 
     #[test]
