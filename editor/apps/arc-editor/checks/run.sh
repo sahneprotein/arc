@@ -1639,6 +1639,22 @@ if wanted browser-new-again-nolevel; then
     [ -z "$(ls "$work/browser-new/Quay/levels")" ] \
         || { echo "browser-new-again-nolevel: FAILED, opening the project made its missing level"; failed=1; }
 fi
+# A project's whole round in one run, all through its file: it is made, played and stopped,
+# left for a second new project, and opened again by its `.aproj`. Both are listed, the
+# first is the one the editor is on, and its cooked level is in its own folder.
+CYCLE_DOCS="$work/project-cycle/Documents"
+CYCLE="$CYCLE_DOCS/Cycle"
+if wanted project-cycle; then
+    mkdir -p "$CYCLE_DOCS"
+fi
+with_game runs with_browser check project-cycle "pick-folder=$CYCLE_DOCS,click-button=New Project,project-name=Cycle,click-button=Create project,$PLAY,wait-run=running,click-button=Stop,wait-run=none,$SWITCH,pick-folder=$CYCLE_DOCS,click-button=New Project,project-name=Other,click-button=Create project,$SWITCH,pick-folder=$CYCLE/project.aproj,click-button=Open Project" \
+    'launcher=off launcher_rows=\[(Cycle|Other):ready,(Cycle|Other):ready\]' "$NO_BROWSER_STATE" \
+    'launcher_entered=3' 'launcher_left=2' 'question=No' 'project=Ready' 'has_file=true' 'game=true' 'problem=none'
+if wanted project-cycle; then
+    [ -f "$CYCLE/project.aproj" ] && [ -f "$CYCLE_DOCS/Other/project.aproj" ] && [ -d "$CYCLE/cooked" ] \
+        && [ ! -e "$CYCLE_DOCS/Other/cooked" ] \
+        || { echo "project-cycle: FAILED, a project's file is missing, or a cooked level is not in the project that was played"; failed=1; }
+fi
 # An editor that is told what to open, as every other case of this file, has no browser.
 check browser-off 'click-row=11' 'launcher=off launcher_rows=\[\]' 'launcher_list=none' 'selected=Some\("Tall box"\)'
 
