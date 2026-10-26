@@ -59,6 +59,10 @@ are run and recorded in the milestone it belongs to.
    (`handshake client_without_hello_is_dropped` and two `slow_client` tests): the server
    drops a client that never sent a hello only after 7.95 seconds. Find what the window
    is meant to be and mend the code or the tests.
+   (Done in the game at `c3b1e1c` for item 1 and `d809e9e` for this one, merged into
+   `codex/aproj-game`: the window is 2 seconds, as `HELLO_TIMEOUT` and the foundation
+   design say; protocol 123 of 123 in three runs, server 33, client 129, with `dev-tools`
+   135 and 34, `xtask` 272. The authority review found what follows in 6.)
 3. **M1's exit as a scripted case** (Claude). A project is made, played, left for another
    and opened again by its `.aproj`, in one run of `apps/arc-editor/checks/run.sh`. No
    code names `arc-project.json` any more; only this document does.
@@ -71,7 +75,18 @@ are run and recorded in the milestone it belongs to.
    (Done at `85b3ec3e9`: the tools fold by measurement when the row is longer than the
    window, which the row with the Particles tool is at 1100 and not at 1150, so the case
    asks for 1150. The fold group passes 6 of 6.)
-5. **M2.1, the real run with two local test clients** (a person, with the display awake),
+6. **A silent client keeps its netcode slot** (found by the authority review of
+   `d809e9e`, there before it; for the owner). Dropping a link at the hello deadline
+   despawns its entity, but lightyear 0.30.1's netcode keeps the client's slot and id
+   until the timeout of the client's own connect token, which a client that holds the key
+   (every build today) can set to never. Such clients fill the server or lock out a known
+   player's id; `arc_connected_clients` does not show them. lightyear has no public way
+   to disconnect one client. The ways out: a focused patch of `lightyear_netcode` that
+   disconnects a link with `Disconnecting` in netcode (also offered upstream), or
+   server-issued connect tokens with a server-chosen timeout (M4.1). First a test that
+   fails today: `max_clients = 1`, a silent client with a timeout of -1, and a second
+   client that must be accepted after the hello window.
+7. **M2.1, the real run with two local test clients** (a person, with the display awake),
    once 1 to 4 are in.
 
 ## Milestones
