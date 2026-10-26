@@ -476,14 +476,14 @@ with_game runs check review-key-mended "$EMPTY,key=f5,choose=Add>Spawn point,key
 check review-left     "$RULE,choose=Tool>Review,key=w"    'workspace=Objects' 'tool=Translate' 'review_rows=0' 'review=\["Play:play\.terrain_unsupported"\]'
 # At 1261 pixels Review is one more button of the row. The row with every tool as a button is
 # longer than 900 pixels, the narrowest window that has the panel switches as buttons: there,
-# and at 1000, the tools are in their menu, which the row holds, and the panel switches are
-# buttons still. At 621 Review is a row of the tool menu as well, and the panel shows when
+# and at 1000 and 1100, the tools are in their menu, which the row holds, and the panel
+# switches are buttons still; at 1150 the whole row fits, with the Particles tool. At 621 Review is a row of the tool menu as well, and the panel shows when
 # the right-hand place is shown.
 check_sized "$wide" wide-review   "$RULE,choose=Tool>Review" 'window=1261x' 'toolbar_folded=false' 'workspace=Review' 'review_rows=1' "$row" 'toolbar_fits=Some\(true\)'
 check_sized 900x700 fold-review   'choose=Tool>Review'    'window=900x' 'toolbar_folded=true' 'workspace=Review' "$row" 'toolbar_fits=Some\(true\)'
 check_sized 900x700 fold-panels   'click-button=Inspector,choose=Tool>Rotate' 'window=900x' 'toolbar_folded=true' 'tool=Rotate' "$row" 'toolbar_fits=Some\(true\)'
 check_sized 1000x700 fold-tools   'choose=Tool>Review'    'window=1000x' 'toolbar_folded=true' 'workspace=Review' "$row" 'toolbar_fits=Some\(true\)'
-check_sized 1100x700 fold-not     'click-button=Review'   'window=1100x' 'toolbar_folded=false' 'workspace=Review' "$row" 'toolbar_fits=Some\(true\)'
+check_sized 1150x700 fold-not     'click-button=Review'   'window=1150x' 'toolbar_folded=false' 'workspace=Review' "$row" 'toolbar_fits=Some\(true\)'
 with_game runs check_sized 1100x700 fold-game 'cook,click-button=Play,click-item=Open Game Window,wait-run=running' 'window=1100x' 'play_run=Running' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-review "$RULE,choose=Tool>Review" 'window=621x' 'toolbar_folded=true' 'workspace=Review' 'review_rows=1' "$row" 'toolbar_fits=Some\(true\)'
 check_sized "$narrow" narrow-review-select "$RULE,choose=Tool>Review,click-button=Select Landscape" 'window=621x' 'selected=Some\("Landscape"\)' 'selection=1'
