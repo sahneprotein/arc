@@ -134,7 +134,7 @@ fn arguments() -> Result<Arguments, String> {
         // The project file says what is opened; nothing else may say otherwise.
         if parsed.level.is_some()
             || parsed.game.is_some()
-            || parsed.package != PathBuf::from(DEFAULT_PACKAGE)
+            || parsed.package.as_path() != std::path::Path::new(DEFAULT_PACKAGE)
         {
             return Err(
                 "a project file is opened on its own, without --level, --package or --game"
