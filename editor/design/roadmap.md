@@ -17,6 +17,11 @@ made in (the cargo workspace `editor/` of the engine fork `arc`).
   file; the file holds everything the project is, and the editor starts from it. No project
   exists yet, so nothing older is read, converted or kept compatible: the editor and the
   game know `.aproj` at schema version 1 and refuse anything else. Owner, 2026-10-25.
+- **Every file format has one version.** The level, the cooked package (manifest, simulation
+  and visual payloads), the emitter, the look profile and the editor's settings are each at
+  version 1, as `.aproj` is, and refuse every other: no older version is read, no document
+  is upgraded from one version to another, and no version is chosen by what a file holds.
+  Owner, 2026-10-25.
 - **Server authority.** The server accepts inputs, never positions; every new message,
   replicated component and handshake field is reviewed against that (the game's `CLAUDE.md`,
   "Server authority").

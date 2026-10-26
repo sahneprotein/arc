@@ -133,9 +133,6 @@ pub fn cook_with_emitters(
             }),
         }
     }
-    // Placements make the visual payload's second schema; without them it is the first,
-    // byte for byte as it always was.
-    visual.schema = VisualPayload::schema_for(&visual.emitters);
     simulation.spawns.sort_by_key(|s| s.order);
     check()?;
     simulation.validate()?;

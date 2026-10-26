@@ -78,7 +78,6 @@ pub struct RuleDefinition {
     pub output_layer: Option<LayerId>,
     #[serde(default)]
     pub density_layer: Option<LayerId>,
-    #[serde(default)]
     pub exclusion_layers: Vec<LayerId>,
     pub parameters: BTreeMap<String, f32>,
 }

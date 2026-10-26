@@ -983,27 +983,25 @@ check particles-refused-by-gpu "$P,click-button=Cone,click-button=GPU preview,wa
     'emitter_shape=Some\(Cone\)' 'preview_mode=Gpu' 'gpu=Unsupported \{ field: "shape"' 'stage=\(true, [0-9]+\)'
 # An emitter that is saved is placed in the level from the Particles tool: the editor goes
 # to the object tools with the new object selected, named after the emitter, and the level
-# is of its second schema. The core is told what the game's folder holds, so the placement
+# is of its one schema. The core is told what the game's folder holds, so the placement
 # is no problem of the review, and the level is cooked with it. An emitter that was never
 # saved has no file a level could name: nothing is placed.
 check particles-place "$P,click-button=Save emitter,click-button=Place in level,cook" \
-    'workspace=Objects' 'selected=Some\("New Emitter"\)' 'objects=23' 'emitter_placed=1' 'level_schema=2' \
+    'workspace=Objects' 'selected=Some\("New Emitter"\)' 'objects=23' 'emitter_placed=1' 'level_schema=1' \
     'stage=\(false, 0\)' 'review=\[\]' 'undo=Some\("create"\)' 'cook_needed=false' 'problem=none'
 check particles-place-unsaved "$P,click-button=Place in level" \
     'workspace=Particles' 'objects=22' 'emitter_placed=0' 'level_schema=1' 'undo=None' 'problem=none'
-# A level that was saved before it placed an emitter is a file of the first schema. Saved
-# again with its first emitter placed, the file is of the second schema, and the file as it
-# was is kept beside it, byte for byte, under its name with .schema-1.bak after it.
-check level-backup 'save' 'has_file=true' 'dirty=false' 'level_schema=1' 'problem=none'
-if wanted level-backup; then
-    cp "$work/level-backup/levels/current-map.level.json" "$work/level-backup.before"
-fi
-check level-backup-again "$P,click-button=Save emitter,click-button=Place in level,save" \
-    'has_file=true' 'dirty=false' 'emitter_placed=1' 'level_schema=2' 'problem=none'
-if wanted level-backup-again; then
-    cmp -s "$work/level-backup/levels/current-map.level.json.schema-1.bak" "$work/level-backup.before" \
-        && grep -q '"schema": 2' "$work/level-backup/levels/current-map.level.json" \
-        || { echo "level-backup-again: FAILED, the level as it was is not kept beside it, or the level is not of the second schema"; failed=1; }
+# A level saved before it placed an emitter, and saved again with one placed, is a file of
+# the format's one schema both times, and nothing else is written beside it.
+check level-emitter-save 'save' 'has_file=true' 'dirty=false' 'level_schema=1' 'problem=none'
+check level-emitter-save-again "$P,click-button=Save emitter,click-button=Place in level,save" \
+    'has_file=true' 'dirty=false' 'emitter_placed=1' 'level_schema=1' 'problem=none'
+if wanted level-emitter-save-again; then
+    levels="$work/level-emitter-save/levels"
+    [ "$(ls -A "$levels")" = "current-map.level.json" ] \
+        && grep -q '"schema": 1,' "$levels/current-map.level.json" \
+        && grep -q '"kind": "Emitter"' "$levels/current-map.level.json" \
+        || { echo "level-emitter-save-again: FAILED, the level is not the one file of schema 1 with its emitter"; failed=1; }
 fi
 unset ARC_EDITOR_CHECK_PARTICLES
 

@@ -4562,10 +4562,7 @@ mod tests {
             std::slice::from_ref(&placed.id)
         );
         assert_eq!(snapshot.undo_label.as_deref(), Some("create"));
-        assert_eq!(
-            snapshot.document.schema,
-            scene_data::SCHEMA_VERSION_EMITTERS
-        );
+        assert_eq!(snapshot.document.schema, scene_data::SCHEMA_VERSION);
         assert_eq!(emitter_placements(&snapshot, &emitter), 1);
         assert_eq!(emitter_placements(&snapshot, "another"), 0);
 
@@ -4583,8 +4580,8 @@ mod tests {
             snapshot.document_revision
         );
 
-        // Cooked: the visual payload is of its second schema and has the placement with
-        // the hash of the emitter's file as it is saved. The server's payload is as before.
+        // Cooked: the visual payload has the placement with the hash of the emitter's file
+        // as it is saved. The server's payload is as before.
         editor.cook();
         settle(&mut editor);
         assert_eq!(editor.problem, None);
@@ -4595,7 +4592,7 @@ mod tests {
             &std::fs::read(package.path().join("level.visual.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(visual.schema, scene_data::VISUAL_SCHEMA_EMITTERS);
+        assert_eq!(visual.schema, scene_data::COOK_SCHEMA);
         let [cooked] = visual.emitters.as_slice() else {
             panic!("one placement, not {:?}", visual.emitters);
         };

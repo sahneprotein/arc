@@ -19,7 +19,6 @@ fn placed(scene: &mut SceneDocument, object: u128, parent: Option<u128>, emitter
             emitter_id: id(emitter).0,
         },
     });
-    scene.upgrade_for_content();
 }
 /// The hash a test's emitter asset has: its number in every byte.
 fn hash_of(emitter_id: &str) -> Result<ContentHash, Diagnostic> {
@@ -34,7 +33,7 @@ fn cook(scene: &SceneDocument) -> Result<editor_cook::CookedPackage, Diagnostic>
 }
 
 #[test]
-fn a_level_without_placements_is_cooked_byte_for_byte_as_it_always_was() {
+fn a_level_without_placements_is_cooked_with_an_empty_list_of_them() {
     let scene = current_map();
     let before = editor_cook::cook(&scene).unwrap();
     let with_assets = cook(&scene).unwrap();
@@ -43,16 +42,15 @@ fn a_level_without_placements_is_cooked_byte_for_byte_as_it_always_was() {
     assert_eq!(with_assets.simulation_bytes, before.simulation_bytes);
     assert_eq!(before.visual.schema, COOK_SCHEMA);
     assert!(before.visual.emitters.is_empty());
-    assert!(!String::from_utf8(before.visual_bytes)
+    assert!(String::from_utf8(before.visual_bytes)
         .unwrap()
-        .contains("emitters"));
+        .ends_with(r#""emitters":[]}"#));
 
-    // A level that once placed an emitter is of the second source schema; its cooked
-    // payload is still the first, since it places none.
+    // A level whose last placement was removed is cooked as one that never had any.
     let mut once = current_map();
     placed(&mut once, 900, None, 5);
     once.objects.pop();
-    assert_eq!(once.schema, SCHEMA_VERSION_EMITTERS);
+    assert_eq!(once.schema, SCHEMA_VERSION);
     let cooked = cook(&once).unwrap();
     assert_eq!(cooked.visual.schema, COOK_SCHEMA);
     assert_eq!(cooked.visual_bytes, with_assets.visual_bytes);
@@ -78,7 +76,7 @@ fn placements_go_into_the_visual_payload_and_nowhere_else() {
     placed(&mut scene, 901, None, 5);
     let cooked = cook(&scene).unwrap();
 
-    assert_eq!(cooked.visual.schema, VISUAL_SCHEMA_EMITTERS);
+    assert_eq!(cooked.visual.schema, COOK_SCHEMA);
     assert_eq!(
         cooked.visual.emitters,
         [
@@ -103,7 +101,7 @@ fn placements_go_into_the_visual_payload_and_nowhere_else() {
             },
         ]
     );
-    // The server's payload does not know them, and the package's own schema is the first.
+    // The server's payload does not know them.
     assert_eq!(cooked.simulation_bytes, plain.simulation_bytes);
     assert_eq!(cooked.simulation.schema, COOK_SCHEMA);
     assert_ne!(cooked.visual_hash, plain.visual_hash);

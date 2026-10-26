@@ -1,12 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// The schema of a level that places no particle emitter: what every level was.
+/// The schema of a level file: the format's one version. A file of any other is refused,
+/// and none is read, converted or upgraded.
 pub const SCHEMA_VERSION: u32 = 1;
-/// The schema of a level that places a particle emitter, or once did. A level goes to it
-/// with its first placement and stays there: a level that had placements does not go back
-/// when the last one is removed, so that its schema does not change back and forth.
-pub const SCHEMA_VERSION_EMITTERS: u32 = 2;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StableId(pub String);
@@ -62,8 +59,7 @@ pub enum ObjectData {
     /// A reusable particle emitter of the game, placed here: only what is seen, nothing
     /// the server simulates. The level names the emitter by its stable asset ID and holds
     /// nothing of its content; what the emitter is, and its exact bytes, are read from the
-    /// game's folder when the level is cooked. Only in a level of schema
-    /// [`SCHEMA_VERSION_EMITTERS`].
+    /// game's folder when the level is cooked.
     Emitter {
         emitter_id: String,
     },
@@ -91,13 +87,6 @@ impl SceneDocument {
         self.objects
             .iter()
             .any(|o| matches!(o.data, ObjectData::Emitter { .. }))
-    }
-    /// Takes the level to the schema its content needs: to [`SCHEMA_VERSION_EMITTERS`]
-    /// if it places an emitter. Never back.
-    pub fn upgrade_for_content(&mut self) {
-        if self.schema == SCHEMA_VERSION && self.places_emitters() {
-            self.schema = SCHEMA_VERSION_EMITTERS;
-        }
     }
     pub fn object(&self, id: &ObjectId) -> Option<&ObjectRecord> {
         self.objects.iter().find(|o| &o.id == id)

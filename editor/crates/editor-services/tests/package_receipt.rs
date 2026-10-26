@@ -149,7 +149,8 @@ fn hash_consistent_invalid_simulation_and_visual_payloads_are_refused() {
 
     let root = tempfile::tempdir().unwrap();
     let (path, _) = published(root.path());
-    let bytes = br#"{"schema":999,"terrain":[]}"#;
+    // A visual payload of a schema past the one there is, otherwise well formed.
+    let bytes = br#"{"schema":2,"terrain":[],"emitters":[]}"#;
     fs::write(path.join("level.visual.json"), bytes).unwrap();
     let path = rekey(path, |m| m.visual_hash = payload_hash(bytes));
     assert_eq!(verify(&path).unwrap_err().code, "payload.schema_or_profile");

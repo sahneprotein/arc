@@ -1,5 +1,5 @@
-//! Placed particle emitters: the level object, the level's second schema, and the visual
-//! payload's second schema.
+//! Placed particle emitters: the level object and the visual payload, each of its format's
+//! one schema.
 use scene_data::*;
 
 fn id(value: u128) -> StableId {
@@ -39,39 +39,30 @@ fn cooked(placement: u128, emitter: u128) -> CookedEmitter {
 }
 
 #[test]
-fn a_level_goes_to_its_second_schema_with_its_first_emitter_and_stays_there() {
+fn a_level_of_the_one_schema_places_emitters_and_no_other_schema_is_read() {
     let mut scene = current_map();
     assert_eq!(scene.schema, SCHEMA_VERSION);
     assert!(!scene.places_emitters());
-    scene.upgrade_for_content();
-    assert_eq!(
-        scene.schema, SCHEMA_VERSION,
-        "nothing in it needs the second"
-    );
 
-    // An emitter in a level of the first schema is refused: a reader of that schema would
-    // not know the object.
+    // An emitter is an object of the level's one schema: placing it changes no schema.
     scene.objects.push(placement(900, 5));
-    assert_eq!(codes(&scene), ["schema.emitter_requires_v2"]);
-    scene.upgrade_for_content();
-    assert_eq!(scene.schema, SCHEMA_VERSION_EMITTERS);
+    assert!(scene.places_emitters());
+    assert_eq!(codes(&scene), [] as [&str; 0]);
+    assert_eq!(scene.schema, SCHEMA_VERSION);
+    scene.objects.pop();
     assert_eq!(codes(&scene), [] as [&str; 0]);
 
-    // The last emitter removed: the level stays at the second schema and is valid there.
-    scene.objects.pop();
-    scene.upgrade_for_content();
-    assert_eq!(scene.schema, SCHEMA_VERSION_EMITTERS);
-    assert_eq!(codes(&scene), [] as [&str; 0]);
-    // A level of the first schema is still read as it always was, and no other schema is.
-    scene.schema = 3;
-    assert_eq!(codes(&scene), ["schema.unsupported"]);
+    // Every other schema is refused, the one before it and the ones after it alike.
+    for other in [0, 2, 3] {
+        scene.schema = other;
+        assert_eq!(codes(&scene), ["schema.unsupported"], "{other}");
+    }
 }
 
 #[test]
 fn an_emitter_names_its_asset_by_a_stable_id_and_holds_nothing_of_its_content() {
     let mut scene = current_map();
     scene.objects.push(placement(900, 5));
-    scene.upgrade_for_content();
     let written = serde_json::to_value(scene.objects.last().unwrap()).unwrap();
     assert_eq!(
         written["data"],
@@ -104,7 +95,7 @@ fn an_emitter_names_its_asset_by_a_stable_id_and_holds_nothing_of_its_content() 
 }
 
 #[test]
-fn a_payload_without_emitters_is_written_as_it_always_was() {
+fn a_payload_without_emitters_says_it_places_none() {
     let payload = VisualPayload {
         schema: COOK_SCHEMA,
         terrain: vec![],
@@ -112,19 +103,20 @@ fn a_payload_without_emitters_is_written_as_it_always_was() {
     };
     assert_eq!(
         serde_json::to_string(&payload).unwrap(),
-        r#"{"schema":1,"terrain":[]}"#
+        r#"{"schema":1,"terrain":[],"emitters":[]}"#
     );
     assert_eq!(payload.validate(&[]), Ok(()));
     assert_eq!(
-        serde_json::from_str::<VisualPayload>(r#"{"schema":1,"terrain":[]}"#).unwrap(),
+        serde_json::from_str::<VisualPayload>(r#"{"schema":1,"terrain":[],"emitters":[]}"#)
+            .unwrap(),
         payload
     );
 }
 
 #[test]
-fn a_payload_with_emitters_is_of_the_second_schema_and_has_exactly_its_fields() {
+fn a_payload_with_emitters_has_exactly_its_fields() {
     let payload = VisualPayload {
-        schema: VISUAL_SCHEMA_EMITTERS,
+        schema: COOK_SCHEMA,
         terrain: vec![],
         emitters: vec![cooked(0x21, 0x5)],
     };
@@ -133,7 +125,7 @@ fn a_payload_with_emitters_is_of_the_second_schema_and_has_exactly_its_fields() 
     let hash: Vec<String> = std::iter::repeat_n("7".to_owned(), 32).collect();
     let written = format!(
         concat!(
-            r#"{{"schema":2,"terrain":[],"emitters":[{{"id":"{}","emitter_id":"{}","#,
+            r#"{{"schema":1,"terrain":[],"emitters":[{{"id":"{}","emitter_id":"{}","#,
             r#""emitter_sha256":[{}],"transform":{{"translation_m":[1.0,2.5,-3.0],"#,
             r#""rotation_xyzw":[0.0,0.0,0.0,1.0]}}}}]}}"#
         ),
@@ -147,15 +139,10 @@ fn a_payload_with_emitters_is_of_the_second_schema_and_has_exactly_its_fields() 
         payload
     );
 
-    // Each schema has exactly its fields.
     let refused = |json: String| serde_json::from_str::<VisualPayload>(&json).is_err();
     assert!(
-        refused(r#"{"schema":2,"terrain":[]}"#.into()),
+        refused(r#"{"schema":1,"terrain":[]}"#.into()),
         "no emitters field"
-    );
-    assert!(
-        refused(written.replacen(r#""schema":2"#, r#""schema":1"#, 1)),
-        "emitters in the first schema"
     );
     assert!(
         refused(written.replacen(r#""transform""#, r#""scale":1.0,"transform""#, 1)),
@@ -166,48 +153,45 @@ fn a_payload_with_emitters_is_of_the_second_schema_and_has_exactly_its_fields() 
         "a field by another name"
     );
     assert!(refused(
-        r#"{"schema":2,"terrain":[],"emitters":[],"more":1}"#.into()
+        r#"{"schema":1,"terrain":[],"emitters":[],"more":1}"#.into()
     ));
-}
-
-#[test]
-fn an_emitters_key_that_holds_no_list_is_not_taken_for_no_key() {
-    let refused = |json: &str| serde_json::from_str::<VisualPayload>(json).is_err();
-    // The first schema has no such key, whatever the key holds.
-    assert!(refused(r#"{"schema":1,"terrain":[],"emitters":null}"#));
-    assert!(refused(r#"{"schema":1,"terrain":[],"emitters":[]}"#));
-    // The second must have a list there.
-    assert!(refused(r#"{"schema":2,"terrain":[],"emitters":null}"#));
-    assert!(refused(r#"{"schema":2,"terrain":[],"emitters":{}}"#));
-    assert!(refused(r#"{"schema":2,"terrain":[],"emitters":0}"#));
-    // And each still reads what it always read.
-    assert!(!refused(r#"{"schema":1,"terrain":[]}"#));
-    let empty: VisualPayload =
-        serde_json::from_str(r#"{"schema":2,"terrain":[],"emitters":[]}"#).unwrap();
-    // Read, and then refused for what it holds: the second schema places something.
+    // Read, and then refused for its schema: there is one.
+    let other: VisualPayload =
+        serde_json::from_str(&written.replacen(r#""schema":1"#, r#""schema":2"#, 1)).unwrap();
     assert_eq!(
-        empty.validate(&[]).unwrap_err().code,
+        other.validate(&[]).unwrap_err().code,
         "payload.visual_invalid"
     );
 }
 
 #[test]
+fn an_emitters_key_holds_a_list() {
+    let refused = |json: &str| serde_json::from_str::<VisualPayload>(json).is_err();
+    assert!(refused(r#"{"schema":1,"terrain":[],"emitters":null}"#));
+    assert!(refused(r#"{"schema":1,"terrain":[],"emitters":{}}"#));
+    assert!(refused(r#"{"schema":1,"terrain":[],"emitters":0}"#));
+    assert!(!refused(r#"{"schema":1,"terrain":[],"emitters":[]}"#));
+}
+
+#[test]
 fn a_payload_has_one_form_for_one_content() {
     let valid = VisualPayload {
-        schema: VISUAL_SCHEMA_EMITTERS,
+        schema: COOK_SCHEMA,
         terrain: vec![],
         emitters: vec![cooked(0x21, 0x5), cooked(0x22, 0x5)],
     };
     assert_eq!(valid.validate(&[]), Ok(()));
     let code = |payload: &VisualPayload| payload.validate(&[]).unwrap_err().code;
 
-    // The second schema without a placement, and the first with one.
+    // No placement is valid as well; another schema is not, with placements or without.
     let mut empty = valid.clone();
     empty.emitters.clear();
-    assert_eq!(code(&empty), "payload.visual_invalid");
-    let mut first = valid.clone();
-    first.schema = COOK_SCHEMA;
-    assert_eq!(code(&first), "payload.visual_invalid");
+    assert_eq!(empty.validate(&[]), Ok(()));
+    for payload in [&valid, &empty] {
+        let mut other = payload.clone();
+        other.schema = COOK_SCHEMA + 1;
+        assert_eq!(code(&other), "payload.visual_invalid");
+    }
 
     // Placements by ID, each once.
     let mut unordered = valid.clone();

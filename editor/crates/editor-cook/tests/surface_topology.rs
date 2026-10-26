@@ -1,7 +1,8 @@
 use scene_data::*;
 #[test]
 fn shared_surface_helpers_keep_pre_refactor_cooked_bytes_exact() {
-    // Captured with the previous paint-complete arc-scene executable, BEFORE refactoring.
+    // Captured with the previous paint-complete arc-scene executable, BEFORE refactoring;
+    // the visual payloads since end with the list of placed emitters, which is empty here.
     // Noncoplanar negative tiles, four-tile corner, a gap, identity and parent rotations.
     for (source, simulation, visual) in [
         (

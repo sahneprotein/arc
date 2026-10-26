@@ -1,9 +1,7 @@
 //! Placed particle emitters in the session: the level's schema, the inspector, and what the
 //! review says of them from what it is told of the game's emitter assets.
 use editor_core::*;
-use scene_data::{
-    ObjectData, ObjectRecord, RigidTransform, SCHEMA_VERSION, SCHEMA_VERSION_EMITTERS,
-};
+use scene_data::{ObjectData, ObjectRecord, RigidTransform, SCHEMA_VERSION};
 
 fn id(n: u128) -> ObjectId {
     StableId::from_u128(n)
@@ -91,15 +89,15 @@ fn problems(session: &EditorSession, parameter: &str) -> Vec<(String, Option<Obj
 }
 
 #[test]
-fn the_first_placement_takes_the_level_to_its_second_schema_and_undo_takes_it_back() {
+fn a_placement_and_its_removal_leave_the_level_of_its_one_schema_and_undo_takes_both_back() {
     let mut session = EditorSession::new(level()).unwrap();
     assert_eq!(session.snapshot().document.schema, SCHEMA_VERSION);
     place(&mut session, 1, 20, 5);
     let placed = session.snapshot();
-    assert_eq!(placed.document.schema, SCHEMA_VERSION_EMITTERS);
+    assert_eq!(placed.document.schema, SCHEMA_VERSION);
+    assert!(placed.document.places_emitters());
     assert_eq!(placed.undo_label.as_deref(), Some("create"));
 
-    // Removing the last placement leaves the level at the second schema.
     send(
         &mut session,
         2,
@@ -110,8 +108,8 @@ fn the_first_placement_takes_the_level_to_its_second_schema_and_undo_takes_it_ba
     )
     .outcome
     .unwrap();
-    assert_eq!(session.snapshot().document.schema, SCHEMA_VERSION_EMITTERS);
-    // Undo of the placement itself is the level as it was before it, schema and all.
+    assert_eq!(session.snapshot().document.schema, SCHEMA_VERSION);
+    // Undo of the placement itself is the level as it was before it.
     send(&mut session, 3, Command::Undo).outcome.unwrap();
     send(&mut session, 4, Command::Undo).outcome.unwrap();
     let before = session.snapshot();
