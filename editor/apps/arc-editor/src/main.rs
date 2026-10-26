@@ -267,7 +267,7 @@ fn main() -> AppExit {
     // The game to play from here, if one was named: the core's Play coordinator, which owns
     // the game's processes. A scripted check may put a stand-in in the game's place.
     let connected = match (check::scripted_game(), game) {
-        (Some(script), _) => script.handle().map(|handle| editor.connect_play(handle)),
+        (Some(script), _) => editor.use_stand_in(script),
         // A folder named on the command line is the game's and the project's at once.
         (None, Some(folder)) => editor.connect_game(folder.clone(), folder),
         (None, None) => Ok(()),

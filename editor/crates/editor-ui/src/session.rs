@@ -120,6 +120,9 @@ pub struct Editor {
     opener: Opener,
     /// The file last shown that way.
     opened: Option<PathBuf>,
+    /// The scripted stand-in a check puts in the game's place, given again to every project
+    /// the editor enters (`use_stand_in`).
+    stand_in: Option<crate::play_script::Script>,
 }
 
 /// Shows a file in the desktop's own program for it.
@@ -228,6 +231,7 @@ impl Editor {
             moved_on_dismissed: None,
             opener: Box::new(|path: &Path| editor_services::open_path(path)),
             opened: None,
+            stand_in: None,
         })
     }
 
@@ -1097,6 +1101,7 @@ impl Editor {
                 fresh.next_id = self.next_id;
                 fresh.local_clients = self.local_clients;
                 fresh.opener = std::mem::replace(&mut self.opener, Box::new(|_| Ok(())));
+                fresh.stand_in = self.stand_in;
                 *self = fresh;
             }
             Err(problem) => {
@@ -1112,6 +1117,12 @@ impl Editor {
             runtime: context.runtime.clone(),
         };
         let _ = self.use_runtime(&context.project_root, runtime);
+        if let Some(script) = self.stand_in
+            && let Err(problem) = self.use_stand_in(script)
+        {
+            self.problem = Some(problem);
+            self.problem_from = Some(Source::Command);
+        }
         if context.start_level_exists {
             self.open(context.start_level.clone());
         }
@@ -1134,6 +1145,7 @@ impl Editor {
                 fresh.next_id = self.next_id;
                 fresh.local_clients = self.local_clients;
                 fresh.opener = std::mem::replace(&mut self.opener, Box::new(|_| Ok(())));
+                fresh.stand_in = self.stand_in;
                 *self = fresh;
                 true
             }
@@ -1443,6 +1455,15 @@ impl Editor {
     /// Gives the editor a game to start: the core's Play coordinator.
     pub fn connect_play(&mut self, handle: PlayHandle) {
         self.play = Some(handle);
+    }
+
+    /// Puts a scripted stand-in in the game's place, now and in every project the editor
+    /// enters later, whatever game the project would have: a scripted check plays the
+    /// projects it makes in the browser as it plays the editor's first level.
+    pub fn use_stand_in(&mut self, script: crate::play_script::Script) -> Result<(), Diagnostic> {
+        self.stand_in = Some(script);
+        self.connect_play(script.handle()?);
+        Ok(())
     }
 
     /// Gives the editor the runtime in this folder to start, while preserving the content
