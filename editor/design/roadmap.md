@@ -70,6 +70,14 @@ later milestone may start in parallel only where it touches nothing the earlier 
    the whole scripted suite passes 457 of 458. The one failure, `fold-not`, also fails
    on the tip from before that day: at 1100 logical pixels the toolbar folds, where the case
    expects one row. Linux and Windows were not run.
+   On 2026-10-26, after the formats were made one version each (merge `ff62b1815`), on macOS:
+   Clippy over the workspace passes; tests by package pass, `project-spec`, `scene-data`,
+   `editor-core`, `editor-cook` and `editor-services` 239 of 239, `editor-ui` and
+   `arc-editor` 305 of 305; the scripted groups that cook, play, place emitters and switch
+   projects pass. `landscape-render`, `particle-runtime`, `particle-spec` and `ui-spike`
+   were not run after that merge, which changed none of their files: on this machine
+   their own engine build did not finish within two hours. A whole-workspace run needs a
+   faster machine or CI.
 5. Move the game's pin of `project-spec` to the editor's merged commit.
 
 Exit: no `codex/*` branch holds work that is on no mainline; both mainlines pass their full
