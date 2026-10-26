@@ -62,8 +62,15 @@ are run and recorded in the milestone it belongs to.
 3. **M1's exit as a scripted case** (Claude). A project is made, played, left for another
    and opened again by its `.aproj`, in one run of `apps/arc-editor/checks/run.sh`. No
    code names `arc-project.json` any more; only this document does.
+   (Done at `0ad9e5c3b`: the case `project-cycle`, which passed 3 of 3 runs. For it, a
+   check's stand-in for the game now plays every project the editor enters, `5cd91c852`;
+   after that the groups `play-` 34, `project-switch` 18, `browser-` 27, `close` 20,
+   `game-` 26 and `key-` 18 pass, and `editor-ui` with `arc-editor` 305 of 305.)
 4. **`fold-not`** (M0.4; Claude). At 1100 logical pixels the toolbar folds where the case
    expects one row: mend the layout or the case.
+   (Done at `85b3ec3e9`: the tools fold by measurement when the row is longer than the
+   window, which the row with the Particles tool is at 1100 and not at 1150, so the case
+   asks for 1150. The fold group passes 6 of 6.)
 5. **M2.1, the real run with two local test clients** (a person, with the display awake),
    once 1 to 4 are in.
 
