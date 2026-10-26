@@ -37,13 +37,35 @@ made in (the cargo workspace `editor/` of the engine fork `arc`).
 | Repository | Branch | Holds | State |
 |---|---|---|---|
 | arc | `arc/0.19` at `bd0883094` | The engine, Bevy 0.19.1 and the carried patch; the game's pin | Mainline |
-| arc | `codex/play-backend` at `af2234196`, 80 commits over `arc/0.19` | The editor: levels, landscape sculpt/paint/rules, objects with multi-selection and snapping, review, particles tool with GPU preview, Game look, project browser and settings, Play in the game's window with local test clients | Pushed, not merged. The local worktree adds switching projects from the Level menu (not yet committed) |
-| arc | `codex/aproj` | `.aproj` in `project-spec` and the editor's services | Local, in progress |
+| arc | `codex/play-backend` at `fda0ec1ff` | The editor: levels, landscape sculpt/paint/rules, objects with multi-selection and snapping, review, particles tool with GPU preview, Game look, project browser and settings, Play in the game's window with local test clients | Pushed on 2026-10-26, not merged. Holds `codex/aproj` (`.aproj`, opening a project by its file, switching projects) and the one-version formats |
 | arc-game | `main` at `3657f21` | Foundation (workspace, arc pin, xtask gates, CI, netcode skeleton, bots and load test), Pip character presentation, aim pitch | Mainline |
 | arc-game | `codex/cooked-level-play`, then `codex/play-readiness` at `7dd510d` | Cooked packages with terrain, paint and collision; the look profile; particle placements; project settings; readiness reported to the editor | Pushed, not merged |
-| arc-game | `codex/aproj-game` | The client reading `.aproj` | Local, in progress |
+| arc-game | `codex/aproj-game`, over `codex/play-readiness` | The client reading `.aproj`, the one cooked schema, the pin of `project-spec` at `fda0ec1ff`, Clippy mended | Pushed on 2026-10-26, not merged |
 | arc-game | `feat/foundation-hardening` at `ec8c595` | One commit of 2026-10-08: further xtask gates (`check-assets`, `check-docs`, `doctor`), the art pipeline's regression checks, a rewrite of the client's presentation (`crates/client/src/pip/`) | Pushed, merged nowhere, and not in `main`, which took aim pitch on the earlier presentation. About 17,500 lines added; an owner decision (M0) |
 | lightyear (upstream) | PR #1808 | A bound on fragmented message size, for our issue #1776 | Open upstream; the game pins lightyear `=0.30.1` |
+
+## Next, scheduled on 2026-10-26
+
+Work that waits on no owner decision, in this order. Each item is done when its checks
+are run and recorded in the milestone it belongs to.
+
+1. **The game's `check-arc` knows the editor's crates** (M0.4; Codex). The game pins
+   `project-spec`, `particle-spec` and `particle-runtime` from arc by their own commit, and
+   `check-arc` refuses every crate from arc that is not an engine crate of `arc-pin.toml`.
+   It fails for that reason on `codex/play-readiness` and after. It should accept those
+   crates at a commit of their own, and still refuse an engine crate that is not at the
+   pinned commit.
+2. **The hello window** (M0.4; Codex, after 1). Three `protocol` tests fail
+   (`handshake client_without_hello_is_dropped` and two `slow_client` tests): the server
+   drops a client that never sent a hello only after 7.95 seconds. Find what the window
+   is meant to be and mend the code or the tests.
+3. **M1's exit as a scripted case** (Claude). A project is made, played, left for another
+   and opened again by its `.aproj`, in one run of `apps/arc-editor/checks/run.sh`. No
+   code names `arc-project.json` any more; only this document does.
+4. **`fold-not`** (M0.4; Claude). At 1100 logical pixels the toolbar folds where the case
+   expects one row: mend the layout or the case.
+5. **M2.1, the real run with two local test clients** (a person, with the display awake),
+   once 1 to 4 are in.
 
 ## Milestones
 
@@ -90,8 +112,8 @@ checks; the pins name commits on mainlines.
    and conversion of `arc-project.json`, schema migrations and their backups, the browser's
    and the settings' conversion flows and their words and cases. (Built: the editor's side
    on `codex/aproj`, merged into `codex/play-backend` at `eed04bbe1`; the game's side on
-   `codex/aproj-game` at `fda83a5`, whose pin of `project-spec` moves once `codex/aproj` is
-   pushed.)
+   `codex/aproj-game` at `fda83a5`, its pin of `project-spec` moved to `fda0ec1ff` on
+   2026-10-26.)
 2. The editor opens a project by its file: the browser's "Open Project" takes an `.aproj`,
    and `arc-editor <file.aproj>` starts on it. (Built at `3c164b7c5`. A person can no longer
    set up a folder that is not a project yet from the browser, since the file dialog chooses
